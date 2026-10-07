@@ -1143,3 +1143,51 @@ main {
     animation: none;
   }
 }
+
+/* --- Ideas --------------------------------------------------------------------------- */
+.idea-input {
+  flex: 1;
+}
+
+.ideas {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.ideas li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--grid);
+}
+
+.ideas li:first-child {
+  border-top: 0;
+}
+
+.ideas input[type="checkbox"] {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.ideas li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.ideas p {
+  margin: 0 0 4px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ideas li.done p {
+  color: var(--muted);
+}

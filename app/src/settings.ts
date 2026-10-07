@@ -19,6 +19,8 @@ export interface Settings {
   geminiModel: string;
   /** Read Bond's answers aloud. */
   speakAnswers: boolean;
+  /** Seconds an answer stays on screen before it closes by itself. */
+  answerSeconds: number;
   /** Nudge when you've been brainstorming/chatting with AI a long time without building. */
   brainstormAlert: boolean;
 }
@@ -31,6 +33,7 @@ export const DEFAULT_SETTINGS: Settings = {
   aiProvider: "gemini",
   geminiModel: "auto",
   speakAnswers: true,
+  answerSeconds: 12,
   brainstormAlert: true,
 };
 

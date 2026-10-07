@@ -11,9 +11,12 @@
 //      of the way in meetings and games. Read locally, never stored or sent anywhere.
 //   5. Hotkeys (Ctrl+Alt+G summon, Ctrl+Alt+Space ask Bond) and the tray menu.
 //   6. AI (ai.rs): your own key in the OS keychain; daily summary and "ask Bond".
-//   7. Start with the computer (autostart plugin).
+//      Doing things on the desktop for you (agent.rs): a fixed set of safe actions.
+//   7. Start with the computer (autostart plugin; on by default in the installed app)
+//      and only ever one running copy (single-instance plugin).
 // Everything visual lives in the React + Three.js frontend.
 
+mod agent;
 mod ai;
 
 use std::sync::{Arc, Mutex};
@@ -202,6 +205,7 @@ fn ask_shortcut() -> Shortcut {
 
 /// Open the "Ask Bond" box: the overlay takes keyboard focus so you can type.
 fn open_ask(app: &AppHandle) {
+    agent::remember_foreground();
     if let Some(w) = overlay(app) {
         let _ = w.set_focus();
     }
@@ -228,6 +232,28 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
 #[tauri::command]
 fn get_autostart(app: AppHandle) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+/// On the installed app's first run, turn "start with the computer" on, so the companion
+/// is simply there every time the laptop starts. A marker file records that this was done
+/// once; if the user later switches it off in the dashboard, it stays off.
+fn enable_autostart_first_run(app: &AppHandle) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let Ok(dir) = app.path().app_config_dir() else {
+        return;
+    };
+    let marker = dir.join("autostart-initialized");
+    if marker.exists() {
+        return;
+    }
+    if let Err(err) = app.autolaunch().enable() {
+        eprintln!("autostart unavailable: {err}");
+        return;
+    }
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(&marker, b"1");
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -272,6 +298,12 @@ pub fn run() {
     let ask_key = ask_shortcut();
 
     tauri::Builder::default()
+        // Must be registered first. Launching SelfGlance again while it already runs
+        // (e.g. it started with Windows, then you click its Start-menu icon) opens the
+        // dashboard of the running copy instead of starting a second companion.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_dashboard(app);
+        }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
@@ -307,7 +339,10 @@ pub fn run() {
             ai::ai_set_key,
             ai::ai_has_key,
             ai::ai_text,
-            ai::ai_guide,
+            ai::ai_route,
+            ai::ai_screen,
+            agent::agent_run,
+            agent::release_focus,
             ai::ai_speak
         ])
         .setup(move |app| {
@@ -318,6 +353,8 @@ pub fn run() {
             spawn_click_through(app.handle().clone(), win, regions.clone());
             spawn_idle_watch(app.handle().clone());
             build_tray(app.handle())?;
+            enable_autostart_first_run(app.handle());
+            agent::preload_apps();
             // Another app may already own the shortcut; the tray item still works then.
             for key in [summon_shortcut(), ask_shortcut()] {
                 if let Err(err) = app.global_shortcut().register(key) {

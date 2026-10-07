@@ -109,6 +109,16 @@ body,
   }
 }
 
+/* A confirmation ("Logged ✓", "Opened Spotify"): calmer and longer-lived than "Hey!". */
+.hey.note {
+  max-width: 300px;
+  font-size: 16px;
+  font-style: normal;
+  font-weight: 700;
+  -webkit-text-stroke: 3px rgba(20, 24, 32, 0.85);
+  animation-duration: 2.8s;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .hey {
     animation: none;

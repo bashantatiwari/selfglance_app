@@ -30,6 +30,8 @@ tauri-plugin-autostart = "2.7.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+tauri-plugin-single-instance = "2"
+enigo = "0.6.1"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -44,3 +46,6 @@ strip = true
 # in dev builds, so the companion stays smooth while an answer is being prepared.
 [profile.dev.package."*"]
 opt-level = 3
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

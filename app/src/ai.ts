@@ -4,13 +4,22 @@
 import { invoke } from "@tauri-apps/api/core";
 import { inTauri } from "./platform";
 import { loadSettings } from "./settings";
+import type { Action, ScreenMode } from "./assistant/intent";
 
 export type Provider = "gemini" | "claude";
 
-export interface GuideAnswer {
+export interface Route {
+  intent: "log" | "idea" | "task" | "screen" | "help" | "chat" | string;
+  text: string;
+  reply: string;
+  needs_screen: boolean;
+  /** Actions already carried out. */
+  done: string[];
+}
+
+export interface ScreenAnswer {
   answer: string;
-  point: [number, number] | null;
-  label: string | null;
+  done: string[];
 }
 
 const opts = () => {
@@ -23,7 +32,17 @@ export const setKey = (provider: Provider, key: string) => invoke<void>("ai_set_
 
 export const aiText = (system: string, prompt: string) => invoke<string>("ai_text", { ...opts(), system, prompt });
 
-export const askBond = (question: string) => invoke<GuideAnswer>("ai_guide", { ...opts(), question });
+/** Let the AI classify a command Bond couldn't place himself (text only, no screenshot). */
+export const routeCommand = (text: string) => invoke<Route>("ai_route", { ...opts(), text });
+
+/** Look at the screen now: explain it, help when stuck, or do a task on it. */
+export const screenAsk = (question: string, mode: ScreenMode) => invoke<ScreenAnswer>("ai_screen", { ...opts(), question, mode });
+
+/** Run actions Bond understood on his own. */
+export const runActions = (actions: Action[]) => invoke<string[]>("agent_run", { actions });
+
+/** Give the keyboard back to the app you were using. */
+export const releaseFocus = () => (inTauri ? invoke<void>("release_focus").catch(() => {}) : Promise.resolve());
 
 let current: HTMLAudioElement | null = null;
 let speakToken = 0;

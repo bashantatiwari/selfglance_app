@@ -7,8 +7,11 @@
 //   Play     Ctrl+Alt+G (Cmd+Option+G) drops him at your cursor. Throw him around,
 //            poke him, or right-click him for actions: sit, dance, jump, wave,
 //            follow my cursor, open the dashboard ("Later" too, during a break).
-//   Ask      Ctrl+Alt+Space (or the menu): ask about your screen; he answers (and speaks),
-//            turns toward the right spot, and a pulsing ring marks it.
+//   Ask      Ctrl+Alt+Space (or the menu): one box for everything. Bond works out what you
+//            mean: log your day, save an idea, do something on the desktop (open apps,
+//            sites, folders, media keys, or click/type on screen), explain your screen,
+//            or help when you're stuck. Clear commands are handled locally; the rest
+//            goes to the AI. Typing goes straight back to your app once you press Enter.
 //   Nudge    long stretches of chatting with AI / note-taking without building → "Time to build!"
 //   Diary    what you do all day (watching / working / browsing, and on what) is
 //            recorded locally for the dashboard.
@@ -27,8 +30,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { Tracker } from "./companion/tracker";
 import { loadSettings, type Settings } from "./settings";
 import { ActionMenu, ARC, arcBox, type ActionId } from "./ui/ActionMenu";
-import { AnswerCard, AskBox, PointMarker, type AskState } from "./ui/Ask";
-import { askBond, speak, stopSpeaking } from "./ai";
+import { AnswerCard, AskBox, type AskState } from "./ui/Ask";
+import { releaseFocus, routeCommand, runActions, screenAsk, speak, stopSpeaking } from "./ai";
+import { understand, type ScreenMode } from "./assistant/intent";
+import { addIdea, logToJournal } from "./assistant/notes";
 import "./overlay.css";
 
 const TOUCH_AWAKE_MS = 6_000; // fully visible this long after you last touched him, then he fades
@@ -41,7 +46,6 @@ const BRAINSTORM_CHAT_MS = 20 * 60_000; // this much chatting / note-taking in t
 const BRAINSTORM_BUILD_MS = 2 * 60_000; // ...with less than this in an editor or terminal
 const BRAINSTORM_COOLDOWN_MS = 45 * 60_000;
 const CHATTY = /\b(chatgpt|claude|gemini|perplexity|copilot|deepseek|grok|notion|obsidian|onenote|google keep)\b/i;
-const ANSWER_SHOW_MS = 30_000; // no input this long (and no video) = you're away: he dozes
 const POKE_REACTIONS: ClipName[] = ["wave", "nod", "celebrate", "hang"];
 
 const store = {
@@ -102,8 +106,10 @@ export default function App() {
   const [ctx, setCtx] = useState<Context>("other");
   const [menu, setMenu] = useState(false);
   const [following, setFollowing] = useState(false);
-  const [pop, setPop] = useState<{ text: string; n: number } | null>(null); // "Hey!" etc. beside his head
+  const [pop, setPop] = useState<{ text: string; n: number; note: boolean } | null>(null); // "Hey!" etc. beside his head
   const [ask, setAsk] = useState<AskState | null>(null);
+  const askRef = useRef<AskState | null>(null);
+  askRef.current = ask;
 
   const homeX = () => {
     const saved = Number(store.get("selfglance.homeX"));
@@ -112,8 +118,8 @@ export default function App() {
   };
 
   /** A word popping up beside his head ("Hey!", "Time to build!"). */
-  const showPop = (text: string, ms = 1600) => {
-    setPop((p) => ({ text, n: (p?.n ?? 0) + 1 }));
+  const showPop = (text: string, ms = 1600, note = false) => {
+    setPop((p) => ({ text, n: (p?.n ?? 0) + 1, note }));
     clearTimeout(heyTimer.current);
     heyTimer.current = window.setTimeout(() => setPop(null), ms);
   };
@@ -419,32 +425,103 @@ export default function App() {
 
   const closeAsk = async () => {
     clearTimeout(askTimer.current);
+    const wasTyping = askRef.current?.step === "input";
     setAsk(null);
     stopSpeaking();
-    stageRef.current?.lookToward(null);
     wake();
+    if (wasTyping) await releaseFocus();
+  };
+
+  // Clicking anywhere else closes an empty-handed ask box (it never lingers).
+  useEffect(() => {
+    if (ask?.step !== "input") return;
+    const onBlur = () => {
+      if (askRef.current?.step === "input") void closeAsk();
+    };
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, [ask?.step]);
+
+  /** Close a card by itself after the time set in Settings. */
+  const autoClose = () => {
+    const ms = Math.max(4, settingsRef.current.answerSeconds) * 1000;
+    manualUntil.current = Date.now() + ms;
+    clearTimeout(askTimer.current);
+    askTimer.current = window.setTimeout(() => void closeAsk(), ms);
+  };
+
+  /** An answer worth reading: shown in the card (and spoken if that's on). */
+  const answer = (question: string, text: string, done: string[], say: boolean) => {
+    setAsk({ step: "answer", question, answer: text, done });
+    if (say && settingsRef.current.speakAnswers && text) speak(text);
+    stageRef.current?.play("nod", true);
+    autoClose();
+  };
+
+  /** Something done or saved: a short note beside his head, no card to dismiss. */
+  const confirm = (text: string) => {
+    clearTimeout(askTimer.current);
+    setAsk(null);
+    wake();
+    stageRef.current?.play("nod", true);
+    showPop(text.length > 60 ? `${text.slice(0, 57)}…` : text, 2800, true);
+  };
+
+  const lookAtScreen = async (question: string, mode: ScreenMode) => {
+    setAsk({ step: "thinking", question, looking: true });
+    const res = await screenAsk(question, mode);
+    if (mode === "task" && !res.answer && res.done.length) return confirm(res.done.join(" · "));
+    answer(question, res.answer, res.done, mode !== "task");
   };
 
   const doAsk = async (question: string) => {
-    // Hide the box first so it isn't in the screenshot.
-    setAsk({ step: "thinking", question });
+    setAsk({ step: "thinking", question, looking: false });
+    // Typing goes back to the app you were in, and the box is gone before any screenshot.
+    await releaseFocus();
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     try {
-      const res = await askBond(question);
-      setAsk({ step: "answer", question, answer: res.answer, label: res.label, point: res.point });
-      if (settingsRef.current.speakAnswers && res.answer) speak(res.answer);
-      // Stay put (no thread, no travel): turn toward the spot and wave at it.
-      if (res.point) {
-        stageRef.current?.lookToward(res.point[0]);
-        stageRef.current?.play("wave", true);
-      } else {
-        stageRef.current?.play("nod", true);
+      // 1. Bond's own understanding: instant, no AI call.
+      const own = understand(question);
+      if (own?.kind === "log") {
+        logToJournal(own.text);
+        return confirm("Logged in your journal ✓");
       }
-      manualUntil.current = Date.now() + ANSWER_SHOW_MS;
-      askTimer.current = window.setTimeout(() => void closeAsk(), ANSWER_SHOW_MS);
+      if (own?.kind === "idea") {
+        addIdea(own.text);
+        return confirm("Idea saved ✓");
+      }
+      if (own?.kind === "do") {
+        try {
+          return confirm((await runActions(own.actions)).join(" · ") || "Done ✓");
+        } catch {
+          /* e.g. no app by that name: let the AI work out what was meant */
+        }
+      }
+      if (own?.kind === "screen") return await lookAtScreen(question, own.mode);
+
+      // 2. Not sure: the AI classifies it (text only), and runs simple tasks right away.
+      const r = await routeCommand(question);
+      switch (r.intent) {
+        case "log":
+          logToJournal(r.text || question);
+          return confirm("Logged in your journal ✓");
+        case "idea":
+          addIdea(r.text || question);
+          return confirm("Idea saved ✓");
+        case "screen":
+          return await lookAtScreen(question, "explain");
+        case "help":
+          return await lookAtScreen(question, "help");
+        case "task":
+          if (r.needs_screen) return await lookAtScreen(question, "task");
+          return confirm(r.done.join(" · ") || r.reply || "Done ✓");
+        default:
+          return answer(question, r.reply, [], true);
+      }
     } catch (e) {
       setAsk({ step: "error", question, error: String(e) });
       stageRef.current?.play("annoyed", true);
+      autoClose();
     }
   };
 
@@ -617,7 +694,7 @@ export default function App() {
       />
       {pop && (
         <div ref={heyRef} className="hey-pos" aria-hidden>
-          <span key={pop.n} className="hey">
+          <span key={pop.n} className={pop.note ? "hey note" : "hey"}>
             {pop.text}
           </span>
         </div>
@@ -634,7 +711,6 @@ export default function App() {
           }}
         />
       )}
-      {ask?.step === "answer" && ask.point && <PointMarker x={ask.point[0]} y={ask.point[1]} label={ask.label} />}
       {menu && <ActionMenu menuRef={menuRef} sitting={stageRef.current?.currentPose === "sit"} following={following} inBreak={phase !== "idle"} laterMin={settingsRef.current.snoozeMin} onPick={act} />}
     </>
   );

@@ -1,14 +1,10 @@
 // Journal: at the end of the day, type about your whole day (laptop or not) and save it.
 // One entry per day, stored locally. Past entries are listed below, newest first.
+// "log …" to Bond appends a timestamped line; an open Journal picks it up right away.
 
-import { useMemo, useState } from "react";
-
-const PREFIX = "selfglance.journal.";
-
-const dayKey = (d = new Date()) => {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-};
+import { useEffect, useMemo, useState } from "react";
+import { dayKey, JOURNAL_PREFIX as PREFIX } from "../assistant/notes";
+import { onTauriEvent } from "../platform";
 
 function read(key: string): string {
   try {
@@ -41,6 +37,17 @@ export default function Journal() {
   const [version, setVersion] = useState(0);
   const past = useMemo(() => allEntries().filter((e) => e.day !== today), [version, today]);
   const dirty = text !== savedText;
+
+  // Bond logged something: take it in (unless you're mid-edit, which Save would overwrite).
+  useEffect(() => {
+    const un = onTauriEvent<null>("notes-changed", () => {
+      const fresh = read(today);
+      setSavedText(fresh);
+      setText((t) => (t === savedText ? fresh : t));
+      setVersion((v) => v + 1);
+    });
+    return () => void un.then((u) => u());
+  }, [today, savedText]);
 
   const save = () => {
     try {

@@ -66,11 +66,6 @@
   stroke-linejoin: round;
 }
 
-.ask-hint {
-  margin: 7px 2px 0;
-  font-size: 11px;
-  color: rgba(238, 242, 248, 0.55);
-}
 
 .ask-card {
   max-width: 340px;
@@ -97,12 +92,6 @@
   white-space: pre-wrap;
 }
 
-.ask-card .pointing {
-  margin-top: 8px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: #8fb6ff;
-}
 
 .ask-card .close {
   position: absolute;
@@ -137,7 +126,27 @@
 
 .thinking {
   display: flex;
+  align-items: center;
   gap: 5px;
+}
+
+.thinking span {
+  margin-left: 6px;
+  font-size: 12.5px;
+  color: rgba(238, 242, 248, 0.7);
+}
+
+
+.ask-card .done {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: #9fe0b0;
+}
+
+.ask-card .done li::before {
+  content: "✓ ";
 }
 
 .thinking i {
@@ -156,90 +165,6 @@
   animation-delay: 300ms;
 }
 
-.point-marker {
-  position: fixed;
-  width: 0;
-  height: 0;
-  pointer-events: none;
-}
-
-.point-marker i {
-  position: absolute;
-  left: -22px;
-  top: -22px;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: 3px solid #2f6fed;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8);
-  animation: ping 1.4s ease-out infinite;
-}
-
-.point-marker i:nth-child(2) {
-  animation-delay: 0.7s;
-}
-
-.point-marker .dot {
-  position: absolute;
-  left: -5px;
-  top: -5px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #2f6fed;
-  box-shadow: 0 0 0 2px #fff;
-}
-
-.edge-arrow {
-  position: absolute;
-  left: -9px;
-  top: -9px;
-  width: 0;
-  height: 0;
-  border: 9px solid transparent;
-}
-
-.edge-arrow.down {
-  top: 14px;
-  border-top-color: #2f6fed;
-  border-bottom-width: 0;
-}
-
-.edge-arrow.up {
-  top: -32px;
-  border-bottom-color: #2f6fed;
-  border-top-width: 0;
-}
-
-.edge-arrow.right {
-  left: 14px;
-  border-left-color: #2f6fed;
-  border-right-width: 0;
-}
-
-.edge-arrow.left {
-  left: -32px;
-  border-right-color: #2f6fed;
-  border-left-width: 0;
-}
-
-.point-label {
-  position: absolute;
-  left: 30px;
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  top: -14px;
-  padding: 4px 10px;
-  border-radius: 8px;
-  background: #2f6fed;
-  color: #fff;
-  font: 600 12.5px system-ui, "Segoe UI", sans-serif;
-  white-space: nowrap;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  animation: ask-in 220ms ease-out both;
-}
-
 @keyframes ask-in {
   from {
     opacity: 0;
@@ -254,22 +179,10 @@
   }
 }
 
-@keyframes ping {
-  from {
-    transform: scale(0.5);
-    opacity: 1;
-  }
-  to {
-    transform: scale(1.6);
-    opacity: 0;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .ask-box,
   .ask-card,
-  .thinking i,
-  .point-marker i {
+  .thinking i {
     animation: none;
   }
 }

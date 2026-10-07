@@ -4,7 +4,8 @@
 //   Activity  What exactly did I spend time on? One searchable list (projects, videos,
 //             sites, apps) and the session-by-session log.
 //   Week      Am I getting better? Last 7 days side by side.
-//   Journal   Type about your whole day and save it. One entry per day.
+//   Journal   Type about your whole day and save it. One entry per day; "log …" to Bond adds a line.
+//   Ideas     Project ideas you told Bond ("idea: …") or added here.
 //   Settings  Reminders, Bond, AI — grouped, each explained.
 // "Now" lives in the sidebar so it's always visible without taking page space.
 // Everything is computed locally from the diary the overlay records.
@@ -17,14 +18,16 @@ import { loadDay, type Segment } from "../companion/tracker";
 import { glassesToday } from "../break/BreakCoach";
 import { loadSettings, saveSettings, type Settings } from "../settings";
 import Journal from "./Journal";
+import Ideas from "./Ideas";
 import "./dashboard.css";
 
-type Page = "today" | "activity" | "week" | "journal" | "settings";
+type Page = "today" | "activity" | "week" | "journal" | "ideas" | "settings";
 const PAGES: { id: Page; name: string; icon: ReactNode }[] = [
   { id: "today", name: "Today", icon: <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" /> },
   { id: "activity", name: "Activity", icon: <path d="M4 6h16M4 12h10M4 18h13" /> },
   { id: "week", name: "Week", icon: <path d="M5 20V10M10 20V4M15 20v-7M20 20V8" /> },
   { id: "journal", name: "Journal", icon: <path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6zM6 3v18M9.5 8h5M9.5 12h5" /> },
+  { id: "ideas", name: "Ideas", icon: <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" /> },
   { id: "settings", name: "Settings", icon: <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z" /> },
 ];
 
@@ -133,6 +136,7 @@ export default function Dashboard() {
         {page === "activity" && <Activity stats={stats} offset={offset} picker={dayPicker} />}
         {page === "week" && <Week />}
         {page === "journal" && <Journal />}
+        {page === "ideas" && <Ideas />}
         {page === "settings" && <SettingsPage />}
       </main>
       <Tooltip />
@@ -666,6 +670,7 @@ function SettingsPage() {
           onChange={(v) => update({ brainstormAlert: v })}
         />
         <Toggle label="Read his answers aloud" checked={s.speakAnswers} onChange={(v) => update({ speakAnswers: v })} />
+        <Slider label="Answers close after" unit="seconds" min={4} max={60} step={2} value={s.answerSeconds} onChange={(v) => update({ answerSeconds: v })} />
         <Autostart />
       </Group>
 
