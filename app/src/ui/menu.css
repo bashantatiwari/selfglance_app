@@ -1,0 +1,118 @@
+/* Arc menu around Bond's head. */
+.arc-menu {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none; /* only the buttons catch the mouse */
+  font-family: system-ui, "Segoe UI", -apple-system, "Ubuntu", sans-serif;
+}
+
+.arc-guide path {
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 6;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.5));
+  animation: guide-in 400ms ease-out both;
+}
+
+.arc-btn {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(22, 26, 34, 0.92);
+  color: #e8ecf3;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  pointer-events: auto;
+  padding: 0;
+  transition:
+    transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    background 160ms,
+    box-shadow 180ms,
+    border-color 160ms;
+  animation: pop-out 380ms cubic-bezier(0.34, 1.56, 0.64, 1) var(--d) both;
+}
+
+.arc-btn svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 180ms;
+}
+
+/* Hover: lift + grow, a glowing ring, and the name slides in under it. */
+.arc-btn:hover,
+.arc-btn:focus-visible {
+  transform: translateY(-4px) scale(1.18);
+  background: #2f6fed;
+  border-color: rgba(255, 255, 255, 0.5);
+  box-shadow:
+    0 0 0 4px rgba(47, 111, 237, 0.28),
+    0 10px 24px rgba(0, 0, 0, 0.4);
+  outline: none;
+  z-index: 2;
+}
+
+.arc-btn:hover svg {
+  transform: rotate(-8deg);
+}
+
+.arc-btn:active {
+  transform: translateY(-2px) scale(1.06);
+}
+
+.arc-btn.on {
+  background: #2f6fed;
+}
+
+.arc-label {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  translate: -50% -4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(22, 26, 34, 0.95);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 140ms,
+    translate 160ms;
+}
+
+.arc-btn:hover .arc-label,
+.arc-btn:focus-visible .arc-label {
+  opacity: 1;
+  translate: -50% 0;
+}
+
+@keyframes pop-out {
+  from {
+    opacity: 0;
+    transform: translate(var(--fx), var(--fy)) scale(0.2);
+  }
+}
+
+@keyframes guide-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arc-btn,
+  .arc-guide path {
+    animation: none;
+  }
+}

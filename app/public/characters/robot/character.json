@@ -1,0 +1,24 @@
+{
+  "id": "robot",
+  "name": "Bond",
+  "model": "robot.glb",
+  "height": 150,
+  "clips": {
+    "idle": "Idle",
+    "walk": "Walking",
+    "wave": "Wave",
+    "celebrate": "ThumbsUp",
+    "nod": "Yes",
+    "dance": "Dance",
+    "hang": "Jump",
+    "annoyed": "No",
+    "determined": "Punch"
+  },
+  "entrance": "web-drop",
+  "credit": "RobotExpressive by Tomás Laulhé (Quaternius), CC0 1.0, via the three.js examples",
+  "holdBone": "Palm2.L",
+  "legBones": [
+    "UpperLeg.L",
+    "UpperLeg.R"
+  ]
+}

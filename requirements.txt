@@ -1,0 +1,15 @@
+# Backend
+django
+djangorestframework
+django-cors-headers
+
+# Orchestrator / AI
+mss
+easyocr
+transformers
+torch
+Pillow
+requests
+psutil
+pywin32
+imagehash

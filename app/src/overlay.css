@@ -1,0 +1,116 @@
+/* The overlay window is transparent: only the character, its bottle and one caption show. */
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+.stage {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 500ms ease;
+}
+
+/* Ghost: still there, but you can read what's behind it. */
+.stage.ghost {
+  opacity: 0.2;
+}
+
+/* Watching a video together: visible enough to feel his company. */
+.stage.watch {
+  opacity: 0.6;
+}
+
+/* You're coding / writing: barely there. */
+.stage.faint {
+  opacity: 0.18;
+}
+
+/* During a break you're ignoring: half visible so the bottle stays noticeable. */
+.stage.dim {
+  opacity: 0.7;
+}
+
+/* Hit targets that follow the character and the bottle. */
+.hit,
+.bottle-hit {
+  position: fixed;
+  display: none;
+  background: transparent;
+  touch-action: none;
+}
+
+.hit {
+  cursor: grab;
+}
+
+.hit:active {
+  cursor: grabbing;
+}
+
+.bottle-hit {
+  cursor: pointer;
+}
+
+/* "Hey!" when he waves: just the word, popping up beside his head and drifting away. */
+.hey-pos {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.hey {
+  display: block;
+  font-family: "Segoe UI", system-ui, -apple-system, "Ubuntu", sans-serif;
+  font-size: 22px;
+  font-weight: 800;
+  font-style: italic;
+  letter-spacing: 0.01em;
+  color: #ffffff;
+  -webkit-text-stroke: 4px rgba(20, 24, 32, 0.85);
+  paint-order: stroke fill;
+  text-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
+  transform-origin: left bottom;
+  animation: hey 1.6s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes hey {
+  0% {
+    opacity: 0;
+    scale: 0.4;
+    rotate: -12deg;
+  }
+  18% {
+    opacity: 1;
+    scale: 1.1;
+    rotate: -6deg;
+  }
+  30% {
+    scale: 1;
+  }
+  75% {
+    opacity: 1;
+    translate: 0 -10px;
+  }
+  100% {
+    opacity: 0;
+    translate: 0 -18px;
+    rotate: -6deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hey {
+    animation: none;
+  }
+}

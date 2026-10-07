@@ -56,6 +56,63 @@ One-sentence summary:"""
         except:
             return "User is actively working"
 
+    def check_productivity(self, goal: str, text: str) -> dict:
+        """
+        Compare the user's goal with the screen text to determine if they are productive.
+        Returns check dictionary: {"is_productive": bool, "reason": str}
+        """
+        # If text is too short, we assume they are still getting started or it's just a blank screen
+        if len(text) < 20:
+             return {"is_productive": True, "reason": "Not enough context to determine distraction."}
+
+        prompt = f"""
+You are a productivity assistant.
+User Goal: "{goal}"
+Screen Text:
+\"\"\"{text[:1000]}\"\"\"
+
+Task:
+1. Is the screen text related to the User Goal? (True/False)
+2. Provide a 1-sentence reason.
+
+Output format:
+True|Reason...
+OR
+False|Reason...
+
+Example:
+True|User is coding in Python as planned.
+False|User is watching a YouTube video about cats.
+"""
+        
+        try:
+            # We use a slightly higher temp for reasoning, but still low
+            result = self.pipe(
+                prompt, 
+                max_new_tokens=40,
+                temperature=0.1
+            )[0]["generated_text"].strip()
+            
+            # Clean up the generation to just get the last line if it chatters
+            lines = result.split('\n')
+            # Look for the line starting with True| or False|
+            answer_line = next((line for line in reversed(lines) if "|" in line and (line.startswith("True") or line.startswith("False"))), None)
+            
+            if not answer_line:
+                 # Fallback if model fails to follow format perfectly
+                 is_related = "True" in result
+                 reason = "AI determined this is related."
+            else:
+                parts = answer_line.split("|", 1)
+                is_related = parts[0].strip() == "True"
+                reason = parts[1].strip()
+
+            return {"is_productive": is_related, "reason": reason}
+
+        except Exception as e:
+            print(f"Productivity check error: {e}")
+            return {"is_productive": True, "reason": "Could not verify, assuming productive."}
+
 # ———————————— RUN ONCE AND SLEEP PEACEFULLY ————————————
 if __name__ == "__main__":
     # These load ONCE — never again
