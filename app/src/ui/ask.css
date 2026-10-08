@@ -165,6 +165,112 @@
   animation-delay: 300ms;
 }
 
+/* Command output, status, the approval's exact command / paths. */
+.ask-card .out {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font: 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ask-card:has(.out) {
+  max-width: 440px;
+}
+
+.ask-card.approve {
+  padding-right: 14px;
+  border-color: rgba(255, 196, 87, 0.45);
+}
+
+.ask-card .approve-title {
+  font-weight: 600;
+}
+
+.ask-card .out.items.delete,
+.ask-card .out.items.kill {
+  border-color: rgba(255, 120, 110, 0.35);
+}
+
+.ask-card .why {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: rgba(238, 242, 248, 0.7);
+}
+
+.ask-card .choices {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.ask-card .choices button {
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ask-card .choices button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.ask-card .btn-primary {
+  background: #2f6fed;
+  color: #fff;
+}
+
+.ask-card .btn-danger {
+  background: #d9443a;
+  color: #fff;
+}
+
+.ask-card .btn-ghost {
+  background: rgba(255, 255, 255, 0.08);
+  color: #eef2f8;
+}
+
+.ask-card .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.ask-card .confirm {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 120, 110, 0.5);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.ask-card .confirm:focus {
+  box-shadow: 0 0 0 3px rgba(217, 68, 58, 0.3);
+}
+
+.ask-card.reminder {
+  border-color: rgba(143, 182, 255, 0.5);
+}
+
+.ask-card .reminder-text {
+  font-size: 16px;
+  font-weight: 600;
+}
+
 @keyframes ask-in {
   from {
     opacity: 0;
@@ -185,4 +291,27 @@
   .thinking i {
     animation: none;
   }
+}
+
+/* 👍 / 👎 under an answer: how Bond learns what you like. */
+.ask-card .rate {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+.ask-card .rate button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 15px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  filter: grayscale(0.6);
+}
+.ask-card .rate button:hover {
+  filter: none;
+  background: rgba(127, 127, 127, 0.15);
 }

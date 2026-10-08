@@ -13,8 +13,8 @@ export interface Settings {
   snoozeMin: number;
   /** Glasses of water per day. */
   waterGoal: number;
-  /** Which AI the user's own key is for. Gemini has a free tier. */
-  aiProvider: "gemini" | "claude";
+  /** Bond's own brain on this laptop ("local"), or the cloud AI the user's own key is for. */
+  aiProvider: "local" | "gemini" | "claude";
   /** Preferred Gemini model, or "auto" (a chain of free models, busy ones skipped). */
   geminiModel: string;
   /** Read Bond's answers aloud. */
@@ -23,6 +23,10 @@ export interface Settings {
   answerSeconds: number;
   /** Nudge when you've been brainstorming/chatting with AI a long time without building. */
   brainstormAlert: boolean;
+  /** Bond warns when the battery is low and the laptop isn't plugged in. */
+  batteryAlert: boolean;
+  /** Keep what you ask and how it went, so Bond adapts to you (stays on this computer). */
+  learnFromMe: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -30,11 +34,13 @@ export const DEFAULT_SETTINGS: Settings = {
   breakEveryMin: 45,
   snoozeMin: 10,
   waterGoal: 8,
-  aiProvider: "gemini",
+  aiProvider: "local",
   geminiModel: "auto",
   speakAnswers: true,
   answerSeconds: 12,
   brainstormAlert: true,
+  batteryAlert: true,
+  learnFromMe: true,
 };
 
 const KEY = "selfglance.settings";

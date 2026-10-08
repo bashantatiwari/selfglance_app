@@ -6,28 +6,45 @@
 //   Week      Am I getting better? Last 7 days side by side.
 //   Journal   Type about your whole day and save it. One entry per day; "log …" to Bond adds a line.
 //   Ideas     Project ideas you told Bond ("idea: …") or added here.
+//   Reminders What you asked Bond to remind you about, soonest first.
 //   Settings  Reminders, Bond, AI — grouped, each explained.
 // "Now" lives in the sidebar so it's always visible without taking page space.
 // Everything is computed locally from the diary the overlay records.
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { aiText, hasKey, setKey, type Provider } from "../ai";
+import { onTauriEvent } from "../platform";
+import {
+  aiText,
+  brainInstall,
+  brainStatus,
+  exportLearned,
+  forgetLearned,
+  hasKey,
+  learnStats,
+  setKey,
+  type BrainProgress,
+  type BrainStatus,
+  type LearnStats,
+  type Provider,
+} from "../ai";
 import { analyzeDay, CATS, catName, catOf, clock, durOf, fmt, insights, kindOf, type Cat, type DayStats, type Item, type Kind } from "./analyze";
 import { loadDay, type Segment } from "../companion/tracker";
 import { glassesToday } from "../break/BreakCoach";
 import { loadSettings, saveSettings, type Settings } from "../settings";
 import Journal from "./Journal";
 import Ideas from "./Ideas";
+import Reminders from "./Reminders";
 import "./dashboard.css";
 
-type Page = "today" | "activity" | "week" | "journal" | "ideas" | "settings";
+type Page = "today" | "activity" | "week" | "journal" | "ideas" | "reminders" | "settings";
 const PAGES: { id: Page; name: string; icon: ReactNode }[] = [
   { id: "today", name: "Today", icon: <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" /> },
   { id: "activity", name: "Activity", icon: <path d="M4 6h16M4 12h10M4 18h13" /> },
   { id: "week", name: "Week", icon: <path d="M5 20V10M10 20V4M15 20v-7M20 20V8" /> },
   { id: "journal", name: "Journal", icon: <path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6zM6 3v18M9.5 8h5M9.5 12h5" /> },
   { id: "ideas", name: "Ideas", icon: <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" /> },
+  { id: "reminders", name: "Reminders", icon: <path d="M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM12 9v4l2.5 2M5 3 2 6M19 3l3 3" /> },
   { id: "settings", name: "Settings", icon: <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z" /> },
 ];
 
@@ -137,6 +154,7 @@ export default function Dashboard() {
         {page === "week" && <Week />}
         {page === "journal" && <Journal />}
         {page === "ideas" && <Ideas />}
+        {page === "reminders" && <Reminders />}
         {page === "settings" && <SettingsPage />}
       </main>
       <Tooltip />
@@ -670,12 +688,35 @@ function SettingsPage() {
           onChange={(v) => update({ brainstormAlert: v })}
         />
         <Toggle label="Read his answers aloud" checked={s.speakAnswers} onChange={(v) => update({ speakAnswers: v })} />
+        <Toggle label="Warn me when the battery is low" hint="At 15% and again at 7%, while unplugged." checked={s.batteryAlert} onChange={(v) => update({ batteryAlert: v })} />
         <Slider label="Answers close after" unit="seconds" min={4} max={60} step={2} value={s.answerSeconds} onChange={(v) => update({ answerSeconds: v })} />
         <Autostart />
       </Group>
 
-      <Group title="AI" desc="Your own key powers “Ask Bond” and “Your day in words”. It's kept in your system keychain and only sent to the provider.">
-        <AiKey provider={s.aiProvider} geminiModel={s.geminiModel} onChange={update} />
+      <Group
+        title="Bond's brain"
+        desc="What powers “Ask Bond” and “Your day in words”. On this laptop, nothing you ask or show him leaves your computer. A cloud AI uses your own key, kept in your system keychain."
+      >
+        <div className="tabs" role="radiogroup" aria-label="Brain">
+          <button className={s.aiProvider === "local" ? "on" : ""} onClick={() => update({ aiProvider: "local" })}>
+            On this laptop · private
+          </button>
+          <button className={s.aiProvider === "gemini" ? "on" : ""} onClick={() => update({ aiProvider: "gemini" })}>
+            Google Gemini · free
+          </button>
+          <button className={s.aiProvider === "claude" ? "on" : ""} onClick={() => update({ aiProvider: "claude" })}>
+            Claude · paid
+          </button>
+        </div>
+        {s.aiProvider === "local" ? <LocalBrain /> : <AiKey provider={s.aiProvider} geminiModel={s.geminiModel} onChange={update} />}
+      </Group>
+
+      <Group
+        title="Learning"
+        desc="Bond keeps what you ask, what he did and your 👍 / 👎, and reuses what worked for similar requests. It stays on this computer, and can later train his own brain on your habits."
+      >
+        <Toggle label="Learn from me" checked={s.learnFromMe} onChange={(v) => update({ learnFromMe: v })} />
+        <Learned />
       </Group>
     </>
   );
@@ -742,6 +783,110 @@ function Autostart() {
   );
 }
 
+const gb = (bytes: number) => (bytes / 1024 ** 3).toFixed(bytes > 1024 ** 3 ? 1 : 2);
+
+/** Download / status of the brain that runs on this laptop. */
+function LocalBrain() {
+  const [st, setSt] = useState<BrainStatus | null>(null);
+  const [progress, setProgress] = useState<BrainProgress | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const refresh = () => brainStatus().then(setSt).catch(() => setSt(null));
+  useEffect(() => {
+    void refresh();
+    const off = onTauriEvent<BrainProgress>("brain-progress", setProgress);
+    return () => void off.then((f) => f());
+  }, []);
+  const install = async () => {
+    setMsg(null);
+    setSt((x) => (x ? { ...x, installing: true } : x));
+    try {
+      await brainInstall();
+      setMsg("Ready. Ask Bond anything — it all stays on this laptop.");
+    } catch (e) {
+      setMsg(`${e} You can try again; the download continues where it stopped.`);
+    }
+    setProgress(null);
+    void refresh();
+  };
+  if (!st) return null;
+  if (!st.supported) return <p className="small muted">Bond's own brain runs on Windows for now. Choose a cloud AI instead.</p>;
+  if (st.installed)
+    return (
+      <p className="small good">
+        ✓ {st.model} is on this laptop{st.running ? " and awake" : ""}. It wakes when you ask and sleeps after 10 idle minutes to free your GPU. {msg}
+      </p>
+    );
+  const pct = progress && progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
+  return (
+    <>
+      <p className="small muted">
+        {st.model} — understands commands, reads your screen and answers questions without the internet. A one-time 3.4 GB download; it runs best
+        with a graphics card (4 GB+).
+      </p>
+      {st.installing ? (
+        <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+          <div className="bar" style={{ width: `${pct}%` }} />
+          <span className="small">
+            {progress ? `${progress.what}: ${gb(progress.done)} / ${gb(progress.total)} GB` : "Starting download…"}
+          </span>
+        </div>
+      ) : (
+        <button className="btn" onClick={() => void install()}>
+          Download Bond's brain
+        </button>
+      )}
+      {msg && <p className="small muted">{msg}</p>}
+    </>
+  );
+}
+
+/** What Bond has learned so far, export for training, forget. */
+function Learned() {
+  const [stats, setStats] = useState<LearnStats | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const refresh = () => learnStats().then(setStats).catch(() => setStats(null));
+  useEffect(() => {
+    void refresh();
+  }, []);
+  if (!stats) return null;
+  return (
+    <>
+      <p className="small muted">
+        {stats.total === 0
+          ? "Nothing yet — he learns as you use him."
+          : `${stats.total} requests remembered · ${stats.good} 👍 · ${stats.bad} 👎 or refused · ${stats.trainable} usable to train his brain.`}
+      </p>
+      <div className="key-row">
+        <button
+          className="btn ghost"
+          disabled={stats.trainable === 0}
+          onClick={() =>
+            exportLearned()
+              .then((path) => setMsg(`Saved the training set to ${path}`))
+              .catch((e) => setMsg(String(e)))
+          }
+        >
+          Export training set
+        </button>
+        <button
+          className="btn ghost"
+          disabled={stats.total === 0}
+          onClick={() => {
+            if (!window.confirm("Forget everything Bond has learned from you?")) return;
+            void forgetLearned().then(() => {
+              setMsg("Forgotten.");
+              void refresh();
+            });
+          }}
+        >
+          Forget
+        </button>
+      </div>
+      {msg && <p className="small muted">{msg}</p>}
+    </>
+  );
+}
+
 function AiKey(props: { provider: Provider; geminiModel: string; onChange: (p: Partial<Settings>) => void }) {
   const [key, setKeyInput] = useState("");
   const [saved, setSaved] = useState<boolean | null>(null);
@@ -763,14 +908,6 @@ function AiKey(props: { provider: Provider; geminiModel: string; onChange: (p: P
   };
   return (
     <>
-      <div className="tabs" role="radiogroup" aria-label="AI provider">
-        <button className={props.provider === "gemini" ? "on" : ""} onClick={() => props.onChange({ aiProvider: "gemini" })}>
-          Google Gemini · free
-        </button>
-        <button className={props.provider === "claude" ? "on" : ""} onClick={() => props.onChange({ aiProvider: "claude" })}>
-          Claude · paid
-        </button>
-      </div>
       <div className="key-row">
         <input
           className="search"

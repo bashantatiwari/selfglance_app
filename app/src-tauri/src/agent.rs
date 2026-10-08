@@ -1,28 +1,47 @@
-// Bond doing things on the desktop. Every action is one of a fixed, small set (no shell
-// commands, nothing that deletes or changes files), and each is checked before it runs.
+// Bond doing things on the computer. Every action is one of a known set and checked
+// before it runs. Powerful ones never run on Bond's (or the AI's) word alone: they stop
+// and wait for your approval in his card, and the rest of the plan waits with them.
 //
-//   open_app      start an installed app by name (Windows: the Start menu's app list)
-//   open_url      a web page in the default browser (http/https only)
-//   web_search    a Google search
-//   open_folder   Downloads / Documents / Desktop / Pictures / Music / Videos / Home
-//   media         play/pause, next, previous, volume up/down, mute
-//   show_desktop  minimise everything
-//   lock_screen   lock the computer
-//   set_wallpaper a solid-colour desktop background ("black", "#1e1e2e")
-//   click         a point on the screenshot Bond just looked at
-//   type_text     type text into whatever has focus
-//   hotkey        a key combination such as "ctrl+t"
-//   wait          pause between steps
+//   open_app        start an installed app by name (Windows: the Start menu's app list)
+//   open_url        a web page in the default browser (http/https only)
+//   web_search      a Google search
+//   open_folder     Downloads / Documents / Desktop / Pictures / Music / Videos / Home
+//   media           play/pause, next, previous, volume up/down, mute
+//   set_volume      an exact volume, 0-100%
+//   show_desktop    minimise everything
+//   lock_screen     lock the computer
+//   set_wallpaper   a solid-colour desktop background ("black", "#1e1e2e")
+//   system_status   battery, memory, CPU, disks
+//   top_processes   what is using the CPU and memory
+//   clipboard_get / clipboard_set
+//   remind / list_reminders                   (reminders.rs)
+//   find_files      search for files by name (read-only)
+//   click           a point on the screenshot Bond just looked at
+//   type_text       type text into whatever has focus
+//   hotkey          a key combination such as "ctrl+t"
+//   wait            pause between steps
+//
+// Need your approval first (agent_approve / agent_deny):
+//   run_command     any command in PowerShell (Windows) or sh: you see the exact command
+//   kill_process    end a program: you see what it is and how many processes
+//   delete          files/folders: you see every path and its size, and confirm TWICE.
+//                   They go to the Recycle Bin unless "permanent" was asked for.
+//                   A command that deletes things (rm, del, Remove-Item…) also needs two yeses.
 
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 const MAX_ACTIONS: usize = 8;
 const MAX_TYPE_CHARS: usize = 2000;
+const MAX_INFO_CHARS: usize = 4000;
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+const APPROVAL_TTL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "do", rename_all = "snake_case")]
@@ -32,13 +51,42 @@ pub enum Action {
     WebSearch { query: String },
     OpenFolder { name: String },
     Media { key: String },
+    SetVolume { percent: f64 },
     ShowDesktop,
     LockScreen,
     SetWallpaper { color: String },
+    SystemStatus,
+    TopProcesses,
+    ClipboardGet,
+    ClipboardSet { text: String },
+    Remind {
+        text: String,
+        #[serde(default)]
+        in_minutes: Option<f64>,
+        #[serde(default)]
+        at: Option<String>,
+    },
+    ListReminders,
+    FindFiles {
+        query: String,
+        #[serde(default)]
+        folder: Option<String>,
+    },
     Click { x: f64, y: f64, #[serde(default)] double: bool },
     TypeText { text: String },
     Hotkey { keys: String },
     Wait { ms: u64 },
+    RunCommand {
+        command: String,
+        #[serde(default)]
+        why: String,
+    },
+    KillProcess { name: String },
+    Delete {
+        paths: Vec<String>,
+        #[serde(default)]
+        permanent: bool,
+    },
 }
 
 /// Where a screenshot came from, so a click on it lands on the right physical pixel.
@@ -56,36 +104,138 @@ pub struct ShotGeometry {
     pub normalized: bool,
 }
 
+/// What came of a plan: short lines for what was done, longer text to read (status,
+/// command output), and possibly a step waiting for the user's approval.
+#[derive(Serialize, Default)]
+pub struct Outcome {
+    pub done: Vec<String>,
+    pub info: Vec<String>,
+    pub pending: Option<Approval>,
+}
+
+/// The approval card: exactly what will happen, shown before anything does.
+#[derive(Serialize, Clone)]
+pub struct Approval {
+    pub id: String,
+    /// "command" | "delete" | "kill"
+    pub kind: &'static str,
+    /// Which yes this is (1, then 2 for deletions).
+    pub step: u8,
+    pub steps: u8,
+    pub title: String,
+    /// The command, the paths with their sizes, or the program.
+    pub items: Vec<String>,
+    /// Why Bond wants to do it, or what to know before saying yes.
+    pub why: String,
+    pub button: String,
+}
+
+/// What an approval unlocks: already resolved, so the yes applies to exactly what was shown.
+enum Approved {
+    Command { command: String, home: PathBuf },
+    Delete { paths: Vec<PathBuf>, permanent: bool },
+    Kill { pids: Vec<u32>, name: String },
+}
+
+struct Pending {
+    approval: Approval,
+    task: Approved,
+    rest: Vec<Action>,
+    shot: Option<ShotGeometry>,
+    created: Instant,
+}
+
+static PENDING: Mutex<Vec<Pending>> = Mutex::new(Vec::new());
+
+fn new_id() -> String {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("{t:x}-{n}")
+}
+
+fn park(p: Pending) {
+    let mut list = PENDING.lock().unwrap();
+    list.retain(|q| q.created.elapsed() < APPROVAL_TTL);
+    list.push(p);
+}
+
+fn unpark(id: &str) -> Option<Pending> {
+    let mut list = PENDING.lock().unwrap();
+    list.retain(|q| q.created.elapsed() < APPROVAL_TTL);
+    let i = list.iter().position(|q| q.approval.id == id)?;
+    Some(list.remove(i))
+}
+
 /// Run actions from the frontend's own classifier (no screenshot, so no clicks).
 #[tauri::command]
-pub async fn agent_run(app: AppHandle, actions: Vec<Action>) -> Result<Vec<String>, String> {
+pub async fn agent_run(app: AppHandle, actions: Vec<Action>) -> Result<Outcome, String> {
     run(&app, actions, None).await
 }
 
-/// Run actions one after another; returns a short line per action for Bond's answer.
-/// Stops at the first failure, so later steps never act on the wrong window.
-pub async fn run(app: &AppHandle, actions: Vec<Action>, shot: Option<ShotGeometry>) -> Result<Vec<String>, String> {
-    let mut done = Vec::new();
-    for action in actions.into_iter().take(MAX_ACTIONS) {
-        let app = app.clone();
-        let step = tauri::async_runtime::spawn_blocking(move || perform(&app, action, shot))
-            .await
-            .map_err(|e| e.to_string())?;
+/// The user said yes. Deletions need a second yes (a new id each time); after the last one
+/// the action runs and the rest of the plan continues.
+#[tauri::command]
+pub async fn agent_approve(app: AppHandle, id: String) -> Result<Outcome, String> {
+    let mut p = unpark(&id).ok_or("That request has expired. Ask me again.")?;
+    if p.approval.step < p.approval.steps {
+        p.approval.step += 1;
+        p.approval.id = new_id();
+        p.created = Instant::now();
+        let out = Outcome { pending: Some(p.approval.clone()), ..Default::default() };
+        park(p);
+        return Ok(out);
+    }
+    let task = p.task;
+    let effect = tauri::async_runtime::spawn_blocking(move || execute(task)).await.map_err(|e| e.to_string())??;
+    let mut out = Outcome::default();
+    effect.add_to(&mut out);
+    proceed(&app, out, p.rest, p.shot).await
+}
+
+/// The user said no (or closed the card): drop the request and the rest of its plan.
+#[tauri::command]
+pub fn agent_deny(id: String) {
+    unpark(&id);
+}
+
+/// Run actions one after another. Stops at the first failure, so later steps never act on
+/// the wrong window, and at the first one that needs approval.
+pub async fn run(app: &AppHandle, actions: Vec<Action>, shot: Option<ShotGeometry>) -> Result<Outcome, String> {
+    proceed(app, Outcome::default(), actions.into_iter().take(MAX_ACTIONS).collect(), shot).await
+}
+
+async fn proceed(app: &AppHandle, mut out: Outcome, actions: Vec<Action>, shot: Option<ShotGeometry>) -> Result<Outcome, String> {
+    let mut queue: VecDeque<Action> = actions.into();
+    while let Some(action) = queue.pop_front() {
+        let a = app.clone();
+        let step = tauri::async_runtime::spawn_blocking(move || match gate(&a, &action) {
+            Ok(Some(g)) => Ok(Err(g)),
+            Ok(None) => perform(&a, action, shot).map(Ok),
+            Err(e) => Err(e),
+        })
+        .await
+        .map_err(|e| e.to_string())?;
         match step {
-            Ok((line, settle_ms)) => {
-                if !line.is_empty() {
-                    done.push(line);
-                }
-                tokio_sleep(settle_ms).await;
+            Ok(Ok(effect)) => {
+                let settle = effect.settle;
+                effect.add_to(&mut out);
+                tokio_sleep(settle).await;
             }
-            Err(err) if done.is_empty() => return Err(err),
+            Ok(Err(g)) => {
+                let approval = Approval { id: new_id(), kind: g.kind, step: 1, steps: g.steps, title: g.title, items: g.items, why: g.why, button: g.button };
+                out.pending = Some(approval.clone());
+                park(Pending { approval, task: g.task, rest: queue.into(), shot, created: Instant::now() });
+                return Ok(out);
+            }
+            Err(err) if out.done.is_empty() && out.info.is_empty() => return Err(err),
             Err(err) => {
-                done.push(format!("Stopped: {err}"));
+                out.done.push(format!("Stopped: {err}"));
                 break;
             }
         }
     }
-    Ok(done)
+    Ok(out)
 }
 
 async fn tokio_sleep(ms: u64) {
@@ -94,14 +244,434 @@ async fn tokio_sleep(ms: u64) {
     }
 }
 
-/// One action. Returns what was done and how long to let it settle before the next one.
-fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Result<(String, u64), String> {
+/// What one action did: a short line, maybe text to read, and how long to let it settle.
+struct Effect {
+    line: String,
+    info: Option<String>,
+    settle: u64,
+}
+
+impl Effect {
+    fn line(line: impl Into<String>, settle: u64) -> Self {
+        Effect { line: line.into(), info: None, settle }
+    }
+    fn info(text: String) -> Self {
+        Effect { line: String::new(), info: Some(clip(&text)), settle: 0 }
+    }
+    fn add_to(self, out: &mut Outcome) {
+        if !self.line.is_empty() {
+            out.done.push(self.line);
+        }
+        if let Some(i) = self.info.filter(|i| !i.trim().is_empty()) {
+            out.info.push(i);
+        }
+    }
+}
+
+/// Long text keeps its end (where a command's result and errors usually are).
+fn clip(text: &str) -> String {
+    let n = text.chars().count();
+    if n <= MAX_INFO_CHARS {
+        return text.to_string();
+    }
+    let tail: String = text.chars().skip(n - MAX_INFO_CHARS).collect();
+    format!("…(earlier output cut)\n{tail}")
+}
+
+// --- Approval gate ---------------------------------------------------------------------
+
+struct Gate {
+    kind: &'static str,
+    steps: u8,
+    title: String,
+    items: Vec<String>,
+    why: String,
+    button: String,
+    task: Approved,
+}
+
+/// Actions that must wait for a yes, resolved to exactly what will happen.
+fn gate(app: &AppHandle, action: &Action) -> Result<Option<Gate>, String> {
+    Ok(Some(match action {
+        Action::RunCommand { command, why } => {
+            let command = command.trim().to_string();
+            if command.is_empty() {
+                return Err("There's no command to run.".into());
+            }
+            let destructive = deletes_things(&command);
+            Gate {
+                kind: "command",
+                steps: if destructive { 2 } else { 1 },
+                title: if destructive { "Run this command? It deletes or erases things.".into() } else { "Run this command?".into() },
+                items: vec![command.clone()],
+                why: why.trim().to_string(),
+                button: "Run it".into(),
+                task: Approved::Command { command, home: app.path().home_dir().map_err(|e| e.to_string())? },
+            }
+        }
+        Action::KillProcess { name } => {
+            let found = crate::system::find_processes(name)?;
+            Gate {
+                kind: "kill",
+                steps: 1,
+                title: format!("End {}?", name.trim()),
+                items: vec![found.summary],
+                why: String::new(),
+                button: "End it".into(),
+                task: Approved::Kill { pids: found.pids, name: name.trim().to_string() },
+            }
+        }
+        Action::Delete { paths, permanent } => {
+            let resolved = resolve_paths(app, paths)?;
+            let n = resolved.len();
+            let what = if n == 1 { "this".to_string() } else { format!("these {n} items") };
+            Gate {
+                kind: "delete",
+                steps: 2,
+                title: if *permanent { format!("Permanently delete {what}?") } else { format!("Delete {what}?") },
+                items: resolved.iter().map(|p| describe_path(p)).collect(),
+                why: if *permanent { "This can't be undone.".into() } else { "They go to the Recycle Bin, so you can still restore them.".into() },
+                button: "Yes, delete".into(),
+                task: Approved::Delete { paths: resolved, permanent: *permanent },
+            }
+        }
+        _ => return Ok(None),
+    }))
+}
+
+/// rm, del, Remove-Item, rmdir, format… anywhere in the command.
+fn deletes_things(command: &str) -> bool {
+    const WORDS: &[&str] = &["rm", "del", "erase", "rd", "rmdir", "remove-item", "ri", "format", "format-volume", "clear-content", "clear-recyclebin", "clear-disk", "remove-itemproperty", "cipher", "diskpart", "shred", "unlink", "truncate"];
+    command
+        .to_lowercase()
+        .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+        .any(|w| WORDS.contains(&w))
+}
+
+/// Run an approved action.
+fn execute(task: Approved) -> Result<Effect, String> {
+    match task {
+        Approved::Command { command, home } => {
+            let output = run_shell(&command, &home)?;
+            Ok(Effect { line: "Ran the command".into(), info: Some(clip(&output)), settle: 0 })
+        }
+        Approved::Kill { pids, name } => {
+            crate::system::kill(&pids)?;
+            Ok(Effect::line(format!("Closed {name}"), 300))
+        }
+        Approved::Delete { paths, permanent } => {
+            let n = paths.len();
+            if permanent {
+                for p in &paths {
+                    let r = if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
+                    r.map_err(|e| format!("Couldn't delete {}: {e}", p.display()))?;
+                }
+                Ok(Effect::line(format!("Deleted {n} item{} permanently", if n == 1 { "" } else { "s" }), 0))
+            } else {
+                trash::delete_all(&paths).map_err(|e| format!("Couldn't move to the Recycle Bin: {e}"))?;
+                Ok(Effect::line(format!("Moved {n} item{} to the Recycle Bin", if n == 1 { "" } else { "s" }), 0))
+            }
+        }
+    }
+}
+
+/// Run a command in PowerShell (Windows) or sh, without a console window, from the home
+/// folder. Returns what it printed and how it ended. Stopped after two minutes.
+fn run_shell(command: &str, home: &Path) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        let mut c = Command::new("powershell");
+        c.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"])
+            .arg(format!("[Console]::OutputEncoding = [Text.Encoding]::UTF8; {command}"))
+            .creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        c
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(command);
+        c
+    };
+    let mut child = cmd
+        .current_dir(home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Couldn't start the command: {e}"))?;
+
+    let pipe = |mut r: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = r.read_to_end(&mut buf);
+            String::from_utf8_lossy(&buf).to_string()
+        })
+    };
+    let out = pipe(Box::new(child.stdout.take().unwrap()));
+    let err = pipe(Box::new(child.stderr.take().unwrap()));
+
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) if start.elapsed() > COMMAND_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    let stdout = out.join().unwrap_or_default();
+    let stderr = err.join().unwrap_or_default();
+
+    let mut text = stdout.trim_end().to_string();
+    if !stderr.trim().is_empty() {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(stderr.trim_end());
+    }
+    match status {
+        None => text.push_str("\n\n(Still running after 2 minutes, so I stopped it.)"),
+        Some(s) if !s.success() => text.push_str(&format!("\n\n(Exit code {})", s.code().unwrap_or(-1))),
+        Some(_) if text.trim().is_empty() => text = "Done. (No output.)".into(),
+        Some(_) => {}
+    }
+    Ok(text.trim_start().to_string())
+}
+
+// --- Paths -----------------------------------------------------------------------------
+
+/// "~/Downloads/x.pdf", "Downloads\*.zip", "C:\Users\me\old" → existing absolute paths.
+/// Wildcards (* ?) are allowed in the last part. Whole drives, the home folder, the main
+/// user folders and system folders are refused.
+fn resolve_paths(app: &AppHandle, raw: &[String]) -> Result<Vec<PathBuf>, String> {
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let mut out: Vec<PathBuf> = Vec::new();
+    for s in raw {
+        let s = s.trim().trim_matches('"');
+        if s.is_empty() {
+            continue;
+        }
+        let p = expand(app, &home, s);
+        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let matches = if name.contains(['*', '?']) {
+            let dir = p.parent().ok_or("That path has no folder.")?;
+            let mut hits: Vec<PathBuf> = std::fs::read_dir(dir)
+                .map_err(|_| format!("There's no folder {}.", dir.display()))?
+                .flatten()
+                .filter(|e| wildcard(&name.to_lowercase(), &e.file_name().to_string_lossy().to_lowercase()))
+                .map(|e| e.path())
+                .collect();
+            hits.sort();
+            if hits.is_empty() {
+                return Err(format!("Nothing matches {}.", p.display()));
+            }
+            hits
+        } else if p.exists() {
+            vec![p]
+        } else {
+            return Err(format!("There's no {}.", p.display()));
+        };
+        for m in matches {
+            refuse_protected(app, &home, &m)?;
+            if !out.contains(&m) {
+                out.push(m);
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err("Which files should I delete?".into());
+    }
+    if out.len() > 200 {
+        return Err(format!("That's {} items; I only delete up to 200 at a time.", out.len()));
+    }
+    Ok(out)
+}
+
+fn expand(app: &AppHandle, home: &Path, s: &str) -> PathBuf {
+    let s = s.replace("%USERPROFILE%", &home.to_string_lossy()).replace("$HOME", &home.to_string_lossy());
+    if let Some(rest) = s.strip_prefix("~") {
+        return home.join(rest.trim_start_matches(['/', '\\']));
+    }
+    let p = PathBuf::from(&s);
+    if p.is_absolute() {
+        return p;
+    }
+    // "Downloads\report.pdf" → the real Downloads folder.
+    let mut parts = s.splitn(2, ['/', '\\']);
+    let first = parts.next().unwrap_or("");
+    let rest = parts.next().unwrap_or("");
+    match folder(app, first) {
+        Ok((_, dir)) if !rest.is_empty() => dir.join(rest),
+        _ => home.join(&s),
+    }
+}
+
+fn refuse_protected(app: &AppHandle, home: &Path, p: &Path) -> Result<(), String> {
+    let canon = |x: &Path| x.canonicalize().unwrap_or_else(|_| x.to_path_buf());
+    let c = canon(p);
+    let mut protected: Vec<PathBuf> = vec![home.to_path_buf()];
+    let ap = app.path();
+    protected.extend([ap.download_dir(), ap.document_dir(), ap.desktop_dir(), ap.picture_dir(), ap.audio_dir(), ap.video_dir()].into_iter().flatten());
+    if c.parent().is_none() || protected.iter().any(|x| canon(x) == c) {
+        return Err(format!("Bond won't delete {} itself — name the files inside it.", p.display()));
+    }
+    let lower = c.to_string_lossy().to_lowercase();
+    let sys = ["\\windows", "\\program files", "\\programdata", "/system", "/usr", "/bin", "/etc", "/library"];
+    if sys.iter().any(|s| lower.trim_start_matches("\\\\?\\").get(2..).is_some_and(|rest| rest.starts_with(s)) || lower.starts_with(s)) {
+        return Err(format!("{} is a system folder; Bond won't delete anything there.", p.display()));
+    }
+    Ok(())
+}
+
+/// `*` any run of characters, `?` one character.
+fn wildcard(pat: &str, name: &str) -> bool {
+    let (p, n): (Vec<char>, Vec<char>) = (pat.chars().collect(), name.chars().collect());
+    let (mut pi, mut ni, mut star, mut mark) = (0, 0, None, 0);
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ni;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ni = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|c| *c == '*')
+}
+
+const KB: f64 = 1024.0;
+
+fn size_text(bytes: u64) -> String {
+    let b = bytes as f64;
+    if b >= KB * KB * KB {
+        format!("{:.1} GB", b / (KB * KB * KB))
+    } else if b >= KB * KB {
+        format!("{:.1} MB", b / (KB * KB))
+    } else if b >= KB {
+        format!("{:.0} KB", b / KB)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+fn modified_text(p: &Path) -> String {
+    std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%-d %b %Y").to_string())
+        .unwrap_or_default()
+}
+
+/// "C:\…\offer.pdf — 2.3 MB, 3 Oct 2026" or "C:\…\old — folder, 120 files, 1.4 GB".
+fn describe_path(p: &Path) -> String {
+    if p.is_dir() {
+        let (mut files, mut bytes, mut seen) = (0u64, 0u64, 0u32);
+        let mut stack = vec![p.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&d) else { continue };
+            for e in entries.flatten() {
+                seen += 1;
+                if seen > 50_000 {
+                    return format!("{} — folder, more than {files} files, over {}", p.display(), size_text(bytes));
+                }
+                match e.file_type() {
+                    Ok(t) if t.is_dir() => stack.push(e.path()),
+                    Ok(_) => {
+                        files += 1;
+                        bytes += e.metadata().map(|m| m.len()).unwrap_or(0);
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        format!("{} — folder, {files} files, {}", p.display(), size_text(bytes))
+    } else {
+        let len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        format!("{} — {}, {}", p.display(), size_text(len), modified_text(p))
+    }
+}
+
+/// Files whose names contain every word of `query` (or match a * ? pattern), newest first.
+fn find_files(app: &AppHandle, query: &str, folder_name: Option<&str>) -> Result<String, String> {
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let root = match folder_name.map(str::trim).filter(|f| !f.is_empty()) {
+        Some(f) => match folder(app, f) {
+            Ok((_, d)) => d,
+            Err(_) => expand(app, &home, f),
+        },
+        None => home.clone(),
+    };
+    if !root.is_dir() {
+        return Err(format!("There's no folder {}.", root.display()));
+    }
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Err("What should I look for?".into());
+    }
+    let words: Vec<&str> = q.split_whitespace().collect();
+    let hit = |name: &str| if q.contains(['*', '?']) { wildcard(&q, name) } else { words.iter().all(|w| name.contains(w)) };
+    const SKIP: &[&str] = &["node_modules", "appdata", "$recycle.bin", "target", "library", "windows"];
+
+    let mut found: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    let mut stack = vec![root.clone()];
+    let mut seen = 0u32;
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            seen += 1;
+            if seen > 300_000 {
+                break;
+            }
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir && (name.starts_with('.') || SKIP.contains(&name.as_str())) {
+                continue;
+            }
+            if hit(&name) {
+                let t = e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+                found.push((t, e.path()));
+            }
+            if is_dir {
+                stack.push(e.path());
+            }
+        }
+    }
+    if found.is_empty() {
+        return Ok(format!("Nothing called “{query}” in {}.", root.display()));
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    let total = found.len();
+    let mut lines: Vec<String> = found.iter().take(15).map(|(_, p)| describe_path(p)).collect();
+    if total > 15 {
+        lines.push(format!("…and {} more.", total - 15));
+    }
+    Ok(lines.join("\n"))
+}
+
+// --- Actions ---------------------------------------------------------------------------
+
+/// One action that needs no approval. Returns what was done and how long to let it settle.
+fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Result<Effect, String> {
     match action {
-        Action::OpenApp { name } => open_app(&name).map(|n| (format!("Opened {n}"), 1500)),
+        Action::OpenApp { name } => open_app(&name).map(|n| Effect::line(format!("Opened {n}"), 1500)),
         Action::OpenUrl { url } => {
             let url = clean_url(&url)?;
             open_target(&url)?;
-            Ok((format!("Opened {}", short(&url)), 1500))
+            Ok(Effect::line(format!("Opened {}", short(&url)), 1500))
         }
         Action::WebSearch { query } => {
             let query = query.trim();
@@ -110,12 +680,12 @@ fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Resul
             }
             let url = reqwest::Url::parse_with_params("https://www.google.com/search", &[("q", query)]).map_err(|e| e.to_string())?;
             open_target(url.as_str())?;
-            Ok((format!("Searched for “{query}”"), 1500))
+            Ok(Effect::line(format!("Searched for “{query}”"), 1500))
         }
         Action::OpenFolder { name } => {
             let (label, path) = folder(app, &name)?;
             open_target(&path.to_string_lossy())?;
-            Ok((format!("Opened {label}"), 800))
+            Ok(Effect::line(format!("Opened {label}"), 800))
         }
         Action::Media { key } => {
             let (k, label) = match key.to_lowercase().replace([' ', '-'], "_").as_str() {
@@ -133,24 +703,53 @@ fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Resul
             for _ in 0..times {
                 e.key(k, Direction::Click).map_err(|e| e.to_string())?;
             }
-            Ok((label.to_string(), 200))
+            Ok(Effect::line(label, 200))
+        }
+        Action::SetVolume { percent } => {
+            if !cfg!(target_os = "windows") {
+                return Err("Setting an exact volume works on Windows only for now.".into());
+            }
+            let p = percent.clamp(0.0, 100.0);
+            // Each volume key is a 2% step on Windows: all the way down, then up to the level.
+            let mut e = input()?;
+            for _ in 0..50 {
+                e.key(Key::VolumeDown, Direction::Click).map_err(|e| e.to_string())?;
+            }
+            for _ in 0..(p / 2.0).round() as u32 {
+                e.key(Key::VolumeUp, Direction::Click).map_err(|e| e.to_string())?;
+            }
+            Ok(Effect::line(format!("Volume set to {:.0}%", (p / 2.0).round() * 2.0), 200))
         }
         Action::ShowDesktop => {
             if !cfg!(target_os = "windows") {
                 return Err("Show desktop works on Windows only for now.".into());
             }
             press_combo(&[Key::Meta], Key::Unicode('d'))?;
-            Ok(("Showed the desktop".into(), 500))
+            Ok(Effect::line("Showed the desktop", 500))
         }
         Action::LockScreen => {
             lock()?;
-            Ok(("Locked the screen".into(), 0))
+            Ok(Effect::line("Locked the screen", 0))
         }
         Action::SetWallpaper { color } => {
             let rgb = parse_color(&color)?;
             set_wallpaper(app, rgb)?;
-            Ok((format!("Wallpaper set to {}", color.trim()), 300))
+            Ok(Effect::line(format!("Wallpaper set to {}", color.trim()), 300))
         }
+        Action::SystemStatus => Ok(Effect::info(crate::system::status())),
+        Action::TopProcesses => Ok(Effect::info(crate::system::top_processes())),
+        Action::ClipboardGet => Ok(Effect::info(crate::system::clipboard_get()?)),
+        Action::ClipboardSet { text } => {
+            crate::system::clipboard_set(&text)?;
+            Ok(Effect::line("Copied to the clipboard", 0))
+        }
+        Action::Remind { text, in_minutes, at } => {
+            let when = crate::reminders::due_at(in_minutes, at.as_deref())?;
+            let r = crate::reminders::add(app, &text, when)?;
+            Ok(Effect::line(format!("Reminder set for {} — {}", crate::reminders::describe(r.at), r.text), 0))
+        }
+        Action::ListReminders => Ok(Effect::info(crate::reminders::summary(app))),
+        Action::FindFiles { query, folder } => Ok(Effect::info(find_files(app, &query, folder.as_deref())?)),
         Action::Click { x, y, double } => {
             let g = shot.ok_or("Clicking needs a look at the screen first.")?;
             let (ix, iy) = if g.normalized { (x / 1000.0 * g.width, y / 1000.0 * g.height) } else { (x, y) };
@@ -167,21 +766,23 @@ fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Resul
                 std::thread::sleep(Duration::from_millis(60));
                 e.button(Button::Left, Direction::Click).map_err(|e| e.to_string())?;
             }
-            Ok((String::new(), 600))
+            Ok(Effect::line("", 600))
         }
         Action::TypeText { text } => {
             if text.chars().count() > MAX_TYPE_CHARS {
                 return Err("That's too much text to type at once.".into());
             }
             input()?.text(&text).map_err(|e| e.to_string())?;
-            Ok((String::new(), 300))
+            Ok(Effect::line("", 300))
         }
         Action::Hotkey { keys } => {
             let (mods, key) = parse_combo(&keys)?;
             press_combo(&mods, key)?;
-            Ok((String::new(), 500))
+            Ok(Effect::line("", 500))
         }
-        Action::Wait { ms } => Ok((String::new(), ms.min(5000))),
+        Action::Wait { ms } => Ok(Effect::line("", ms.min(5000))),
+        // Never reached: gate() stops these for approval first.
+        Action::RunCommand { .. } | Action::KillProcess { .. } | Action::Delete { .. } => Err("That needs your approval first.".into()),
     }
 }
 
@@ -555,4 +1156,50 @@ pub fn release_focus(app: AppHandle) {
         }
     }
     let _ = app;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wildcards() {
+        assert!(wildcard("*.zip", "old.zip"));
+        assert!(wildcard("*intern*.pdf", "my internship offer.pdf"));
+        assert!(wildcard("img_??.png", "img_01.png"));
+        assert!(!wildcard("*.zip", "old.zip.txt"));
+        assert!(!wildcard("img_??.png", "img_1.png"));
+    }
+
+    #[test]
+    fn spots_deleting_commands() {
+        assert!(deletes_things(r"Remove-Item C:\temp\x -Recurse"));
+        assert!(deletes_things("Get-ChildItem *.log | rm"));
+        assert!(deletes_things("del /q file.txt"));
+        assert!(!deletes_things("Get-ChildItem ~/Downloads"));
+        assert!(!deletes_things("ipconfig /all"));
+        assert!(!deletes_things("git remote -v"));
+    }
+
+    #[test]
+    fn long_output_keeps_the_end() {
+        let s = "x".repeat(MAX_INFO_CHARS + 50) + "END";
+        let c = clip(&s);
+        assert!(c.ends_with("END") && c.starts_with("…(earlier"));
+    }
+}
+
+#[cfg(test)]
+mod shell_tests {
+    /// Runs real commands; `cargo test -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn runs_a_command() {
+        let home = std::env::temp_dir();
+        let out = super::run_shell("Write-Output 'héllo'; Get-Date -Format yyyy", &home).unwrap();
+        println!("{out}");
+        assert!(out.contains("héllo"));
+        let bad = super::run_shell("exit 3", &home).unwrap();
+        assert!(bad.contains("Exit code 3"), "{bad}");
+    }
 }

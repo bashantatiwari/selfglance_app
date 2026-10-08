@@ -12,6 +12,10 @@
 //            sites, folders, media keys, or click/type on screen), explain your screen,
 //            or help when you're stuck. Clear commands are handled locally; the rest
 //            goes to the AI. Typing goes straight back to your app once you press Enter.
+//            Anything powerful (run a command, end a program, delete files) waits in his
+//            card for your OK; deleting asks twice.
+//   Remind   "remind me in 45 minutes to…": when it's due he drops in with it and says it.
+//            He also warns when the battery runs low.
 //   Nudge    long stretches of chatting with AI / note-taking without building → "Time to build!"
 //   Diary    what you do all day (watching / working / browsing, and on what) is
 //            recorded locally for the dashboard.
@@ -31,7 +35,27 @@ import { Tracker } from "./companion/tracker";
 import { loadSettings, type Settings } from "./settings";
 import { ActionMenu, ARC, arcBox, type ActionId } from "./ui/ActionMenu";
 import { AnswerCard, AskBox, type AskState } from "./ui/Ask";
-import { releaseFocus, routeCommand, runActions, screenAsk, speak, stopSpeaking } from "./ai";
+import {
+  aiText,
+  approveAction,
+  brainWarm,
+  clipboardText,
+  denyAction,
+  giveFeedback,
+  recordOwn,
+  releaseFocus,
+  routeCommand,
+  runActions,
+  screenAsk,
+  setLearning,
+  snoozeReminder,
+  speak,
+  stopSpeaking,
+  takeFocus,
+  type Feedback,
+  type Outcome,
+  type Reminder,
+} from "./ai";
 import { understand, type ScreenMode } from "./assistant/intent";
 import { addIdea, logToJournal } from "./assistant/notes";
 import "./overlay.css";
@@ -47,6 +71,9 @@ const BRAINSTORM_BUILD_MS = 2 * 60_000; // ...with less than this in an editor o
 const BRAINSTORM_COOLDOWN_MS = 45 * 60_000;
 const CHATTY = /\b(chatgpt|claude|gemini|perplexity|copilot|deepseek|grok|notion|obsidian|onenote|google keep)\b/i;
 const POKE_REACTIONS: ClipName[] = ["wave", "nod", "celebrate", "hang"];
+const CLIPBOARD_SYSTEM =
+  "You are Bond, a friendly desktop companion. The user asks about the text they copied to their clipboard (given below their question). " +
+  "Do what they ask with it (summarize, explain, translate, fix, answer). Keep it short: at most 6 sentences, plain text, no markdown.";
 
 const store = {
   get(key: string) {
@@ -84,6 +111,8 @@ export default function App() {
   const ctxRef = useRef<Context>("other");
   const activityRef = useRef<Activity | null>(null);
   const settingsRef = useRef<Settings>(loadSettings());
+  /** The request on screen in Bond's experience log, for 👍 / 👎 and refusals. */
+  const expRef = useRef("");
   const idleRef = useRef(0);
   const hiddenByCtx = useRef(false);
   const playUntilRef = useRef(0);
@@ -300,9 +329,36 @@ export default function App() {
       }
     };
     coachRef.current = coach;
+
+    /** Make sure he's on screen (he leaves during meetings and games). */
+    const bringIn = async () => {
+      manualUntil.current = Date.now() + MANUAL_HOLD_MS;
+      if (stage.visible || stage.busy) return;
+      hiddenByCtx.current = false;
+      setBusy(true);
+      await stage.webDrop(homeX());
+      setBusy(false);
+    };
+
+    // A reminder is due: he comes in with it, says it, and holds the card until you answer.
+    const remind = async (r: Reminder) => {
+      await bringIn();
+      wake(60_000);
+      if (!coach.inBreak) stage.setPose("stand");
+      stage.play("wave", true);
+      if (settingsRef.current.speakAnswers && ctxRef.current !== "meeting") speak(`Reminder: ${r.text}`);
+      const current = askRef.current?.step;
+      if (current && current !== "answer" && current !== "error" && current !== "reminder") {
+        showPop(`⏰ ${r.text}`, 12_000, true); // you're in the middle of something with him
+        return;
+      }
+      clearTimeout(askTimer.current);
+      setAsk({ step: "reminder", reminder: r });
+    };
     const applySettings = (st: Settings) => {
       settingsRef.current = st;
       coach.configure({ everyMin: st.breakEveryMin, enabled: st.breaksOn });
+      void setLearning(st.learnFromMe);
     };
     applySettings(settingsRef.current);
     const tracker = new Tracker();
@@ -340,6 +396,15 @@ export default function App() {
         ctxRef.current = c;
         setCtx(c);
         void behave();
+      }),
+      onTauriEvent<Reminder>("reminder", (r) => void remind(r)),
+      onTauriEvent<number>("low-battery", async (pct) => {
+        if (!settingsRef.current.batteryAlert) return;
+        await bringIn();
+        wake(10_000);
+        stage.play("wave", true);
+        showPop(`Battery ${pct}% — plug in`, 8000, true);
+        if (settingsRef.current.speakAnswers && ctxRef.current !== "meeting") speak(`Your battery is at ${pct} percent. Time to plug in.`);
       }),
       onTauriEvent<null>("break-now", () => coach.startNow()),
       onTauriEvent<number>("snooze", (min) => {
@@ -421,11 +486,15 @@ export default function App() {
     manualUntil.current = Date.now() + MANUAL_HOLD_MS;
     wake(60_000);
     setAsk({ step: "input" });
+    // Load his brain while you type, so the answer doesn't wait for it.
+    if (settingsRef.current.aiProvider === "local") void brainWarm();
   }
 
   const closeAsk = async () => {
     clearTimeout(askTimer.current);
-    const wasTyping = askRef.current?.step === "input";
+    const cur = askRef.current;
+    const wasTyping = cur?.step === "input" || (cur?.step === "approve" && cur.approval.step > 1);
+    if (cur?.step === "approve") void denyAction(cur.approval.id); // closing is a no
     setAsk(null);
     stopSpeaking();
     wake();
@@ -451,11 +520,56 @@ export default function App() {
   };
 
   /** An answer worth reading: shown in the card (and spoken if that's on). */
-  const answer = (question: string, text: string, done: string[], say: boolean) => {
-    setAsk({ step: "answer", question, answer: text, done });
+  const answer = (question: string, text: string, done: string[], say: boolean, info: string[] = []) => {
+    setAsk({ step: "answer", question, answer: text, done, info });
     if (say && settingsRef.current.speakAnswers && text) speak(text);
     stageRef.current?.play("nod", true);
-    autoClose();
+    if (info.length) {
+      // Output to read: give it time (it also closes with ×).
+      const ms = Math.max(60, settingsRef.current.answerSeconds) * 1000;
+      manualUntil.current = Date.now() + ms;
+      clearTimeout(askTimer.current);
+      askTimer.current = window.setTimeout(() => void closeAsk(), ms);
+    } else autoClose();
+  };
+
+  /** Show what a plan of actions came to: an approval to give, text to read, or a quick note. */
+  const showOutcome = (question: string, o: Outcome, reply = "") => {
+    if (o.pending) {
+      clearTimeout(askTimer.current);
+      manualUntil.current = Date.now() + 10 * 60_000;
+      wake(10 * 60_000);
+      setAsk({ step: "approve", question, approval: o.pending, done: o.done, info: o.info });
+      stageRef.current?.play("nod", true);
+      if (o.pending.step === 1 && settingsRef.current.speakAnswers) speak(o.pending.title.replace(/\?.*$/, "?"));
+      return;
+    }
+    if (o.info.length) return answer(question, reply, o.done, false, o.info);
+    confirm(o.done.join(" · ") || reply || "Done ✓");
+  };
+
+  const approve = async (id: string) => {
+    const cur = askRef.current;
+    if (cur?.step !== "approve") return;
+    const question = cur.question;
+    if (cur.approval.step > 1) await releaseFocus();
+    const last = cur.approval.step >= cur.approval.steps;
+    setAsk({ step: "thinking", question, looking: false, note: last ? (cur.approval.kind === "command" ? "running…" : "on it…") : undefined });
+    try {
+      showOutcome(question, await approveAction(id));
+    } catch (e) {
+      setAsk({ step: "error", question, error: String(e) });
+      stageRef.current?.play("annoyed", true);
+      autoClose();
+    }
+  };
+
+  const deny = async (id: string) => {
+    const cur = askRef.current;
+    void denyAction(id);
+    void giveFeedback(expRef.current, "declined");
+    if (cur?.step === "approve" && cur.approval.step > 1) await releaseFocus();
+    confirm("Okay, I won't.");
   };
 
   /** Something done or saved: a short note beside his head, no card to dismiss. */
@@ -470,37 +584,51 @@ export default function App() {
   const lookAtScreen = async (question: string, mode: ScreenMode) => {
     setAsk({ step: "thinking", question, looking: true });
     const res = await screenAsk(question, mode);
-    if (mode === "task" && !res.answer && res.done.length) return confirm(res.done.join(" · "));
-    answer(question, res.answer, res.done, mode !== "task");
+    expRef.current = res.exp_id;
+    const o = res.outcome ?? { done: [], info: [], pending: null };
+    if (o.pending || (mode === "task" && !res.answer)) return showOutcome(question, o, res.answer);
+    answer(question, res.answer, o.done, mode !== "task", o.info);
   };
 
   const doAsk = async (question: string) => {
     setAsk({ step: "thinking", question, looking: false });
+    expRef.current = "";
     // Typing goes back to the app you were in, and the box is gone before any screenshot.
     await releaseFocus();
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     try {
       // 1. Bond's own understanding: instant, no AI call.
       const own = understand(question);
+      // What he understood on his own is a sure example for the brain to learn from.
       if (own?.kind === "log") {
         logToJournal(own.text);
+        void recordOwn(question, { intent: "log", text: own.text });
         return confirm("Logged in your journal ✓");
       }
       if (own?.kind === "idea") {
         addIdea(own.text);
+        void recordOwn(question, { intent: "idea", text: own.text });
         return confirm("Idea saved ✓");
       }
       if (own?.kind === "do") {
         try {
-          return confirm((await runActions(own.actions)).join(" · ") || "Done ✓");
+          const outcome = await runActions(own.actions);
+          expRef.current = await recordOwn(question, { intent: "task", actions: own.actions });
+          return showOutcome(question, outcome);
         } catch {
           /* e.g. no app by that name: let the AI work out what was meant */
         }
+      }
+      if (own?.kind === "clipboard") {
+        const copied = await clipboardText();
+        const reply = await aiText(CLIPBOARD_SYSTEM, `${question}\n\n--- Clipboard ---\n${copied.slice(0, 20_000)}`);
+        return answer(question, reply, [], true);
       }
       if (own?.kind === "screen") return await lookAtScreen(question, own.mode);
 
       // 2. Not sure: the AI classifies it (text only), and runs simple tasks right away.
       const r = await routeCommand(question);
+      expRef.current = r.exp_id;
       switch (r.intent) {
         case "log":
           logToJournal(r.text || question);
@@ -514,7 +642,7 @@ export default function App() {
           return await lookAtScreen(question, "help");
         case "task":
           if (r.needs_screen) return await lookAtScreen(question, "task");
-          return confirm(r.done.join(" · ") || r.reply || "Done ✓");
+          return showOutcome(question, r.outcome ?? { done: [], info: [], pending: null }, r.reply);
         default:
           return answer(question, r.reply, [], true);
       }
@@ -708,6 +836,26 @@ export default function App() {
           onSettings={() => {
             void closeAsk();
             if (inTauri) void invoke("open_dashboard");
+          }}
+          onApprove={(id) => void approve(id)}
+          onDeny={(id) => void deny(id)}
+          onWantFocus={() => void takeFocus()}
+          onRate={
+            ask.step === "answer" && expRef.current
+              ? (value: Feedback) => {
+                  void giveFeedback(expRef.current, value);
+                  setAsk({ ...ask, rated: value });
+                  if (value === "bad") stageRef.current?.play("nod", true);
+                }
+              : null
+          }
+          onSnooze={async (r, min) => {
+            try {
+              await snoozeReminder(r.text, min);
+              confirm(`Snoozed for ${min} min`);
+            } catch (e) {
+              setAsk({ step: "error", question: r.text, error: String(e) });
+            }
           }}
         />
       )}

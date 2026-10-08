@@ -1191,3 +1191,25 @@ main {
 .ideas li.done p {
   color: var(--muted);
 }
+
+/* Brain download progress. */
+.progress {
+  position: relative;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--grid);
+  overflow: hidden;
+}
+.progress .bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  opacity: 0.35;
+  transition: width 0.25s ease;
+}
+.progress span {
+  position: relative;
+  display: block;
+  line-height: 28px;
+  padding: 0 10px;
+}

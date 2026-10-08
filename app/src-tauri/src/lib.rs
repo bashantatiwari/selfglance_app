@@ -10,14 +10,23 @@
 //      companion can watch videos with you, stay quiet while you code, and get out
 //      of the way in meetings and games. Read locally, never stored or sent anywhere.
 //   5. Hotkeys (Ctrl+Alt+G summon, Ctrl+Alt+Space ask Bond) and the tray menu.
-//   6. AI (ai.rs): your own key in the OS keychain; daily summary and "ask Bond".
-//      Doing things on the desktop for you (agent.rs): a fixed set of safe actions.
-//   7. Start with the computer (autostart plugin; on by default in the installed app)
+//   6. AI (ai.rs): Bond's own brain on this laptop (brain.rs, no key) or your own cloud
+//      key in the OS keychain; daily summary and "ask Bond". What he learns from you
+//      (experience.rs): past requests and your feedback, reused as examples.
+//      Doing things on the computer for you (agent.rs): a known set of actions; running
+//      commands, ending programs and deleting files wait for your approval first.
+//   7. The laptop itself (system.rs): status, busy programs, clipboard, low-battery warning.
+//      Reminders (reminders.rs) that fire whenever the app is running.
+//   8. Start with the computer (autostart plugin; on by default in the installed app)
 //      and only ever one running copy (single-instance plugin).
 // Everything visual lives in the React + Three.js frontend.
 
 mod agent;
 mod ai;
+mod brain;
+mod experience;
+mod reminders;
+mod system;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -212,6 +221,15 @@ fn open_ask(app: &AppHandle) {
     let _ = app.emit("ask-open", ());
 }
 
+/// Let the overlay take the keyboard for a moment (typing the delete confirmation).
+#[tauri::command]
+fn take_focus(app: AppHandle) {
+    agent::remember_foreground();
+    if let Some(w) = overlay(&app) {
+        let _ = w.set_focus();
+    }
+}
+
 #[tauri::command]
 fn ask_bond(app: AppHandle) {
     open_ask(&app);
@@ -342,8 +360,26 @@ pub fn run() {
             ai::ai_route,
             ai::ai_screen,
             agent::agent_run,
+            agent::agent_approve,
+            agent::agent_deny,
+            system::clipboard_text,
+            reminders::reminders_list,
+            reminders::reminder_add,
+            reminders::reminder_remove,
+            reminders::reminder_snooze,
+            take_focus,
             agent::release_focus,
-            ai::ai_speak
+            ai::ai_speak,
+            brain::brain_status,
+            brain::brain_install,
+            brain::brain_warm,
+            brain::brain_stop,
+            experience::brain_set_learning,
+            experience::brain_feedback,
+            experience::brain_record,
+            experience::brain_learn_stats,
+            experience::brain_forget,
+            experience::brain_export
         ])
         .setup(move |app| {
             let win = overlay(app.handle()).expect("overlay window is defined in tauri.conf.json");
@@ -355,6 +391,10 @@ pub fn run() {
             build_tray(app.handle())?;
             enable_autostart_first_run(app.handle());
             agent::preload_apps();
+            brain::init(app.handle());
+            experience::init(app.handle());
+            reminders::spawn_watch(app.handle().clone());
+            system::spawn_battery_watch(app.handle().clone());
             // Another app may already own the shortcut; the tray item still works then.
             for key in [summon_shortcut(), ask_shortcut()] {
                 if let Err(err) = app.global_shortcut().register(key) {

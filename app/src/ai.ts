@@ -1,25 +1,56 @@
-// Frontend side of the AI features. The API key lives in the OS keychain and every
-// request is made by Rust (src-tauri/src/ai.rs); this file only asks Rust to run them.
+// Frontend side of the AI features. Every request is made by Rust (src-tauri/src/ai.rs):
+// Bond's own brain on this laptop (brain.rs), or a cloud AI with the key from the OS
+// keychain. What he learns from you is kept by experience.rs.
 
 import { invoke } from "@tauri-apps/api/core";
 import { inTauri } from "./platform";
 import { loadSettings } from "./settings";
 import type { Action, ScreenMode } from "./assistant/intent";
 
-export type Provider = "gemini" | "claude";
+export type Provider = "local" | "gemini" | "claude";
+
+/** Something powerful Bond wants to do, shown in full before anything happens. */
+export interface Approval {
+  id: string;
+  kind: "command" | "delete" | "kill";
+  /** Which yes this is: deletions (and commands that delete) need a second one. */
+  step: number;
+  steps: number;
+  title: string;
+  items: string[];
+  why: string;
+  button: string;
+}
+
+/** What a plan of actions did: short lines, longer text to read, maybe a pending approval. */
+export interface Outcome {
+  done: string[];
+  info: string[];
+  pending: Approval | null;
+}
 
 export interface Route {
   intent: "log" | "idea" | "task" | "screen" | "help" | "chat" | string;
   text: string;
   reply: string;
   needs_screen: boolean;
-  /** Actions already carried out. */
-  done: string[];
+  /** What the actions did (simple tasks run right away). */
+  outcome: Outcome | null;
+  /** This request in Bond's experience log, for 👍 / 👎 ("" when learning is off). */
+  exp_id: string;
 }
 
 export interface ScreenAnswer {
   answer: string;
-  done: string[];
+  outcome: Outcome | null;
+  exp_id: string;
+}
+
+export interface Reminder {
+  id: string;
+  text: string;
+  /** Due time, ms epoch. */
+  at: number;
 }
 
 const opts = () => {
@@ -39,7 +70,64 @@ export const routeCommand = (text: string) => invoke<Route>("ai_route", { ...opt
 export const screenAsk = (question: string, mode: ScreenMode) => invoke<ScreenAnswer>("ai_screen", { ...opts(), question, mode });
 
 /** Run actions Bond understood on his own. */
-export const runActions = (actions: Action[]) => invoke<string[]>("agent_run", { actions });
+export const runActions = (actions: Action[]) => invoke<Outcome>("agent_run", { actions });
+
+/** Yes to a pending approval: the next step (a second confirmation) or the result. */
+export const approveAction = (id: string) => invoke<Outcome>("agent_approve", { id });
+export const denyAction = (id: string) => (inTauri ? invoke<void>("agent_deny", { id }).catch(() => {}) : Promise.resolve());
+
+/** Let the overlay take the keyboard (typing a confirmation). */
+export const takeFocus = () => (inTauri ? invoke<void>("take_focus").catch(() => {}) : Promise.resolve());
+
+export const clipboardText = () => invoke<string>("clipboard_text");
+
+export const listReminders = () => (inTauri ? invoke<Reminder[]>("reminders_list") : Promise.resolve([] as Reminder[]));
+export const addReminder = (text: string, at: number) => invoke<Reminder>("reminder_add", { text, at });
+export const removeReminder = (id: string) => invoke<void>("reminder_remove", { id });
+export const snoozeReminder = (text: string, minutes: number) => invoke<Reminder>("reminder_snooze", { text, minutes });
+
+// --- Bond's own brain ------------------------------------------------------------------------
+
+export interface BrainStatus {
+  supported: boolean;
+  installed: boolean;
+  running: boolean;
+  installing: boolean;
+  model: string;
+}
+
+/** Download progress (`brain-progress` event). */
+export interface BrainProgress {
+  what: string;
+  done: number;
+  total: number;
+}
+
+export interface LearnStats {
+  total: number;
+  good: number;
+  bad: number;
+  trainable: number;
+}
+
+export type Feedback = "good" | "bad" | "declined";
+
+export const brainStatus = () => invoke<BrainStatus>("brain_status");
+export const brainInstall = () => invoke<void>("brain_install");
+/** Start loading the model now, so the answer comes quickly. */
+export const brainWarm = () => (inTauri ? invoke<void>("brain_warm").catch(() => {}) : Promise.resolve());
+export const brainStop = () => invoke<void>("brain_stop");
+
+export const setLearning = (on: boolean) => (inTauri ? invoke<void>("brain_set_learning", { on }).catch(() => {}) : Promise.resolve());
+export const giveFeedback = (id: string, value: Feedback) =>
+  inTauri && id ? invoke<void>("brain_feedback", { id, value }).catch(() => {}) : Promise.resolve();
+/** Something Bond understood on his own: a sure example to learn from. Returns its id. */
+export const recordOwn = (input: string, output: object, ok = true, error?: string) =>
+  inTauri ? invoke<string>("brain_record", { input, output, ok, error: error ?? null }).catch(() => "") : Promise.resolve("");
+export const learnStats = () => invoke<LearnStats>("brain_learn_stats");
+export const forgetLearned = () => invoke<void>("brain_forget");
+/** Write what he learned as a fine-tuning dataset; returns the file path. */
+export const exportLearned = () => invoke<string>("brain_export");
 
 /** Give the keyboard back to the app you were using. */
 export const releaseFocus = () => (inTauri ? invoke<void>("release_focus").catch(() => {}) : Promise.resolve());
