@@ -646,8 +646,8 @@ pub async fn ai_screen(app: AppHandle, provider: Provider, gemini_model: Option<
     let exp_id = crate::experience::record("screen", question.trim(), json!({"intent": mode, "reply": answer}), provider.name(), Ok(()));
     Ok(ScreenAnswer { answer, outcome: None, exp_id })
 }
-struct Shot {
-    b64: String,
+pub(crate) struct Shot {
+    pub(crate) b64: String,
     width: u32,
     height: u32,
     mx: f64,
@@ -658,7 +658,7 @@ struct Shot {
 
 /// Capture the primary monitor, downscale and JPEG-encode it. Kept synchronous and separate
 /// so the platform capture handles are released before any network await.
-fn capture() -> Result<Shot, String> {
+pub(crate) fn capture() -> Result<Shot, String> {
     let monitors = xcap::Monitor::all().map_err(|e| format!("Couldn't capture the screen: {e}"))?;
     let monitor = monitors
         .into_iter()

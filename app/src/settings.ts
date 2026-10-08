@@ -3,6 +3,7 @@
 
 import { emit } from "@tauri-apps/api/event";
 import { inTauri } from "./platform";
+import type { NoticeLevel } from "./assistant/notice";
 
 export interface Settings {
   /** Bring water breaks automatically. */
@@ -27,6 +28,18 @@ export interface Settings {
   batteryAlert: boolean;
   /** Keep what you ask and how it went, so Bond adapts to you (stays on this computer). */
   learnFromMe: boolean;
+  /** Suggestions he makes on his own: off, only when you seem stuck, helpful, chatty. */
+  notice: NoticeLevel;
+  /** At most this many suggestions an hour. */
+  noticeMaxPerHour: number;
+  /** He may look at your screen (on-device brain only) when you seem stuck. */
+  noticeLook: boolean;
+  /** No suggestions between these hours (local time, 0-23). */
+  quietOn: boolean;
+  quietFrom: number;
+  quietTo: number;
+  /** Apps or window titles he never comments on (comma-separated words). */
+  noticeBlock: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -41,6 +54,13 @@ export const DEFAULT_SETTINGS: Settings = {
   brainstormAlert: true,
   batteryAlert: true,
   learnFromMe: true,
+  notice: "helpful",
+  noticeMaxPerHour: 3,
+  noticeLook: true,
+  quietOn: false,
+  quietFrom: 22,
+  quietTo: 8,
+  noticeBlock: "",
 };
 
 const KEY = "selfglance.settings";

@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState, type Ref } from "react";
 import type { Approval, Feedback, Reminder } from "../ai";
+import type { Suggestion } from "../assistant/notice";
 import "./ask.css";
 
 export type AskState =
@@ -15,6 +16,7 @@ export type AskState =
   | { step: "answer"; question: string; answer: string; done: string[]; info?: string[]; rated?: Feedback }
   | { step: "approve"; question: string; approval: Approval; done: string[]; info: string[] }
   | { step: "reminder"; reminder: Reminder }
+  | { step: "suggest"; suggestion: Suggestion }
   | { step: "error"; question: string; error: string };
 
 /** The word typed to confirm a deletion the second time. */
@@ -64,6 +66,10 @@ export interface CardActions {
   onSnooze: (r: Reminder, minutes: number) => void;
   /** 👍 / 👎 on an answer, or null when there's nothing to rate. */
   onRate: ((value: Feedback) => void) | null;
+  /** A suggestion he made: take it, not now, or never again. */
+  onTake: () => void;
+  onNotNow: () => void;
+  onNever: () => void;
 }
 
 export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskState } & CardActions) {
@@ -92,6 +98,23 @@ export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskStat
               Done
             </button>
           </div>
+        </>
+      )}
+      {s.step === "suggest" && (
+        <>
+          <p className="q">Bond noticed</p>
+          <p className="a">{s.suggestion.text}</p>
+          <div className="choices">
+            <button className="btn-ghost" onClick={props.onNotNow}>
+              Not now
+            </button>
+            <button className="btn-primary" onClick={props.onTake}>
+              {s.suggestion.primary.label}
+            </button>
+          </div>
+          <button className="link never" onClick={props.onNever}>
+            Don't suggest this again
+          </button>
         </>
       )}
       {s.step === "answer" && (

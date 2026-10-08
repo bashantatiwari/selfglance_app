@@ -712,6 +712,41 @@ function SettingsPage() {
       </Group>
 
       <Group
+        title="Suggestions"
+        desc="Bond speaks up on his own at a natural pause: things you usually do in an app, a tip when you copy an error or keep searching while working. Tips come from the brain on this laptop only — nothing is sent anywhere. 👎 on a suggestion stops it."
+      >
+        <div className="tabs" role="radiogroup" aria-label="How often">
+          {(
+            [
+              ["off", "Off"],
+              ["stuck", "Only when I'm stuck"],
+              ["helpful", "Helpful"],
+              ["chatty", "Chatty"],
+            ] as const
+          ).map(([v, label]) => (
+            <button key={v} className={s.notice === v ? "on" : ""} onClick={() => update({ notice: v })}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <Slider label="At most" unit="an hour" min={1} max={6} step={1} value={s.noticeMaxPerHour} disabled={s.notice === "off"} onChange={(v) => update({ noticeMaxPerHour: v })} />
+        <Toggle
+          label="Let him look at my screen when I seem stuck"
+          hint="Only with the brain on this laptop. Never password managers, banking or private windows."
+          checked={s.noticeLook}
+          onChange={(v) => update({ noticeLook: v })}
+        />
+        <Toggle label="Quiet hours" checked={s.quietOn} onChange={(v) => update({ quietOn: v })} />
+        <Slider label="Quiet from" unit=":00" min={0} max={23} step={1} value={s.quietFrom} disabled={!s.quietOn} onChange={(v) => update({ quietFrom: v })} />
+        <Slider label="Until" unit=":00" min={0} max={23} step={1} value={s.quietTo} disabled={!s.quietOn} onChange={(v) => update({ quietTo: v })} />
+        <label className="slider">
+          <span className="s-label">Never in</span>
+          <input className="search" placeholder="e.g. slack, payroll, figma" value={s.noticeBlock} onChange={(e) => update({ noticeBlock: e.target.value })} />
+          <span className="s-value muted">apps or window titles, comma-separated</span>
+        </label>
+      </Group>
+
+      <Group
         title="Learning"
         desc="Bond keeps what you ask, what he did and your 👍 / 👎, and reuses what worked for similar requests. It stays on this computer, and can later train his own brain on your habits."
       >

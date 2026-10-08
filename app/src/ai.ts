@@ -110,7 +110,7 @@ export interface LearnStats {
   trainable: number;
 }
 
-export type Feedback = "good" | "bad" | "declined";
+export type Feedback = "good" | "bad" | "declined" | "ignored";
 
 export const brainStatus = () => invoke<BrainStatus>("brain_status");
 export const brainInstall = () => invoke<void>("brain_install");
@@ -128,6 +128,37 @@ export const learnStats = () => invoke<LearnStats>("brain_learn_stats");
 export const forgetLearned = () => invoke<void>("brain_forget");
 /** Write what he learned as a fine-tuning dataset; returns the file path. */
 export const exportLearned = () => invoke<string>("brain_export");
+
+// --- Bond notices (suggestions he makes on his own) --------------------------------------
+
+export interface Habit {
+  key: string;
+  app: string | null;
+  hour: number | null;
+  actions: Action[];
+  label: string;
+  days: number;
+  done_today: boolean;
+}
+
+export interface Judgement {
+  /** The local brain looked at it (false: no brain here, private window, low battery). */
+  judged: boolean;
+  suggest: boolean;
+  text: string;
+}
+
+export const noticeEnable = (on: boolean) => (inTauri ? invoke<void>("notice_enable", { on }).catch(() => {}) : Promise.resolve());
+export const noticeHabits = () => (inTauri ? invoke<Habit[]>("notice_habits").catch(() => [] as Habit[]) : Promise.resolve([] as Habit[]));
+export const noticeAllowed = (key: string, minGapMin: number) =>
+  inTauri ? invoke<{ allowed: boolean; reason: string }>("notice_allowed", { key, minGapMin }).then((r) => r.allowed).catch(() => false) : Promise.resolve(false);
+/** He made a suggestion; returns its id for how it went (giveFeedback). */
+export const noticeShown = (key: string, text: string) => (inTauri ? invoke<string>("notice_shown", { key, text }).catch(() => "") : Promise.resolve(""));
+/** Ask the on-device brain whether there's something useful to say. */
+export const noticeJudge = (details: string, look: boolean, blocked: string[]) =>
+  inTauri
+    ? invoke<Judgement>("notice_judge", { details, look, blocked }).catch((): Judgement => ({ judged: false, suggest: false, text: "" }))
+    : Promise.resolve<Judgement>({ judged: false, suggest: false, text: "" });
 
 /** Give the keyboard back to the app you were using. */
 export const releaseFocus = () => (inTauri ? invoke<void>("release_focus").catch(() => {}) : Promise.resolve());

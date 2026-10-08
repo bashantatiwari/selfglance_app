@@ -17,6 +17,10 @@
 //   Remind   "remind me in 45 minutes to…": when it's due he drops in with it and says it.
 //            He also warns when the battery runs low.
 //   Nudge    long stretches of chatting with AI / note-taking without building → "Time to build!"
+//   Notice   on his own, at a natural pause: your habits ("you usually open Spotify in
+//            VS Code — want it?"), a tip when you copy an error or keep searching while
+//            working. Judged by the on-device brain only; how often is up to you
+//            (Settings → Suggestions), and a 👎 stops that suggestion.
 //   Diary    what you do all day (watching / working / browsing, and on what) is
 //            recorded locally for the dashboard.
 //   Life     he follows what you're doing: sits and watches videos with you (facing
@@ -52,12 +56,32 @@ import {
   speak,
   stopSpeaking,
   takeFocus,
+  noticeAllowed,
+  noticeEnable,
+  noticeHabits,
+  noticeJudge,
+  noticeShown,
   type Feedback,
+  type Habit,
   type Outcome,
   type Reminder,
 } from "./ai";
 import { understand, type ScreenMode } from "./assistant/intent";
 import { addIdea, logToJournal } from "./assistant/notes";
+import {
+  blockedBy,
+  errorFallback,
+  habitText,
+  inQuietHours,
+  LEVEL_GAP_MIN,
+  LEVEL_KINDS,
+  naturalPause,
+  Pacer,
+  stuckFallback,
+  StuckWatch,
+  SUGGESTION_TTL_MS,
+  type Suggestion,
+} from "./assistant/notice";
 import "./overlay.css";
 
 const TOUCH_AWAKE_MS = 6_000; // fully visible this long after you last touched him, then he fades
@@ -113,6 +137,13 @@ export default function App() {
   const settingsRef = useRef<Settings>(loadSettings());
   /** The request on screen in Bond's experience log, for 👍 / 👎 and refusals. */
   const expRef = useRef("");
+  // Bond notices: what's waiting for a natural pause, and the suggestion on screen.
+  const stuckRef = useRef(new StuckWatch());
+  const pacerRef = useRef(new Pacer());
+  const pendingRef = useRef<Suggestion | null>(null);
+  const noticeIdRef = useRef("");
+  const habitsRef = useRef<{ list: Habit[]; at: number }>({ list: [], at: 0 });
+  const coachBreakRef = useRef<() => boolean>(() => false);
   const idleRef = useRef(0);
   const hiddenByCtx = useRef(false);
   const playUntilRef = useRef(0);
@@ -359,7 +390,10 @@ export default function App() {
       settingsRef.current = st;
       coach.configure({ everyMin: st.breakEveryMin, enabled: st.breaksOn });
       void setLearning(st.learnFromMe);
+      void noticeEnable(st.notice !== "off");
+      if (st.notice === "off") pendingRef.current = null;
     };
+    coachBreakRef.current = () => coach.inBreak;
     applySettings(settingsRef.current);
     const tracker = new Tracker();
 
@@ -388,9 +422,13 @@ export default function App() {
         // Watching a video is screen time even with no keyboard/mouse input.
         coach.onIdle(ctxRef.current === "watching" ? 0 : sec);
         void behave();
+        void deliverSuggestion();
       }),
       onTauriEvent<Activity>("activity", (a) => {
         activityRef.current = a;
+        stuckRef.current.push(a, classify(a));
+        void noticeStuck();
+        void noticeHabit(a);
         const c = classify(a);
         if (c === ctxRef.current) return;
         ctxRef.current = c;
@@ -398,6 +436,7 @@ export default function App() {
         void behave();
       }),
       onTauriEvent<Reminder>("reminder", (r) => void remind(r)),
+      onTauriEvent<string>("clipboard-error", (text) => void noticeError(text)),
       onTauriEvent<number>("low-battery", async (pct) => {
         if (!settingsRef.current.batteryAlert) return;
         await bringIn();
@@ -495,6 +534,7 @@ export default function App() {
     const cur = askRef.current;
     const wasTyping = cur?.step === "input" || (cur?.step === "approve" && cur.approval.step > 1);
     if (cur?.step === "approve") void denyAction(cur.approval.id); // closing is a no
+    if (cur?.step === "suggest") void giveFeedback(noticeIdRef.current, "ignored");
     setAsk(null);
     stopSpeaking();
     wake();
@@ -651,6 +691,131 @@ export default function App() {
       stageRef.current?.play("annoyed", true);
       autoClose();
     }
+  };
+
+  // --- Bond notices ------------------------------------------------------------------------
+  // Spot a moment (notice*), keep it until a natural pause (deliverSuggestion), then show it
+  // in his card. How each one went goes back to his log, which decides whether he makes it
+  // again.
+
+  /** Keep a suggestion for the next natural pause, if your settings and his log allow it. */
+  const offer = async (s: Suggestion) => {
+    const st = settingsRef.current;
+    if (!LEVEL_KINDS[st.notice].includes(s.kind)) return;
+    if (blockedBy(activityRef.current, st.noticeBlock)) return;
+    if (!(await noticeAllowed(s.key, LEVEL_GAP_MIN[st.notice].same))) return;
+    pendingRef.current = s; // the newest moment wins
+  };
+
+  /** Several searches while working: ask the brain for a tip (it may look at the screen). */
+  const noticeStuck = async () => {
+    const st = settingsRef.current;
+    if (!LEVEL_KINDS[st.notice].includes("stuck")) return;
+    const queries = stuckRef.current.stuck(st.notice);
+    if (!queries) return;
+    stuckRef.current.clear();
+    if (!(await noticeAllowed("stuck", LEVEL_GAP_MIN[st.notice].same))) return;
+    const details = queries.length
+      ? `They searched the web ${queries.length} times in the last few minutes while working: ${queries.map((q) => `"${q}"`).join(", ")}.`
+      : "They keep reading Q&A pages (Stack Overflow, GitHub issues) while working.";
+    const j = await noticeJudge(details, st.noticeLook, blockList());
+    if (j.judged && !j.suggest) return; // the brain had nothing specific: stay quiet
+    await offer({
+      key: "stuck",
+      kind: "stuck",
+      text: j.suggest ? j.text : stuckFallback(queries),
+      primary: { label: "Look at my screen", does: "look" },
+      at: Date.now(),
+    });
+  };
+
+  /** You copied an error: a quick explanation, with the full one a click away. */
+  const noticeError = async (text: string) => {
+    const st = settingsRef.current;
+    if (!LEVEL_KINDS[st.notice].includes("error")) return;
+    const app = (activityRef.current?.name ?? "").toLowerCase();
+    const key = `error@${app}`;
+    if (!(await noticeAllowed(key, LEVEL_GAP_MIN[st.notice].same))) return;
+    const j = await noticeJudge(`They just copied this error:\n${text.slice(0, 3000)}`, false, blockList());
+    if (j.judged && !j.suggest) return;
+    await offer({ key, kind: "error", text: j.suggest ? j.text : errorFallback, primary: { label: "Explain more", does: "explain" }, clip: text, at: Date.now() });
+  };
+
+  /** Something you usually ask for in this app (or at this time), not done yet today. */
+  const noticeHabit = async (a: Activity) => {
+    if (!LEVEL_KINDS[settingsRef.current.notice].includes("habit")) return;
+    const cache = habitsRef.current;
+    if (Date.now() - cache.at > 10 * 60_000) habitsRef.current = { list: await noticeHabits(), at: Date.now() };
+    const hour = new Date().getHours();
+    const h = habitsRef.current.list.find((x) => !x.done_today && (x.app ? x.app === a.name : x.hour === hour));
+    if (!h) return;
+    await offer({ key: h.key, kind: "habit", text: habitText(h.label, h.app, h.hour), primary: { label: "Yes, do it", does: "actions" }, actions: h.actions, at: Date.now() });
+  };
+
+  const blockList = () =>
+    settingsRef.current.noticeBlock
+      .split(",")
+      .map((w) => w.trim())
+      .filter(Boolean);
+
+  /** On every idle tick: show what's waiting if this is a good moment. */
+  const deliverSuggestion = async () => {
+    const s = pendingRef.current;
+    if (!s) return;
+    const st = settingsRef.current;
+    if (Date.now() - s.at > SUGGESTION_TTL_MS || st.notice === "off") {
+      pendingRef.current = null;
+      return;
+    }
+    const moment = { idleSec: idleRef.current, ctx: ctxRef.current, busy: !!askRef.current || stageRef.current?.busy === true, inBreak: coachBreakRef.current() };
+    if (!naturalPause(moment) || (st.quietOn && inQuietHours(new Date(), st.quietFrom, st.quietTo))) return;
+    if (blockedBy(activityRef.current, st.noticeBlock) || !pacerRef.current.canShow(st.notice, st.noticeMaxPerHour)) return;
+    pendingRef.current = null;
+    pacerRef.current.shown();
+    noticeIdRef.current = await noticeShown(s.key, s.text);
+    const stage = stageRef.current;
+    if (stage && !stage.visible && !stage.busy) await stage.webDrop(homeX());
+    wake(25_000);
+    stage?.play("wave", true);
+    setAsk({ step: "suggest", suggestion: s });
+    clearTimeout(askTimer.current);
+    askTimer.current = window.setTimeout(() => void closeAsk(), 20_000); // let pass = ignored
+  };
+
+  const takeSuggestion = async () => {
+    const cur = askRef.current;
+    if (cur?.step !== "suggest") return;
+    const s = cur.suggestion;
+    void giveFeedback(noticeIdRef.current, "good");
+    clearTimeout(askTimer.current);
+    try {
+      if (s.primary.does === "actions" && s.actions) {
+        setAsk({ step: "thinking", question: s.text, looking: false });
+        const outcome = await runActions(s.actions as Parameters<typeof runActions>[0]);
+        void recordOwn(s.text, { intent: "task", actions: s.actions }); // counts as done today
+        return showOutcome(s.text, outcome);
+      }
+      if (s.primary.does === "explain" && s.clip) {
+        const question = "Explain this error and how to fix it";
+        setAsk({ step: "thinking", question, looking: false });
+        const reply = await aiText(CLIPBOARD_SYSTEM, `${question}\n\n--- Clipboard ---\n${s.clip.slice(0, 20_000)}`);
+        return answer(question, reply, [], true);
+      }
+      await lookAtScreen("I seem to be stuck. What's going on, and how do I fix it?", "help");
+    } catch (e) {
+      setAsk({ step: "error", question: s.text, error: String(e) });
+      stageRef.current?.play("annoyed", true);
+      autoClose();
+    }
+  };
+
+  const dismissSuggestion = (never: boolean) => {
+    if (askRef.current?.step !== "suggest") return;
+    void giveFeedback(noticeIdRef.current, never ? "bad" : "ignored");
+    clearTimeout(askTimer.current);
+    setAsk(null);
+    if (never) confirm("Okay, I won't suggest that again.");
+    else wake();
   };
 
   // --- Right-click actions ----------------------------------------------------------------
@@ -840,6 +1005,9 @@ export default function App() {
           onApprove={(id) => void approve(id)}
           onDeny={(id) => void deny(id)}
           onWantFocus={() => void takeFocus()}
+          onTake={() => void takeSuggestion()}
+          onNotNow={() => dismissSuggestion(false)}
+          onNever={() => dismissSuggestion(true)}
           onRate={
             ask.step === "answer" && expRef.current
               ? (value: Feedback) => {

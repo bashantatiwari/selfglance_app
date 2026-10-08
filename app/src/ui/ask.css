@@ -315,3 +315,14 @@
   filter: none;
   background: rgba(127, 127, 127, 0.15);
 }
+
+/* "Don't suggest this again" under a suggestion. */
+.ask-card.suggest .never {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  opacity: 0.6;
+}
+.ask-card.suggest .never:hover {
+  opacity: 1;
+}

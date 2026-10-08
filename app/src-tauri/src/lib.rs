@@ -12,7 +12,8 @@
 //   5. Hotkeys (Ctrl+Alt+G summon, Ctrl+Alt+Space ask Bond) and the tray menu.
 //   6. AI (ai.rs): Bond's own brain on this laptop (brain.rs, no key) or your own cloud
 //      key in the OS keychain; daily summary and "ask Bond". What he learns from you
-//      (experience.rs): past requests and your feedback, reused as examples.
+//      (experience.rs): past requests and your feedback, reused as examples. What he
+//      notices on his own (notice.rs): your habits, a copied error, when you seem stuck.
 //      Doing things on the computer for you (agent.rs): a known set of actions; running
 //      commands, ending programs and deleting files wait for your approval first.
 //   7. The laptop itself (system.rs): status, busy programs, clipboard, low-battery warning.
@@ -25,6 +26,7 @@ mod agent;
 mod ai;
 mod brain;
 mod experience;
+mod notice;
 mod reminders;
 mod system;
 
@@ -379,7 +381,12 @@ pub fn run() {
             experience::brain_record,
             experience::brain_learn_stats,
             experience::brain_forget,
-            experience::brain_export
+            experience::brain_export,
+            notice::notice_enable,
+            notice::notice_habits,
+            notice::notice_allowed,
+            notice::notice_shown,
+            notice::notice_judge
         ])
         .setup(move |app| {
             let win = overlay(app.handle()).expect("overlay window is defined in tauri.conf.json");
@@ -393,6 +400,7 @@ pub fn run() {
             agent::preload_apps();
             brain::init(app.handle());
             experience::init(app.handle());
+            notice::spawn_clipboard_watch(app.handle().clone());
             reminders::spawn_watch(app.handle().clone());
             system::spawn_battery_watch(app.handle().clone());
             // Another app may already own the shortcut; the tray item still works then.

@@ -40,7 +40,8 @@ pub struct Exp {
     pub ok: bool,
     #[serde(default)]
     pub error: Option<String>,
-    /// "good", "bad", or "declined" (you refused what he proposed).
+    /// "good", "bad", "declined" (you refused what he proposed), or "ignored" (a suggestion
+    /// he made that you let pass).
     #[serde(default)]
     pub feedback: Option<String>,
 }
@@ -145,6 +146,11 @@ fn set_feedback(id: &str, value: &str) {
     }
 }
 
+/// Everything remembered so far (for finding habits and how suggestions went).
+pub fn snapshot() -> Vec<Exp> {
+    with_store(|l| l.clone())
+}
+
 // --- Recall ------------------------------------------------------------------------------
 
 const STOP: &[&str] = &[
@@ -225,10 +231,11 @@ pub fn brain_set_learning(on: bool) {
     LEARN.store(on, Ordering::Relaxed);
 }
 
-/// 👍 / 👎 on an answer, or "declined" when you refuse what he proposed.
+/// 👍 / 👎 on an answer, "declined" when you refuse what he proposed, "ignored" when you
+/// let a suggestion pass.
 #[tauri::command]
 pub fn brain_feedback(id: String, value: String) {
-    if matches!(value.as_str(), "good" | "bad" | "declined") {
+    if matches!(value.as_str(), "good" | "bad" | "declined" | "ignored") {
         set_feedback(&id, &value);
     }
 }
