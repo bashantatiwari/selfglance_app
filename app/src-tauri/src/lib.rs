@@ -28,6 +28,7 @@ mod brain;
 mod experience;
 mod notice;
 mod reminders;
+mod screen;
 mod system;
 
 use std::sync::{Arc, Mutex};
@@ -386,7 +387,8 @@ pub fn run() {
             notice::notice_habits,
             notice::notice_allowed,
             notice::notice_shown,
-            notice::notice_judge
+            notice::notice_judge,
+            notice::notice_scan
         ])
         .setup(move |app| {
             let win = overlay(app.handle()).expect("overlay window is defined in tauri.conf.json");

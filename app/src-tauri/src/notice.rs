@@ -6,7 +6,9 @@
 //   Stuck     the frontend sees several web searches in a few minutes while you're working;
 //             the brain decides whether it has one specific tip (optionally after looking
 //             at the screen).
-//   Error     you copied an error message; the brain decides whether it can explain it.
+//   Error     you copied an error message, or one is showing in the editor or terminal
+//             you're working in (read on-device by OCR during a pause); the brain decides
+//             whether it can explain it.
 //
 // The brain judges with the local model only: what he notices on his own never goes to a
 // cloud AI. He never looks at password managers, banking or private browser windows, and
@@ -287,12 +289,12 @@ pub async fn notice_judge(details: String, look: bool, blocked: Vec<String>) -> 
     if is_private(&window, &blocked) || is_private(&details, &[]) {
         return Ok(nothing);
     }
-    let image = if look {
-        tauri::async_runtime::spawn_blocking(crate::ai::capture).await.map_err(|e| e.to_string())?.ok().map(|s| s.b64)
-    } else {
-        None
+    let shot = if look { tauri::async_runtime::spawn_blocking(crate::ai::capture).await.map_err(|e| e.to_string())?.ok() } else { None };
+    let details = match &shot {
+        Some(s) if !s.seen.is_empty() => format!("{details}\n{}", s.seen),
+        _ => details,
     };
-    judge(&window, &details, image.as_deref()).await
+    judge(&window, &details, shot.as_ref().map(|s| s.b64.as_str())).await
 }
 
 async fn judge(window: &str, details: &str, image: Option<&str>) -> Result<Judgement, String> {
@@ -323,9 +325,10 @@ async fn judge(window: &str, details: &str, image: Option<&str>) -> Result<Judge
 /// Text that looks like an error message or stack trace.
 pub fn looks_like_error(text: &str) -> bool {
     let len = text.trim().len();
-    if !(15..=20_000).contains(&len) {
-        return false;
-    }
+    (15..=20_000).contains(&len) && has_marker(text)
+}
+
+fn has_marker(text: &str) -> bool {
     let t = text.to_lowercase();
     const MARKERS: &[&str] = &[
         "traceback (most recent call last)",
@@ -350,6 +353,48 @@ pub fn looks_like_error(text: &str) -> bool {
         "stack trace",
     ];
     MARKERS.iter().any(|m| t.contains(m))
+}
+
+/// The last error in some lines of screen text (the bottom one is the newest in a terminal),
+/// with a little context: a few lines before, several after.
+fn error_snippet(lines: &[String]) -> Option<String> {
+    let i = lines.iter().rposition(|l| has_marker(l))?;
+    let from = i.saturating_sub(3);
+    let to = (i + 9).min(lines.len());
+    let snippet = lines[from..to].join("\n");
+    (snippet.trim().len() >= 15).then_some(snippet)
+}
+
+/// The error showing in the window you're working in, if any, read on-device by OCR.
+/// Nothing is read in private windows or the apps you blocked.
+#[tauri::command]
+pub async fn notice_scan(blocked: Vec<String>) -> Result<Option<String>, String> {
+    if !ON.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let Ok(w) = active_win_pos_rs::get_active_window() else { return None };
+        if w.process_id == std::process::id() as u64 || is_private(&format!("{} {}", w.app_name, w.title), &blocked) {
+            return None;
+        }
+        // The monitor the window is on, then just the window's part of it.
+        let (cx, cy) = (w.position.x + w.position.width / 2.0, w.position.y + w.position.height / 2.0);
+        let monitor = xcap::Monitor::from_point(cx as i32, cy as i32).ok()?;
+        let (mx, my) = (monitor.x().ok()? as f64, monitor.y().ok()? as f64);
+        let img = monitor.capture_image().ok()?;
+        let x = (w.position.x - mx).clamp(0.0, img.width() as f64) as u32;
+        let y = (w.position.y - my).clamp(0.0, img.height() as f64) as u32;
+        let width = (w.position.width as u32).min(img.width() - x);
+        let height = (w.position.height as u32).min(img.height() - y);
+        if width < 50 || height < 50 {
+            return None;
+        }
+        let part = image::imageops::crop_imm(&img, x, y, width, height).to_image();
+        let lines: Vec<String> = crate::screen::ocr(&part, 0.0, 0.0).ok()?.into_iter().map(|l| l.text).collect();
+        error_snippet(&lines)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -502,6 +547,19 @@ mod tests {
             println!("{right} / {} right", cases.len());
             crate::brain::brain_stop();
         });
+    }
+
+    #[test]
+    fn finds_the_newest_error_on_screen() {
+        let lines: Vec<String> = ["$ cargo build", "   Compiling api v0.1.0", "error[E0382]: borrow of moved value: `cfg`", "  --> src/main.rs:12:5", "$ npm test", "npm ERR! Test failed.", "See above for more details."]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let s = error_snippet(&lines).unwrap();
+        // The newest error (npm's), with the three lines before it.
+        assert!(s.starts_with("error[E0382]"), "{s}");
+        assert!(s.ends_with("See above for more details."), "{s}");
+        assert!(error_snippet(&["all good".to_string(), "tests passed".to_string()]).is_none());
     }
 
     #[test]

@@ -60,6 +60,7 @@ import {
   noticeEnable,
   noticeHabits,
   noticeJudge,
+  noticeScan,
   noticeShown,
   type Feedback,
   type Habit,
@@ -93,6 +94,7 @@ const BRAINSTORM_WINDOW_MS = 30 * 60_000; // look back this far
 const BRAINSTORM_CHAT_MS = 20 * 60_000; // this much chatting / note-taking in the window...
 const BRAINSTORM_BUILD_MS = 2 * 60_000; // ...with less than this in an editor or terminal
 const BRAINSTORM_COOLDOWN_MS = 45 * 60_000;
+const SCAN_EVERY_MS = 30_000; // looking for an error on screen, during pauses in an editor/terminal
 const CHATTY = /\b(chatgpt|claude|gemini|perplexity|copilot|deepseek|grok|notion|obsidian|onenote|google keep)\b/i;
 const POKE_REACTIONS: ClipName[] = ["wave", "nod", "celebrate", "hang"];
 const CLIPBOARD_SYSTEM =
@@ -143,6 +145,7 @@ export default function App() {
   const pendingRef = useRef<Suggestion | null>(null);
   const noticeIdRef = useRef("");
   const habitsRef = useRef<{ list: Habit[]; at: number }>({ list: [], at: 0 });
+  const scanRef = useRef({ at: 0, last: "" });
   const coachBreakRef = useRef<() => boolean>(() => false);
   const idleRef = useRef(0);
   const hiddenByCtx = useRef(false);
@@ -423,6 +426,7 @@ export default function App() {
         coach.onIdle(ctxRef.current === "watching" ? 0 : sec);
         void behave();
         void deliverSuggestion();
+        void scanForError();
       }),
       onTauriEvent<Activity>("activity", (a) => {
         activityRef.current = a;
@@ -436,7 +440,7 @@ export default function App() {
         void behave();
       }),
       onTauriEvent<Reminder>("reminder", (r) => void remind(r)),
-      onTauriEvent<string>("clipboard-error", (text) => void noticeError(text)),
+      onTauriEvent<string>("clipboard-error", (text) => void noticeError(text, "clipboard")),
       onTauriEvent<number>("low-battery", async (pct) => {
         if (!settingsRef.current.batteryAlert) return;
         await bringIn();
@@ -729,14 +733,29 @@ export default function App() {
     });
   };
 
-  /** You copied an error: a quick explanation, with the full one a click away. */
-  const noticeError = async (text: string) => {
+  /** During a pause in an editor or terminal (at most every 30 s): an error on screen? */
+  const scanForError = async () => {
+    const st = settingsRef.current;
+    const scan = scanRef.current;
+    if (!LEVEL_KINDS[st.notice].includes("error") || pendingRef.current || Date.now() - scan.at < SCAN_EVERY_MS) return;
+    if (ctxRef.current !== "focus" || !naturalPause({ idleSec: idleRef.current, ctx: ctxRef.current, busy: !!askRef.current, inBreak: coachBreakRef.current() })) return;
+    if (blockedBy(activityRef.current, st.noticeBlock)) return;
+    scan.at = Date.now();
+    const snippet = await noticeScan(blockList());
+    if (!snippet || snippet === scan.last) return;
+    scan.last = snippet; // the same error stays on screen: say it once
+    await noticeError(snippet, "screen");
+  };
+
+  /** You copied an error (or one is on screen): a quick explanation, the full one a click away. */
+  const noticeError = async (text: string, from: "clipboard" | "screen" = "clipboard") => {
     const st = settingsRef.current;
     if (!LEVEL_KINDS[st.notice].includes("error")) return;
     const app = (activityRef.current?.name ?? "").toLowerCase();
     const key = `error@${app}`;
     if (!(await noticeAllowed(key, LEVEL_GAP_MIN[st.notice].same))) return;
-    const j = await noticeJudge(`They just copied this error:\n${text.slice(0, 3000)}`, false, blockList());
+    const what = from === "screen" ? `This error is showing in ${activityRef.current?.name ?? "their window"}` : "They just copied this error";
+    const j = await noticeJudge(`${what}:\n${text.slice(0, 3000)}`, false, blockList());
     if (j.judged && !j.suggest) return;
     await offer({ key, kind: "error", text: j.suggest ? j.text : errorFallback, primary: { label: "Explain more", does: "explain" }, clip: text, at: Date.now() });
   };

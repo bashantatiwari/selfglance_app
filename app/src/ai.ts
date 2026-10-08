@@ -160,6 +160,9 @@ export const noticeJudge = (details: string, look: boolean, blocked: string[]) =
     ? invoke<Judgement>("notice_judge", { details, look, blocked }).catch((): Judgement => ({ judged: false, suggest: false, text: "" }))
     : Promise.resolve<Judgement>({ judged: false, suggest: false, text: "" });
 
+/** The error showing in the window you're working in, if any (read on-device). */
+export const noticeScan = (blocked: string[]) => (inTauri ? invoke<string | null>("notice_scan", { blocked }).catch(() => null) : Promise.resolve(null));
+
 /** Give the keyboard back to the app you were using. */
 export const releaseFocus = () => (inTauri ? invoke<void>("release_focus").catch(() => {}) : Promise.resolve());
 

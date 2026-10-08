@@ -73,6 +73,16 @@ pub enum Action {
         folder: Option<String>,
     },
     Click { x: f64, y: f64, #[serde(default)] double: bool },
+    /// A control from the last look at the screen (UI Automation), by its number.
+    ClickElement { id: usize, #[serde(default)] double: bool },
+    /// Visible text from the last look (OCR); `nth` picks among repeats, top to bottom.
+    ClickText {
+        text: String,
+        #[serde(default)]
+        nth: Option<usize>,
+        #[serde(default)]
+        double: bool,
+    },
     TypeText { text: String },
     Hotkey { keys: String },
     Wait { ms: u64 },
@@ -758,15 +768,15 @@ fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Resul
             }
             let px = (g.mx + ix / g.scale).round() as i32;
             let py = (g.my + iy / g.scale).round() as i32;
-            let mut e = input()?;
-            e.move_mouse(px, py, Coordinate::Abs).map_err(|e| e.to_string())?;
-            std::thread::sleep(Duration::from_millis(60));
-            e.button(Button::Left, Direction::Click).map_err(|e| e.to_string())?;
-            if double {
-                std::thread::sleep(Duration::from_millis(60));
-                e.button(Button::Left, Direction::Click).map_err(|e| e.to_string())?;
-            }
-            Ok(Effect::line("", 600))
+            click_at(px, py, double)
+        }
+        Action::ClickElement { id, double } => {
+            let (px, py) = crate::screen::element_center(id)?;
+            click_at(px, py, double)
+        }
+        Action::ClickText { text, nth, double } => {
+            let (px, py) = crate::screen::text_center(&text, nth.unwrap_or(1))?;
+            click_at(px, py, double)
         }
         Action::TypeText { text } => {
             if text.chars().count() > MAX_TYPE_CHARS {
@@ -1136,6 +1146,24 @@ pub fn remember_foreground() {
         let hwnd = windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
         *PREVIOUS_FOREGROUND.lock().unwrap() = hwnd as usize;
     }
+}
+
+/// Move the mouse to a physical screen position and click there.
+fn click_at(px: i32, py: i32, double: bool) -> Result<Effect, String> {
+    let mut e = input()?;
+    e.move_mouse(px, py, Coordinate::Abs).map_err(|e| e.to_string())?;
+    std::thread::sleep(Duration::from_millis(60));
+    e.button(Button::Left, Direction::Click).map_err(|e| e.to_string())?;
+    if double {
+        std::thread::sleep(Duration::from_millis(60));
+        e.button(Button::Left, Direction::Click).map_err(|e| e.to_string())?;
+    }
+    Ok(Effect::line("", 600))
+}
+
+/// The window you were using before Bond took the keyboard (0 if unknown).
+pub fn previous_foreground() -> usize {
+    *PREVIOUS_FOREGROUND.lock().unwrap()
 }
 
 /// Give the keyboard back to the window you were using, so typing never lands in Bond.
