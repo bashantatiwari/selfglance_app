@@ -23,7 +23,11 @@ import {
   hasKey,
   learnStats,
   setKey,
+  speak,
+  voiceInstall,
+  voiceStatus,
   type BrainProgress,
+  type VoiceStatus,
   type BrainStatus,
   type LearnStats,
   type Provider,
@@ -712,6 +716,26 @@ function SettingsPage() {
       </Group>
 
       <Group
+        title="Voice"
+        desc="Bond's own voice and ears run on this laptop: hold Ctrl+Alt+V and talk to him (or click the mic in the Ask box), and he answers out loud. The microphone is only open while you talk."
+      >
+        <div className="tabs" role="radiogroup" aria-label="Voice">
+          {(
+            [
+              ["bond", "Bond's own · private"],
+              ["google", "Google · needs Gemini key"],
+              ["system", "Windows voice"],
+            ] as const
+          ).map(([v, label]) => (
+            <button key={v} className={s.voice === v ? "on" : ""} onClick={() => update({ voice: v })}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <LocalVoice voiceId={s.voiceId} speed={s.voiceSpeed} onChange={update} />
+      </Group>
+
+      <Group
         title="Suggestions"
         desc="Bond speaks up on his own at a natural pause: things you usually do in an app, a tip when you copy an error or keep searching while working. Tips come from the brain on this laptop only — nothing is sent anywhere. 👎 on a suggestion stops it."
       >
@@ -871,6 +895,85 @@ function LocalBrain() {
         </button>
       )}
       {msg && <p className="small muted">{msg}</p>}
+    </>
+  );
+}
+
+/** Kokoro voices that suit English (speaker ids in Kokoro v1.0). */
+const VOICES: [number, string][] = [
+  [18, "Puck — warm, playful"],
+  [16, "Michael — calm"],
+  [14, "Fenrir — bold"],
+  [17, "Onyx — deep"],
+  [11, "Adam — bright"],
+  [26, "George — British"],
+  [24, "Daniel — British, soft"],
+  [3, "Heart — warm"],
+  [2, "Bella — lively"],
+  [6, "Nicole — soft"],
+  [21, "Emma — British"],
+];
+
+/** Download / choose Bond's own voice. */
+function LocalVoice(props: { voiceId: number; speed: number; onChange: (p: Partial<Settings>) => void }) {
+  const [st, setSt] = useState<VoiceStatus | null>(null);
+  const [progress, setProgress] = useState<BrainProgress | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const refresh = () => voiceStatus().then(setSt);
+  useEffect(() => {
+    void refresh();
+    const off = onTauriEvent<BrainProgress>("brain-progress", setProgress);
+    return () => void off.then((f) => f());
+  }, []);
+  const install = async () => {
+    setMsg(null);
+    setSt((x) => (x ? { ...x, installing: true } : x));
+    try {
+      await voiceInstall();
+      setMsg("Ready. Hold Ctrl+Alt+V and say hi.");
+    } catch (e) {
+      setMsg(`${e} You can try again; the download continues where it stopped.`);
+    }
+    setProgress(null);
+    void refresh();
+  };
+  if (!st) return null;
+  if (!st.installed) {
+    const pct = progress && progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
+    return (
+      <>
+        <p className="small muted">A natural voice (Kokoro) and speech recognition (Parakeet), both on this laptop. A one-time 830 MB download.</p>
+        {st.installing ? (
+          <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+            <div className="bar" style={{ width: `${pct}%` }} />
+            <span className="small">{progress ? `${progress.what}: ${gb(progress.done)} / ${gb(progress.total)} GB` : "Starting download…"}</span>
+          </div>
+        ) : (
+          <button className="btn" onClick={() => void install()}>
+            Download Bond's voice
+          </button>
+        )}
+        {msg && <p className="small muted">{msg}</p>}
+      </>
+    );
+  }
+  return (
+    <>
+      <label className="slider">
+        <span className="s-label">His voice</span>
+        <select className="search" value={props.voiceId} onChange={(e) => props.onChange({ voiceId: Number(e.target.value) })}>
+          {VOICES.map(([id, name]) => (
+            <option key={id} value={id}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <button className="btn ghost" onClick={() => void speak("Hi, I'm Bond. Hold Control, Alt and V whenever you want to talk to me.")}>
+          ▶ Preview
+        </button>
+      </label>
+      <Slider label="Speed" unit="×" min={0.8} max={1.3} step={0.05} value={props.speed} onChange={(v) => props.onChange({ voiceSpeed: v })} />
+      <p className="small good">✓ On this laptop. {msg}</p>
     </>
   );
 }

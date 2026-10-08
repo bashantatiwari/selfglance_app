@@ -269,7 +269,7 @@ pub async fn ai_speak(text: String) -> Result<String, String> {
 }
 
 /// Minimal WAV container for mono 16-bit little-endian PCM.
-fn wav(pcm: &[u8], rate: u32) -> Vec<u8> {
+pub(crate) fn wav(pcm: &[u8], rate: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity(44 + pcm.len());
     let data_len = pcm.len() as u32;
     out.extend_from_slice(b"RIFF");

@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { inTauri } from "./platform";
 import { loadSettings } from "./settings";
 import type { Action, ScreenMode } from "./assistant/intent";
+import { sentences } from "./assistant/speech";
 
 export type Provider = "local" | "gemini" | "claude";
 
@@ -181,14 +182,64 @@ export function stopSpeaking() {
   }
 }
 
+// --- Bond's own voice and ears (voice.rs) -----------------------------------------------
+
+export interface VoiceStatus {
+  installed: boolean;
+  installing: boolean;
+  listening: boolean;
+}
+
+export const voiceStatus = () =>
+  inTauri ? invoke<VoiceStatus>("voice_status").catch((): VoiceStatus => ({ installed: false, installing: false, listening: false })) : Promise.resolve<VoiceStatus>({ installed: false, installing: false, listening: false });
+export const voiceInstall = () => invoke<void>("voice_install");
+/** Listen until you go quiet; the text arrives as the `voice-heard` event. */
+export const voiceListen = () => (inTauri ? invoke<void>("voice_listen").catch(() => {}) : Promise.resolve());
+export const voiceListenStop = () => (inTauri ? invoke<void>("voice_listen_stop").catch(() => {}) : Promise.resolve());
+const voiceSay = (text: string, voice: number, speed: number) => invoke<string>("voice_say", { text, voice, speed });
+
+/** Play base64 WAV; resolves when it ends (or is stopped). */
+function play(b64: string, token: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (token !== speakToken) return resolve();
+    const audio = new Audio(`data:audio/wav;base64,${b64}`);
+    current = audio;
+    audio.onended = () => resolve();
+    audio.onpause = () => resolve();
+    audio.play().catch(reject);
+  });
+}
+
+/** Bond's own voice: a sentence at a time, the next one prepared while this one plays. */
+async function bondVoice(text: string, token: number) {
+  const { voiceId, voiceSpeed } = loadSettings();
+  const parts = sentences(text);
+  let next = voiceSay(parts[0], voiceId, voiceSpeed);
+  for (let i = 0; i < parts.length; i++) {
+    const wav = await next;
+    if (token !== speakToken) return;
+    if (i + 1 < parts.length) next = voiceSay(parts[i + 1], voiceId, voiceSpeed);
+    await play(wav, token);
+  }
+}
+
 /**
- * Speak an answer. Tries Google's natural voice (needs the Gemini key; ~3-5 s to arrive,
- * so the text is already on screen), then falls back to the best voice installed locally.
+ * Speak an answer, in the voice chosen in Settings: Bond's own (on this laptop), Google's
+ * (needs the Gemini key; ~3-5 s to arrive), or Windows'. Falls back to Windows' voice.
  */
 export async function speak(text: string) {
   stopSpeaking();
   const token = speakToken;
-  if (inTauri) {
+  const choice = loadSettings().voice;
+  if (inTauri && choice === "bond") {
+    try {
+      await bondVoice(text, token);
+      return;
+    } catch {
+      if (token !== speakToken) return;
+    }
+  }
+  if (inTauri && (choice === "google" || choice === "bond")) {
     try {
       const b64 = await invoke<string>("ai_speak", { text });
       if (token !== speakToken) return; // closed or replaced meanwhile

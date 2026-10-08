@@ -9,7 +9,8 @@
 //   4. Activity: which app/window is in front (and whether it's fullscreen), so the
 //      companion can watch videos with you, stay quiet while you code, and get out
 //      of the way in meetings and games. Read locally, never stored or sent anywhere.
-//   5. Hotkeys (Ctrl+Alt+G summon, Ctrl+Alt+Space ask Bond) and the tray menu.
+//   5. Hotkeys (Ctrl+Alt+G summon, Ctrl+Alt+Space ask Bond, hold Ctrl+Alt+V to talk to
+//      him) and the tray menu. His own voice and ears (voice.rs) run on this laptop.
 //   6. AI (ai.rs): Bond's own brain on this laptop (brain.rs, no key) or your own cloud
 //      key in the OS keychain; daily summary and "ask Bond". What he learns from you
 //      (experience.rs): past requests and your feedback, reused as examples. What he
@@ -30,6 +31,7 @@ mod notice;
 mod reminders;
 mod screen;
 mod system;
+mod voice;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -215,6 +217,11 @@ fn ask_shortcut() -> Shortcut {
     Shortcut::new(Some(hotkey_mods()), Code::Space)
 }
 
+/// Hold to talk to Bond.
+fn talk_shortcut() -> Shortcut {
+    Shortcut::new(Some(hotkey_mods()), Code::KeyV)
+}
+
 /// Open the "Ask Bond" box: the overlay takes keyboard focus so you can type.
 fn open_ask(app: &AppHandle) {
     agent::remember_foreground();
@@ -317,6 +324,7 @@ pub fn run() {
     let regions = Arc::new(HitRegions::default());
     let summon_key = summon_shortcut();
     let ask_key = ask_shortcut();
+    let talk_key = talk_shortcut();
 
     tauri::Builder::default()
         // Must be registered first. Launching SelfGlance again while it already runs
@@ -328,6 +336,14 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
+                    // Talking: listen while the keys are held.
+                    if shortcut == &talk_key {
+                        match event.state() {
+                            ShortcutState::Pressed => voice::start(app.clone(), false),
+                            ShortcutState::Released => voice::stop(),
+                        }
+                        return;
+                    }
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
@@ -388,7 +404,12 @@ pub fn run() {
             notice::notice_allowed,
             notice::notice_shown,
             notice::notice_judge,
-            notice::notice_scan
+            notice::notice_scan,
+            voice::voice_status,
+            voice::voice_install,
+            voice::voice_say,
+            voice::voice_listen,
+            voice::voice_listen_stop
         ])
         .setup(move |app| {
             let win = overlay(app.handle()).expect("overlay window is defined in tauri.conf.json");
@@ -403,10 +424,11 @@ pub fn run() {
             brain::init(app.handle());
             experience::init(app.handle());
             notice::spawn_clipboard_watch(app.handle().clone());
+            voice::init(app.handle());
             reminders::spawn_watch(app.handle().clone());
             system::spawn_battery_watch(app.handle().clone());
             // Another app may already own the shortcut; the tray item still works then.
-            for key in [summon_shortcut(), ask_shortcut()] {
+            for key in [summon_shortcut(), ask_shortcut(), talk_shortcut()] {
                 if let Err(err) = app.global_shortcut().register(key) {
                     eprintln!("hotkey unavailable: {err}");
                 }

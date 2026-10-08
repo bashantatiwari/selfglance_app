@@ -7,6 +7,8 @@
 //   Play     Ctrl+Alt+G (Cmd+Option+G) drops him at your cursor. Throw him around,
 //            poke him, or right-click him for actions: sit, dance, jump, wave,
 //            follow my cursor, open the dashboard ("Later" too, during a break).
+//   Talk     hold Ctrl+Alt+V and speak (or click the mic in the Ask box): he listens on
+//            this laptop, does what you said, and answers out loud.
 //   Ask      Ctrl+Alt+Space (or the menu): one box for everything. Bond works out what you
 //            mean: log your day, save an idea, do something on the desktop (open apps,
 //            sites, folders, media keys, or click/type on screen), explain your screen,
@@ -56,6 +58,8 @@ import {
   speak,
   stopSpeaking,
   takeFocus,
+  voiceListen,
+  voiceStatus,
   noticeAllowed,
   noticeEnable,
   noticeHabits,
@@ -146,6 +150,9 @@ export default function App() {
   const noticeIdRef = useRef("");
   const habitsRef = useRef<{ list: Habit[]; at: number }>({ list: [], at: 0 });
   const scanRef = useRef({ at: 0, last: "" });
+  /** The request on screen was spoken: answer out loud even if "read answers aloud" is off. */
+  const heardRef = useRef(false);
+  const [canListen, setCanListen] = useState(false);
   const coachBreakRef = useRef<() => boolean>(() => false);
   const idleRef = useRef(0);
   const hiddenByCtx = useRef(false);
@@ -417,6 +424,30 @@ export default function App() {
     const unlisten = [
       onTauriEvent<Settings>("settings-changed", applySettings),
       onTauriEvent<null>("ask-open", () => openAsk()),
+      // Talking to him: listening → understanding → the same path as a typed request.
+      onTauriEvent<string>("voice-state", (state) => {
+        if (state === "listening") {
+          stopSpeaking();
+          clearTimeout(askTimer.current);
+          setAsk(null);
+          wake(25_000);
+          stageRef.current?.play("nod", true);
+          showPop("Listening…", 25_000, true);
+        } else if (state === "thinking") {
+          setPop(null);
+        }
+      }),
+      onTauriEvent<string>("voice-heard", (text) => {
+        setPop(null);
+        if (!text.trim()) return showPop("I didn't catch that", 2200, true);
+        heardRef.current = true;
+        void doAsk(text.trim(), false);
+      }),
+      onTauriEvent<string>("voice-error", (e) => {
+        setPop(null);
+        setAsk({ step: "error", question: "", error: e });
+        autoClose();
+      }),
       onTauriEvent<number>("idle", (sec) => {
         idleRef.current = sec;
         const watching = ctxRef.current === "watching";
@@ -529,6 +560,7 @@ export default function App() {
     manualUntil.current = Date.now() + MANUAL_HOLD_MS;
     wake(60_000);
     setAsk({ step: "input" });
+    void voiceStatus().then((v) => setCanListen(v.installed));
     // Load his brain while you type, so the answer doesn't wait for it.
     if (settingsRef.current.aiProvider === "local") void brainWarm();
   }
@@ -566,7 +598,7 @@ export default function App() {
   /** An answer worth reading: shown in the card (and spoken if that's on). */
   const answer = (question: string, text: string, done: string[], say: boolean, info: string[] = []) => {
     setAsk({ step: "answer", question, answer: text, done, info });
-    if (say && settingsRef.current.speakAnswers && text) speak(text);
+    if (say && (settingsRef.current.speakAnswers || heardRef.current) && text) speak(text);
     stageRef.current?.play("nod", true);
     if (info.length) {
       // Output to read: give it time (it also closes with ×).
@@ -623,6 +655,7 @@ export default function App() {
     wake();
     stageRef.current?.play("nod", true);
     showPop(text.length > 60 ? `${text.slice(0, 57)}…` : text, 2800, true);
+    if (heardRef.current) speak(text.replace(/✓/g, "").trim()); // you talked to him: he answers out loud
   };
 
   const lookAtScreen = async (question: string, mode: ScreenMode) => {
@@ -634,11 +667,14 @@ export default function App() {
     answer(question, res.answer, o.done, mode !== "task", o.info);
   };
 
-  const doAsk = async (question: string) => {
+  const doAsk = async (question: string, typed = true) => {
     setAsk({ step: "thinking", question, looking: false });
     expRef.current = "";
-    // Typing goes back to the app you were in, and the box is gone before any screenshot.
-    await releaseFocus();
+    if (typed) {
+      heardRef.current = false;
+      // Typing goes back to the app you were in, and the box is gone before any screenshot.
+      await releaseFocus();
+    }
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     try {
       // 1. Bond's own understanding: instant, no AI call.
@@ -1011,7 +1047,21 @@ export default function App() {
           </span>
         </div>
       )}
-      {ask?.step === "input" && <AskBox boxRef={askBoxRef} onAsk={(q) => void doAsk(q)} onClose={() => void closeAsk()} />}
+      {ask?.step === "input" && (
+        <AskBox
+          boxRef={askBoxRef}
+          onAsk={(q) => void doAsk(q)}
+          onClose={() => void closeAsk()}
+          onMic={
+            canListen
+              ? () => {
+                  void releaseFocus();
+                  void voiceListen();
+                }
+              : null
+          }
+        />
+      )}
       {ask && ask.step !== "input" && (
         <AnswerCard
           cardRef={askCardRef}

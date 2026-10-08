@@ -38,6 +38,10 @@ trash = "5.2.9"
 chrono = "0.4.45"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 tokio = { version = "1.53.2", features = ["sync", "time"] }
+sherpa-onnx = "1.13.8"
+cpal = "0.18.2"
+bzip2 = "0.6.1"
+tar = "0.4.46"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

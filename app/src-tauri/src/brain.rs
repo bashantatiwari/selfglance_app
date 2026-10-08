@@ -159,7 +159,7 @@ async fn install(app: &AppHandle) -> Result<(), String> {
 }
 
 /// Stream a file to disk, resuming a partial download.
-async fn download(app: &AppHandle, http: &reqwest::Client, url: &str, dest: &Path, what: &str) -> Result<(), String> {
+pub(crate) async fn download(app: &AppHandle, http: &reqwest::Client, url: &str, dest: &Path, what: &str) -> Result<(), String> {
     use std::io::Write;
     let part = dest.with_extension("part");
     let have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);

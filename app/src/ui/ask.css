@@ -326,3 +326,23 @@
 .ask-card.suggest .never:hover {
   opacity: 1;
 }
+
+/* The mic in the Ask box: talk instead of typing. */
+.ask-box .mic {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0 6px;
+  opacity: 0.7;
+}
+.ask-box .mic:hover {
+  opacity: 1;
+}
+.ask-box .mic svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}

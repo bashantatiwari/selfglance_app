@@ -20,6 +20,12 @@ export interface Settings {
   geminiModel: string;
   /** Read Bond's answers aloud. */
   speakAnswers: boolean;
+  /** Whose voice: Bond's own on this laptop, Google's (needs the Gemini key), or Windows'. */
+  voice: "bond" | "google" | "system";
+  /** Kokoro speaker id for Bond's own voice (18 = Puck). */
+  voiceId: number;
+  /** 1 = normal speed. */
+  voiceSpeed: number;
   /** Seconds an answer stays on screen before it closes by itself. */
   answerSeconds: number;
   /** Nudge when you've been brainstorming/chatting with AI a long time without building. */
@@ -50,6 +56,9 @@ export const DEFAULT_SETTINGS: Settings = {
   aiProvider: "local",
   geminiModel: "auto",
   speakAnswers: true,
+  voice: "bond",
+  voiceId: 18,
+  voiceSpeed: 1,
   answerSeconds: 12,
   brainstormAlert: true,
   batteryAlert: true,

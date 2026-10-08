@@ -22,7 +22,7 @@ export type AskState =
 /** The word typed to confirm a deletion the second time. */
 export const CONFIRM_WORD = "delete";
 
-export function AskBox(props: { boxRef: Ref<HTMLDivElement>; onAsk: (q: string) => void; onClose: () => void }) {
+export function AskBox(props: { boxRef: Ref<HTMLDivElement>; onAsk: (q: string) => void; onClose: () => void; onMic: (() => void) | null }) {
   const [q, setQ] = useState("");
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -43,9 +43,17 @@ export function AskBox(props: { boxRef: Ref<HTMLDivElement>; onAsk: (q: string) 
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === "Escape" && props.onClose()}
-          placeholder="Tell Bond anything…"
+          placeholder={props.onMic ? "Tell Bond anything… or hold Ctrl+Alt+V to talk" : "Tell Bond anything…"}
           aria-label="Ask Bond"
         />
+        {props.onMic && !q.trim() && (
+          <button type="button" className="mic" onClick={props.onMic} aria-label="Talk to Bond" title="Talk (stops when you go quiet)">
+            <svg viewBox="0 0 24 24" aria-hidden>
+              <rect x="9" y="3" width="6" height="11" rx="3" />
+              <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+            </svg>
+          </button>
+        )}
         <button type="submit" disabled={!q.trim()} aria-label="Send">
           <svg viewBox="0 0 24 24" aria-hidden>
             <path d="M5 12h13M13 6l6 6-6 6" />
