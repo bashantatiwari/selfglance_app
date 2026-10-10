@@ -62,10 +62,12 @@ The app is in `app/`, built with [Tauri](https://tauri.app):
 | `voice.rs` | Speech in and out (Parakeet and Kokoro via sherpa-onnx) |
 | `notice.rs` | Decides when a suggestion is worth making |
 | `experience.rs` | Remembers past requests so Bond adapts to you |
-| `reminders.rs`, `system.rs` | Reminders; battery, programs, clipboard |
+| `journal.rs`, `reminders.rs` | The journal files; reminders |
+| `system.rs` | Battery, memory, programs, clipboard |
 
-Data stays on the computer in `%LOCALAPPDATA%\com.selfglance.app` (models, notes,
-reminders, the learning log). Cloud API keys go in the Windows Credential Manager.
+Everything stays on the computer. The models are in `%LOCALAPPDATA%\com.selfglance.app`;
+the journal (one `.md` file per day), reminders and the learning log are in
+`%APPDATA%\com.selfglance.app`. Cloud API keys go in the Windows Credential Manager.
 
 ## Roadmap
 
