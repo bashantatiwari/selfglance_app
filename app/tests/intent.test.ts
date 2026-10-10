@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { saidStop, spokenAnswer, understand } from "../src/assistant/intent.ts";
+import { saidStop, spokenAnswer, understand, unsavedAnswer } from "../src/assistant/intent.ts";
 
 test("clearing out screenshots goes to delete, never straight to a command", () => {
   for (const q of ["delete my screenshots", "delete all my screenshots", "clear the screenshots folder", "remove all of my screenshot images", "get rid of my screenshots"]) {
@@ -48,4 +48,17 @@ test("\"run it\" is about something said before, not an app called it", () => {
 test("telling him to stop", () => {
   for (const s of ["Stop.", "be quiet", "Thanks, Bond.", "thank you"]) assert.ok(saidStop(s), s);
   assert.ok(!saidStop("stop the music"));
+});
+
+test("closing an app asks it nicely; killing ends it", () => {
+  for (const q of ["Close it.", "close this app", "quit that"]) assert.deepEqual(understand(q), { kind: "do", actions: [{ do: "close_app", name: "it" }] }, q);
+  assert.deepEqual(understand("close notepad"), { kind: "do", actions: [{ do: "close_app", name: "notepad" }] });
+  assert.deepEqual(understand("kill chrome"), { kind: "do", actions: [{ do: "kill_process", name: "chrome" }] });
+  assert.equal(understand("close this tab"), null);
+});
+
+test("answering \"it has unsaved changes\"", () => {
+  for (const s of ["Don't save.", "Don't say.", "close it without saving", "discard them"]) assert.equal(unsavedAnswer(s), "discard", s);
+  for (const s of ["Save.", "save it", "keep the changes"]) assert.equal(unsavedAnswer(s), "save", s);
+  for (const s of ["Cancel", "no", "leave it open"]) assert.equal(unsavedAnswer(s), "cancel", s);
 });

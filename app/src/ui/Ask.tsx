@@ -68,7 +68,7 @@ export function AskBox(props: { boxRef: Ref<HTMLDivElement>; onAsk: (q: string) 
 export interface CardActions {
   onClose: () => void;
   onSettings: () => void;
-  onApprove: (id: string) => void;
+  onApprove: (id: string, alt?: boolean) => void;
   onDeny: (id: string) => void;
   /** The confirmation box wants the keyboard. */
   onWantFocus: () => void;
@@ -261,6 +261,11 @@ function ApproveBody(props: { approval: Approval; done: string[] } & CardActions
         <button type="button" className="btn-ghost" onClick={() => props.onDeny(a.id)}>
           Cancel
         </button>
+        {a.alt && !second && (
+          <button type="button" className="btn-primary" onClick={() => props.onApprove(a.id, true)}>
+            {a.alt}
+          </button>
+        )}
         <button type="submit" className={a.kind === "command" && !second ? "btn-primary" : "btn-danger"} disabled={!ok}>
           {second ? (a.kind === "delete" ? "Delete" : "Run it") : a.button}
         </button>

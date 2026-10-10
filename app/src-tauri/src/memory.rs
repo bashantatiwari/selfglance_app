@@ -33,6 +33,8 @@ struct Turn {
 
 static TURNS: Mutex<VecDeque<Turn>> = Mutex::new(VecDeque::new());
 static NOW: Mutex<Option<String>> = Mutex::new(None);
+/// The program in front of you: (process name, app name), for "close it".
+static LAST_APP: Mutex<Option<(String, String)>> = Mutex::new(None);
 static FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
 static FACTS: Mutex<Option<Vec<String>>> = Mutex::new(None);
 
@@ -68,8 +70,11 @@ pub fn turn(you: &str, bond: &str) {
     }
 }
 
-/// The app and window in front of you.
-pub fn set_activity(name: &str, title: &str) {
+/// The app and window in front of you; `process` is its program ("notepad").
+pub fn set_activity(process: &str, name: &str, title: &str) {
+    if !process.trim().is_empty() {
+        *LAST_APP.lock().unwrap() = Some((process.trim().to_lowercase(), name.trim().to_string()));
+    }
     let s = match (name.trim(), title.trim()) {
         ("", "") => return,
         (n, "") => n.to_string(),
@@ -100,6 +105,11 @@ fn save(facts: &[String]) {
         }
         let _ = std::fs::write(p, serde_json::to_string_pretty(&Stored { facts: facts.to_vec() }).unwrap_or_default());
     }
+}
+
+/// The program in front of you: (process name, app name).
+pub fn last_app() -> Option<(String, String)> {
+    LAST_APP.lock().unwrap().clone()
 }
 
 /// Keep a lasting fact. One about the same thing ("The user's name is …") replaces the older.

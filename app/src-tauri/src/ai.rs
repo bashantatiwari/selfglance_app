@@ -373,7 +373,8 @@ const ACTIONS_DOC: &str = r#"Actions (JSON objects, run in order, at most 8):
 {"do":"wait","ms":800}
 These three always wait for the user to approve (Bond shows exactly what will happen):
 {"do":"run_command","command":"...","why":"..."}   one SHELL command, for anything else the user wants done on the computer (files, settings, info, installs). why = one short sentence.
-{"do":"kill_process","name":"chrome"}         end a program by process name or PID
+{"do":"close_app","name":"notepad"}           close a program as its × does (it can ask to save); "it" = the app in front
+{"do":"kill_process","name":"chrome"}         force a program to end at once (only when asked to kill or force it)
 {"do":"delete","paths":["~/Downloads/old.zip"],"permanent":false}   delete files/folders; * ? allowed in the file name; Recycle Bin unless the user said permanently. Folder names above work as the start of a path: "screenshots/*" is every screenshot, "downloads/*.zip" the zips in Downloads
 To play something on YouTube use open_url with https://www.youtube.com/results?search_query=...
 Prefer a specific action over run_command. To delete files always use delete (never a command), so the user sees each file first.
@@ -381,6 +382,7 @@ Settings (dark mode, sleep, Wi-Fi, Bluetooth, brightness…), creating files or 
 A shortcut for the app in front (new tab, close tab, undo, save, refresh): hotkey, no screen needed. Use type_text only for text the user asked to type."#;
 
 const ROUTER_SYSTEM: &str = r#"You are the command router of Bond, a friendly desktop companion on the user's OS_NAME computer.
+The user built you: Bond is their own project (SelfGlance), and they are your creator. Asked who made you, say they did.
 Classify the user's message and reply with ONLY one JSON object, no prose, no code fences:
 {"intent":"...","text":"...","reply":"...","actions":[],"needs_screen":false,"remember":""}
 
@@ -395,7 +397,7 @@ intent is one of (if you return any actions, intent is "task"):
 reply is always a very short, friendly line Bond says (for log/idea: a confirmation; for task: what you're doing).
 The message may come with what you know about the user, what is in front of them, and the conversation so far. Use them: "it", "that", "again" and short follow-ups refer to the conversation ("close it" right after opening Notepad means Notepad; "yes, run it" after you proposed a command means that command, so repeat that action). Answer questions about the user from what you know; never say you don't know something the conversation or the facts say.
 remember: only when the user's new message itself tells you something lasting about them (their name, people, preferences, projects, where they work or study), one short sentence in the third person ("The user's name is Alex."). Never from the screen, folders, the conversation or what you already know; otherwise "".
-To close an app (one the user names, or the one just opened): kill_process with its name. hotkey "ctrl+w" only closes a browser or editor tab.
+To close an app (one the user names, or the one just opened): close_app with its name. hotkey "ctrl+w" only closes a tab, and only when the user says "tab".
 A spoken message may contain misheard words: read it by how it sounds ("open not bad" is "open Notepad", "they bond" is "hey Bond").
 Never invent actions that are not in the list. Almost anything on the computer can be done with run_command; use intent "chat" only when it really can't be done.
 
@@ -498,6 +500,7 @@ const ACTION_FIELDS: &[(&str, &[(&str, &str)])] = &[
     ("wait", &[("ms", "integer")]),
     ("run_command", &[("command", "string"), ("why", "string")]),
     ("kill_process", &[("name", "string")]),
+    ("close_app", &[("name", "string")]),
     ("delete", &[("paths", "string[]"), ("permanent", "?boolean")]),
 ];
 
@@ -536,6 +539,16 @@ fn actions_schema(with_click: bool) -> Value {
         all.extend(CLICK_FIELDS.iter().map(|(n, f)| action_schema(n, f)));
     }
     json!({"type": "array", "maxItems": 8, "items": {"anyOf": all}})
+}
+
+/// `remember`: ask for a fact only when the message tells one (writing it costs time).
+fn router_schema_for(remember: bool) -> Value {
+    let mut v = router_schema();
+    if !remember {
+        v["properties"].as_object_mut().unwrap().remove("remember");
+        v["required"] = json!(["intent", "text", "reply", "actions", "needs_screen"]);
+    }
+    v
 }
 
 fn router_schema() -> Value {
@@ -607,6 +620,17 @@ pub struct Route {
     exp_id: String,
 }
 
+/// Get the local brain ready for a request that's coming ("Hey Bond", the Ask box opening,
+/// after looking at the screen): loaded, with its instructions already read.
+#[tauri::command]
+pub async fn ai_prime(app: AppHandle, provider: Provider, gemini_model: Option<String>) -> Result<(), String> {
+    let _ = gemini_model;
+    if effective(provider) != Provider::Local {
+        return Ok(());
+    }
+    crate::brain::prime(&router_system(&app)).await
+}
+
 /// Classify a command Bond couldn't place on his own; run simple tasks straight away.
 #[tauri::command]
 pub async fn ai_route(app: AppHandle, provider: Provider, gemini_model: Option<String>, text: String, spoken: Option<bool>) -> Result<Route, String> {
@@ -619,7 +643,7 @@ pub async fn ai_route(app: AppHandle, provider: Provider, gemini_model: Option<S
     if !examples.is_empty() {
         system = format!("{system}\n\n{examples}");
     }
-    let schema = router_schema();
+    let schema = router_schema_for(crate::memory::about_yourself(text));
     let reply = complete(provider, gemini_model, &system, &prompt, None, "low", Some(&schema)).await?;
     let v = json_in(&reply)?;
     let s = |k: &str| v[k].as_str().unwrap_or("").trim().to_string();
@@ -818,7 +842,7 @@ mod eval {
         ("skip this song", "task", "media"),
         ("find my resume pdf", "task", "find_files"),
         ("show me my ip address", "task", "run_command"),
-        ("close all the notepad windows", "task", "kill_process"),
+        ("close all the notepad windows", "task", "close_app"),
         ("delete the zip files in my downloads", "task", "delete"),
         ("delete all the screenshots in my screenshots folder", "task", "delete"),
         ("new tab", "task", "hotkey"),
@@ -861,7 +885,7 @@ mod eval {
         let _ = has;
         let scenarios: Vec<(&str, Vec<(&str, &str)>, Option<&str>, &str, bool, Check)> = vec![
             ("close it", vec![("Open Notepad", r#"[actions: open_app {"name":"notepad"}] [done: Opened Notepad]"#)], None, "Close it.", false,
-                |v| v["actions"].as_array().is_some_and(|a| a.iter().any(|x| x["do"] == "kill_process" && x["name"].as_str().unwrap_or("").to_lowercase().contains("notepad")))),
+                |v| v["actions"].as_array().is_some_and(|a| a.iter().any(|x| (x["do"] == "close_app" || x["do"] == "kill_process") && x["name"].as_str().unwrap_or("").to_lowercase().contains("notepad")))),
             ("my name", vec![("Call me Alex.", "Sure, Alex! How can I help you today?")], None, "Say my name again.", true,
                 |v| v["reply"].as_str().unwrap_or("").contains("Alex")),
             ("run it", vec![("What's my laptop specification?", r#"Checking your laptop specs. [actions: run_command {"command":"Get-ComputerInfo | Select-Object CsModel, CsProcessors, OsTotalVisibleMemorySize","why":"Shows the laptop's model, processor and memory."}] [waiting for the user's yes: Run this command?]"#)], None, "Yes, run it.", true,
@@ -872,11 +896,15 @@ mod eval {
                 |v| v["actions"].as_array().is_some_and(|a| a.iter().any(|x| x["do"] == "open_app" && x["name"].as_str().unwrap_or("").to_lowercase().contains("notepad")))),
             ("remember nothing", vec![("Read my screen.", "(looked at the screen) The FLA platform, one submission named Hatch.")], None, "Thanks.", true,
                 |v| v["remember"].as_str().unwrap_or("").is_empty() || !crate::memory::about_yourself("Thanks.")),
+            ("my creation", vec![("Call me Alex.", "Sure, Alex!")], None, "Are you my creation?", true,
+                |v| { let r = v["reply"].as_str().unwrap_or("").to_lowercase(); r.starts_with("yes") || ["you made", "you built", "you created", "your creation", "created by you", "built by you", "made by you"].iter().any(|w| r.contains(w)) }),
             ("what am I doing", vec![], Some("Visual Studio Code: “wake.rs - SelfGlance - Visual Studio Code”"), "What am I working on?", true,
                 |v| { let r = v["reply"].as_str().unwrap_or("").to_lowercase(); r.contains("wake.rs") || r.contains("selfglance") || r.contains("visual studio") || v["needs_screen"] == true }),
         ];
         tauri::async_runtime::block_on(async {
+            let t = std::time::Instant::now();
             crate::brain::brain_warm().await.expect("brain starts");
+            println!("brain loaded in {:.1}s", t.elapsed().as_secs_f64());
             let mut right = 0;
             for (name, before, now, said, spoken, ok) in &scenarios {
                 crate::memory::memory_forget(None);
@@ -890,11 +918,13 @@ mod eval {
                 let _ = crate::memory::about_yourself;
                 crate::memory::set_activity_for_tests(*now);
                 let prompt = with_context(said, *spoken);
+                let t = std::time::Instant::now();
                 let reply = complete(Provider::Local, None, &sys, &prompt, None, "low", Some(&schema)).await;
+                let secs = t.elapsed().as_secs_f64();
                 let v = reply.as_deref().map_err(|e| e.clone()).and_then(json_in).unwrap_or(Value::Null);
                 let good = ok(&v);
                 right += good as i32;
-                println!("{} {name:<17} “{said}” → {}", if good { "✓" } else { "✗" }, serde_json::to_string(&v).unwrap_or_default().chars().take(260).collect::<String>());
+                println!("{} {secs:.1}s {name:<17} “{said}” → {}", if good { "✓" } else { "✗" }, serde_json::to_string(&v).unwrap_or_default().chars().take(260).collect::<String>());
             }
             println!("\n{right} / {} right", scenarios.len());
         });

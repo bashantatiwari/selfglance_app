@@ -207,6 +207,137 @@ pub fn find_processes(name: &str) -> Result<Found, String> {
     Ok(Found { pids, summary: format!("{shown} — {many}, {:.1} GB memory. Unsaved work in it will be lost.", mem as f64 / GB) })
 }
 
+/// The program a request means: "it" / "this app" is the one in front of you; a name is a
+/// process ("notepad") or the app's own name ("Visual Studio Code" → code).
+pub fn which_app(name: &str) -> Result<(Vec<u32>, String), String> {
+    let n = name.trim().trim_end_matches(['.', '!']).to_lowercase();
+    let n = n.trim_start_matches("the ").trim_end_matches(" app").trim_end_matches(" window").trim().to_string();
+    let last = crate::memory::last_app();
+    let generic = matches!(n.as_str(), "" | "it" | "this" | "that" | "app" | "window" | "this app" | "that app" | "this window" | "that one" | "this one");
+    let process = if generic {
+        last.as_ref().map(|(p, _)| p.clone()).ok_or("Which app should I close?")?
+    } else {
+        match find_processes(&n) {
+            Ok(_) => n.clone(),
+            Err(e) => match &last {
+                Some((p, shown)) if shown.to_lowercase().contains(&n) || n.contains(&shown.to_lowercase()) => p.clone(),
+                _ => return Err(e),
+            },
+        }
+    };
+    if process == "selfglance" {
+        return Err("That's me. Right-click me and choose Quit to close me.".into());
+    }
+    let found = find_processes(&process)?;
+    let shown = match &last {
+        Some((p, shown)) if *p == process && !shown.is_empty() => shown.clone(),
+        _ => {
+            let mut c = process.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        }
+    };
+    Ok((found.pids, shown))
+}
+
+/// The visible windows of these processes (with their owned dialogs when `owned`).
+#[cfg(target_os = "windows")]
+fn windows_of(pids: &[u32], owned: bool) -> Vec<usize> {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindow, GetWindowThreadProcessId, IsWindowVisible, GW_OWNER};
+    struct Ctx<'a> {
+        pids: &'a [u32],
+        owned: bool,
+        out: Vec<usize>,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, lp: LPARAM) -> i32 {
+        let ctx = &mut *(lp as *mut Ctx);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if !ctx.pids.contains(&pid) || IsWindowVisible(hwnd) == 0 || (!ctx.owned && !GetWindow(hwnd, GW_OWNER).is_null()) {
+            return 1;
+        }
+        // Never the desktop or the taskbar (closing those asks to shut down).
+        let mut class = [0u16; 64];
+        let len = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32).max(0) as usize;
+        let class = String::from_utf16_lossy(&class[..len]);
+        if !matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
+            ctx.out.push(hwnd as usize);
+        }
+        1
+    }
+    let mut ctx = Ctx { pids, owned, out: Vec::new() };
+    unsafe {
+        EnumWindows(Some(each), &mut ctx as *mut Ctx as LPARAM);
+    }
+    ctx.out
+}
+
+/// Ask a program's windows to close, as their × button does.
+#[cfg(target_os = "windows")]
+pub fn close_windows(pids: &[u32]) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+    for hwnd in windows_of(pids, false) {
+        unsafe {
+            PostMessageW(hwnd as _, WM_CLOSE, 0, 0);
+        }
+    }
+}
+
+/// Whether the program closed (or put all its windows away) within `within`.
+#[cfg(target_os = "windows")]
+pub fn wait_closed(pids: &[u32], within: Duration) -> bool {
+    let start = std::time::Instant::now();
+    loop {
+        if windows_of(pids, true).is_empty() {
+            return true;
+        }
+        if start.elapsed() > within {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// Put the program's front window (its question, if it is asking) in front of you.
+#[cfg(target_os = "windows")]
+pub fn bring_to_front(pids: &[u32]) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow};
+    let front = |pids: &[u32]| unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(GetForegroundWindow(), &mut pid);
+        pids.contains(&pid)
+    };
+    if front(pids) {
+        return true;
+    }
+    // A dialog it owns first (that is where Save is), then its main window.
+    let mut wins = windows_of(pids, true);
+    wins.sort_by_key(|w| windows_of(pids, false).contains(w));
+    for w in wins {
+        unsafe {
+            SetForegroundWindow(w as _);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        if front(pids) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn close_windows(_pids: &[u32]) {}
+
+#[cfg(not(target_os = "windows"))]
+pub fn wait_closed(_pids: &[u32], _within: Duration) -> bool {
+    false
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn bring_to_front(_pids: &[u32]) -> bool {
+    false
+}
+
 pub fn kill(pids: &[u32]) -> Result<usize, String> {
     let mut sys = System::new();
     sys.refresh_processes(ProcessesToUpdate::All, true);
@@ -259,6 +390,29 @@ pub fn spawn_battery_watch(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    /// A real Notepad opened and closed politely: cargo test --lib system::tests::close_live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    #[cfg(target_os = "windows")]
+    fn close_live() {
+        let before = find_processes("notepad").map(|f| f.pids).unwrap_or_default();
+        let dir = std::env::temp_dir().join("bond-close-test.txt");
+        std::fs::write(&dir, "test").unwrap();
+        std::process::Command::new("notepad").arg(&dir).spawn().unwrap();
+        std::thread::sleep(Duration::from_secs(3));
+        let pids: Vec<u32> = find_processes("notepad").unwrap().pids.into_iter().filter(|p| !before.contains(p)).collect();
+        println!("new notepad pids {pids:?}, windows {:?}", windows_of(&pids, true).len());
+        if pids.is_empty() {
+            println!("Notepad reused a running process; skipping");
+            return;
+        }
+        close_windows(&pids);
+        let closed = wait_closed(&pids, Duration::from_millis(2500));
+        println!("closed politely: {closed}");
+        assert!(closed);
+    }
+
     /// Reads the real machine; run with `cargo test -- --ignored --nocapture` to see it.
     #[test]
     #[ignore]

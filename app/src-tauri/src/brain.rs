@@ -232,6 +232,13 @@ pub async fn brain_warm() -> Result<(), String> {
     port().await.map(|_| ())
 }
 
+/// Start the engine and have it read `system` now, so the next request with these
+/// instructions only reads its new words. Reading Bond's 1,900-token instructions takes
+/// ~15 s on this laptop's GPU; a request that finds them already read starts in ~1 s.
+pub async fn prime(system: &str) -> Result<(), String> {
+    chat(system, "", None, None, 1).await.map(|_| ())
+}
+
 /// The engine's process id while it's running.
 pub fn running_pid() -> Option<u32> {
     SERVER.lock().unwrap().as_ref().map(|s| s.child.id())

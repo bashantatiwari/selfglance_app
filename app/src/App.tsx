@@ -44,7 +44,7 @@ import { AnswerCard, AskBox, type AskState } from "./ui/Ask";
 import {
   aiText,
   approveAction,
-  brainWarm,
+  aiPrime,
   clipboardText,
   denyAction,
   giveFeedback,
@@ -56,6 +56,7 @@ import {
   setLearning,
   snoozeReminder,
   speak,
+  isSpeaking,
   stopSpeaking,
   takeFocus,
   voiceListen,
@@ -76,7 +77,7 @@ import {
   type Outcome,
   type Reminder,
 } from "./ai";
-import { saidStop, spokenAnswer, understand, type ScreenMode } from "./assistant/intent";
+import { saidStop, spokenAnswer, understand, unsavedAnswer, type ScreenMode } from "./assistant/intent";
 import { addIdea, dayKey, journalGet, logToJournal } from "./assistant/notes";
 import {
   blockedBy,
@@ -487,6 +488,7 @@ export default function App() {
         if (state === "listening") {
           // He may be out of the way (coding, a meeting): you called him, so he comes in.
           void bringIn();
+          void aiPrime(); // his brain gets ready while you speak
           stopSpeaking();
           clearTimeout(askTimer.current);
           // A question he asked you stays up: what you're saying may be the answer.
@@ -508,7 +510,12 @@ export default function App() {
         heardRef.current = true;
         // Answering his question out loud: "yes" / "no", and "delete" for the last check.
         const cur = askRef.current;
-        if (cur?.step === "approve") {
+        if (cur?.step === "approve" && cur.approval.kind === "unsaved") {
+          const reply = unsavedAnswer(said);
+          if (reply === "discard") return void approve(cur.approval.id);
+          if (reply === "save") return void approve(cur.approval.id, true);
+          if (reply === "cancel") return void deny(cur.approval.id);
+        } else if (cur?.step === "approve") {
           const reply = spokenAnswer(said, cur.approval.step > 1);
           if (reply === "no") return void deny(cur.approval.id);
           if (reply === "yes") return void approve(cur.approval.id);
@@ -530,6 +537,7 @@ export default function App() {
       // "Hey Bond": a soft chime at once, like Siri, so you know he heard you.
       onTauriEvent<null>("wake", () => {
         wokeRef.current = true;
+        void aiPrime();
         chime();
       }),
       // "Hey Bond" and then nothing: he asks, and listens for the answer.
@@ -661,8 +669,8 @@ export default function App() {
     wake(60_000);
     setAsk({ step: "input" });
     void voiceStatus().then((v) => setCanListen(v.installed));
-    // Load his brain while you type, so the answer doesn't wait for it.
-    if (settingsRef.current.aiProvider === "local") void brainWarm();
+    // Load his brain (and have it read its instructions) while you type, so the answer doesn't wait.
+    void aiPrime();
   }
 
   const closeAsk = async () => {
@@ -692,7 +700,13 @@ export default function App() {
     const ms = Math.max(4, settingsRef.current.answerSeconds) * 1000;
     manualUntil.current = Date.now() + ms;
     clearTimeout(askTimer.current);
-    askTimer.current = window.setTimeout(() => void closeAsk(), ms);
+    askTimer.current = window.setTimeout(closeWhenQuiet, ms);
+  };
+
+  /** Close the card once he has finished speaking (closing it would cut him off). */
+  const closeWhenQuiet = () => {
+    if (isSpeaking()) askTimer.current = window.setTimeout(closeWhenQuiet, 500);
+    else void closeAsk();
   };
 
   /** An answer worth reading: shown in the card (and spoken if that's on). */
@@ -705,7 +719,7 @@ export default function App() {
       const ms = Math.max(60, settingsRef.current.answerSeconds) * 1000;
       manualUntil.current = Date.now() + ms;
       clearTimeout(askTimer.current);
-      askTimer.current = window.setTimeout(() => void closeAsk(), ms);
+      askTimer.current = window.setTimeout(closeWhenQuiet, ms);
     } else autoClose();
   };
 
@@ -724,7 +738,7 @@ export default function App() {
     confirm(o.done.join(" · ") || reply || "Done ✓");
   };
 
-  const approve = async (id: string) => {
+  const approve = async (id: string, alt = false) => {
     const cur = askRef.current;
     if (cur?.step !== "approve") return;
     const question = cur.question;
@@ -732,7 +746,7 @@ export default function App() {
     const last = cur.approval.step >= cur.approval.steps;
     setAsk({ step: "thinking", question, looking: false, note: last ? (cur.approval.kind === "command" ? "running…" : "on it…") : undefined });
     try {
-      showOutcome(question, await approveAction(id));
+      showOutcome(question, await approveAction(id, alt));
     } catch (e) {
       setAsk({ step: "error", question, error: String(e) });
       stageRef.current?.play("annoyed", true);
@@ -745,7 +759,7 @@ export default function App() {
     void denyAction(id);
     void giveFeedback(expRef.current, "declined");
     if (cur?.step === "approve" && cur.approval.step > 1) await releaseFocus();
-    confirm("Okay, I won't.");
+    confirm(cur?.step === "approve" && cur.approval.kind === "unsaved" ? "Okay, I left it open." : "Okay, I won't.");
   };
 
   /** Say it out loud; if you asked by voice, keep listening a few seconds for a follow-up. */
@@ -770,6 +784,7 @@ export default function App() {
   const lookAtScreen = async (question: string, mode: ScreenMode) => {
     setAsk({ step: "thinking", question, looking: true });
     const res = await screenAsk(question, mode, heardRef.current);
+    void aiPrime(); // looking replaced what his brain had read; read it again for the next request
     expRef.current = res.exp_id;
     const o = res.outcome ?? { done: [], info: [], pending: null };
     if (o.pending || (mode === "task" && !res.answer)) return showOutcome(question, o, res.answer);
@@ -1180,7 +1195,7 @@ export default function App() {
             void closeAsk();
             if (inTauri) void invoke("open_dashboard");
           }}
-          onApprove={(id) => void approve(id)}
+          onApprove={(id, alt) => void approve(id, alt)}
           onDeny={(id) => void deny(id)}
           onWantFocus={() => void takeFocus()}
           onTake={() => void takeSuggestion()}

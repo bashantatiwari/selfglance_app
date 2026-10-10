@@ -24,7 +24,10 @@
 //
 // Need your approval first (agent_approve / agent_deny):
 //   run_command     any command in PowerShell (Windows) or sh: you see the exact command
-//   kill_process    end a program: you see what it is and how many processes
+//   kill_process    end a program at once: you see what it is and how many processes
+//
+// close_app closes a program the way its × does. If it then asks about unsaved work, Bond
+// asks you instead: Don't save / Save / Cancel (by voice or in his card).
 //   delete          files/folders: you see every path and its size (and a preview of the
 //                   pictures), and confirm TWICE.
 //                   They go to the Recycle Bin unless "permanent" was asked for.
@@ -95,6 +98,8 @@ pub enum Action {
         why: String,
     },
     KillProcess { name: String },
+    /// Close a program politely (its windows get WM_CLOSE); "it" = the app in front of you.
+    CloseApp { #[serde(default)] name: String },
     Delete {
         paths: Vec<String>,
         #[serde(default)]
@@ -130,7 +135,7 @@ pub struct Outcome {
 #[derive(Serialize, Clone)]
 pub struct Approval {
     pub id: String,
-    /// "command" | "delete" | "kill"
+    /// "command" | "delete" | "kill" | "unsaved"
     pub kind: &'static str,
     /// Which yes this is (1, then 2 for deletions).
     pub step: u8,
@@ -141,6 +146,8 @@ pub struct Approval {
     /// Why Bond wants to do it, or what to know before saying yes.
     pub why: String,
     pub button: String,
+    /// A second way to say yes ("Save" beside "Don't save"), if there is one.
+    pub alt: Option<String>,
     /// Small pictures of the images about to be deleted, so you see what goes.
     pub previews: Vec<Preview>,
 }
@@ -157,11 +164,16 @@ enum Approved {
     Command { command: String, home: PathBuf },
     Delete { paths: Vec<PathBuf>, permanent: bool },
     Kill { pids: Vec<u32>, name: String },
+    /// A program asking about unsaved work: discard it (end the program)…
+    Discard { pids: Vec<u32>, name: String },
+    /// …or press its Save.
+    Save { pids: Vec<u32>, name: String },
 }
 
 struct Pending {
     approval: Approval,
     task: Approved,
+    alt: Option<Approved>,
     rest: Vec<Action>,
     shot: Option<ShotGeometry>,
     created: Instant,
@@ -198,7 +210,7 @@ pub async fn agent_run(app: AppHandle, actions: Vec<Action>) -> Result<Outcome, 
 /// The user said yes. Deletions need a second yes (a new id each time); after the last one
 /// the action runs and the rest of the plan continues.
 #[tauri::command]
-pub async fn agent_approve(app: AppHandle, id: String) -> Result<Outcome, String> {
+pub async fn agent_approve(app: AppHandle, id: String, alt: Option<bool>) -> Result<Outcome, String> {
     let mut p = unpark(&id).ok_or("That request has expired. Ask me again.")?;
     if p.approval.step < p.approval.steps {
         p.approval.step += 1;
@@ -208,7 +220,10 @@ pub async fn agent_approve(app: AppHandle, id: String) -> Result<Outcome, String
         park(p);
         return Ok(out);
     }
-    let task = p.task;
+    let task = match (alt, p.alt) {
+        (Some(true), Some(t)) => t,
+        _ => p.task,
+    };
     let effect = tauri::async_runtime::spawn_blocking(move || execute(task)).await.map_err(|e| e.to_string())??;
     let mut out = Outcome::default();
     effect.add_to(&mut out);
@@ -233,7 +248,10 @@ async fn proceed(app: &AppHandle, mut out: Outcome, actions: Vec<Action>, shot: 
         let a = app.clone();
         let step = tauri::async_runtime::spawn_blocking(move || match gate(&a, &action) {
             Ok(Some(g)) => Ok(Err(g)),
-            Ok(None) => perform(&a, action, shot).map(Ok),
+            Ok(None) => match action {
+                Action::CloseApp { name } => close_app(&name),
+                action => perform(&a, action, shot).map(Ok),
+            },
             Err(e) => Err(e),
         })
         .await
@@ -245,9 +263,10 @@ async fn proceed(app: &AppHandle, mut out: Outcome, actions: Vec<Action>, shot: 
                 tokio_sleep(settle).await;
             }
             Ok(Err(g)) => {
-                let approval = Approval { id: new_id(), kind: g.kind, step: 1, steps: g.steps, title: g.title, items: g.items, why: g.why, button: g.button, previews: g.previews };
+                let (alt, alt_task) = g.alt.map_or((None, None), |(label, t)| (Some(label), Some(t)));
+                let approval = Approval { id: new_id(), kind: g.kind, step: 1, steps: g.steps, title: g.title, items: g.items, why: g.why, button: g.button, alt, previews: g.previews };
                 out.pending = Some(approval.clone());
-                park(Pending { approval, task: g.task, rest: queue.into(), shot, created: Instant::now() });
+                park(Pending { approval, task: g.task, alt: alt_task, rest: queue.into(), shot, created: Instant::now() });
                 return Ok(out);
             }
             Err(err) if out.done.is_empty() && out.info.is_empty() => return Err(err),
@@ -311,6 +330,8 @@ struct Gate {
     button: String,
     previews: Vec<Preview>,
     task: Approved,
+    /// A second yes and what it does.
+    alt: Option<(String, Approved)>,
 }
 
 /// Actions that must wait for a yes, resolved to exactly what will happen.
@@ -330,6 +351,7 @@ fn gate(app: &AppHandle, action: &Action) -> Result<Option<Gate>, String> {
                 why: why.trim().to_string(),
                 button: "Run it".into(),
                 previews: Vec::new(),
+                alt: None,
                 task: Approved::Command { command, home: app.path().home_dir().map_err(|e| e.to_string())? },
             }
         }
@@ -343,6 +365,7 @@ fn gate(app: &AppHandle, action: &Action) -> Result<Option<Gate>, String> {
                 why: String::new(),
                 button: "End it".into(),
                 previews: Vec::new(),
+                alt: None,
                 task: Approved::Kill { pids: found.pids, name: name.trim().to_string() },
             }
         }
@@ -365,6 +388,7 @@ fn gate(app: &AppHandle, action: &Action) -> Result<Option<Gate>, String> {
                 why: if *permanent { "This can't be undone.".into() } else { "They go to the Recycle Bin, so you can still restore them.".into() },
                 button: "Yes, delete".into(),
                 previews: previews(&resolved),
+                alt: None,
                 task: Approved::Delete { paths: resolved, permanent: *permanent },
             }
         }
@@ -381,6 +405,27 @@ fn deletes_things(command: &str) -> bool {
         .any(|w| WORDS.contains(&w))
 }
 
+/// Close a program the way its × does. If it stays, asking about unsaved work, the question
+/// comes to you: Don't save (end it) / Save (press its Save) / Cancel (leave it as it is).
+fn close_app(name: &str) -> Result<Result<Effect, Gate>, String> {
+    let (pids, shown) = crate::system::which_app(name)?;
+    crate::system::close_windows(&pids);
+    if crate::system::wait_closed(&pids, Duration::from_millis(2500)) {
+        return Ok(Ok(Effect::line(format!("Closed {shown}"), 300)));
+    }
+    Ok(Err(Gate {
+        kind: "unsaved",
+        steps: 1,
+        title: format!("{shown} has unsaved changes. Close it without saving?"),
+        items: vec![format!("{shown} is asking: Save, Don't save, or Cancel.")],
+        why: "Say “don't save”, “save”, or “cancel”.".into(),
+        button: "Don't save".into(),
+        previews: Vec::new(),
+        task: Approved::Discard { pids: pids.clone(), name: shown.clone() },
+        alt: Some(("Save".into(), Approved::Save { pids, name: shown })),
+    }))
+}
+
 /// Run an approved action.
 fn execute(task: Approved) -> Result<Effect, String> {
     match task {
@@ -391,6 +436,22 @@ fn execute(task: Approved) -> Result<Effect, String> {
         Approved::Kill { pids, name } => {
             crate::system::kill(&pids)?;
             Ok(Effect::line(format!("Closed {name}"), 300))
+        }
+        Approved::Discard { pids, name } => {
+            crate::system::kill(&pids)?;
+            Ok(Effect::line(format!("Closed {name} without saving"), 300))
+        }
+        Approved::Save { pids, name } => {
+            if !crate::system::bring_to_front(&pids) {
+                return Err(format!("I couldn't reach {name}'s window. Press Save there yourself."));
+            }
+            let mut e = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+            e.key(Key::Return, Direction::Click).map_err(|e| e.to_string())?; // Save is the default button
+            if crate::system::wait_closed(&pids, Duration::from_millis(2500)) {
+                Ok(Effect::line(format!("Saved and closed {name}"), 0))
+            } else {
+                Ok(Effect::line(format!("Pressed Save in {name}. If it asks where, pick a place."), 0))
+            }
         }
         Approved::Delete { paths, permanent } => {
             let n = paths.len();
@@ -869,6 +930,7 @@ fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Resul
         Action::Wait { ms } => Ok(Effect::line("", ms.min(5000))),
         // Never reached: gate() stops these for approval first.
         Action::RunCommand { .. } | Action::KillProcess { .. } | Action::Delete { .. } => Err("That needs your approval first.".into()),
+        Action::CloseApp { name } => close_app(&name).and_then(|r| r.map_err(|_| "It's asking about unsaved work.".to_string())),
     }
 }
 

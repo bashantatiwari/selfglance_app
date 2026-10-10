@@ -6,14 +6,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { inTauri } from "./platform";
 import { loadSettings } from "./settings";
 import type { Action, ScreenMode } from "./assistant/intent";
-import { sentences } from "./assistant/speech";
+import { sentences, speakable } from "./assistant/speech";
 
 export type Provider = "local" | "gemini" | "claude";
 
 /** Something powerful Bond wants to do, shown in full before anything happens. */
 export interface Approval {
   id: string;
-  kind: "command" | "delete" | "kill";
+  kind: "command" | "delete" | "kill" | "unsaved";
   /** Which yes this is: deletions (and commands that delete) need a second one. */
   step: number;
   steps: number;
@@ -21,6 +21,8 @@ export interface Approval {
   items: string[];
   why: string;
   button: string;
+  /** A second way to say yes ("Save" beside "Don't save"), if there is one. */
+  alt: string | null;
   /** Thumbnails of the pictures about to be deleted (base64 JPEG). */
   previews: { name: string; jpeg: string }[];
 }
@@ -70,6 +72,8 @@ export const aiText = (system: string, prompt: string) => invoke<string>("ai_tex
 
 /** Let the AI classify a command Bond couldn't place himself (text only, no screenshot). */
 /** `spoken`: it came from the microphone, so words may be misheard. */
+/** Get his brain ready for a request that's coming (loaded, instructions already read). */
+export const aiPrime = () => (inTauri ? invoke<void>("ai_prime", opts()).catch(() => {}) : Promise.resolve());
 export const routeCommand = (text: string, spoken = false) => invoke<Route>("ai_route", { ...opts(), text, spoken });
 
 /** Look at the screen now: explain it, help when stuck, or do a task on it. */
@@ -83,7 +87,7 @@ export const memoryForget = (fact: string | null) => invoke<void>("memory_forget
 export const runActions = (actions: Action[]) => invoke<Outcome>("agent_run", { actions });
 
 /** Yes to a pending approval: the next step (a second confirmation) or the result. */
-export const approveAction = (id: string) => invoke<Outcome>("agent_approve", { id });
+export const approveAction = (id: string, alt = false) => invoke<Outcome>("agent_approve", { id, alt });
 export const denyAction = (id: string) => (inTauri ? invoke<void>("agent_deny", { id }).catch(() => {}) : Promise.resolve());
 
 /** Let the overlay take the keyboard (typing a confirmation). */
@@ -178,10 +182,15 @@ export const releaseFocus = () => (inTauri ? invoke<void>("release_focus").catch
 
 let current: HTMLAudioElement | null = null;
 let speakToken = 0;
+let speaking = false;
+
+/** Whether Bond is still saying something (a card waits for him to finish before closing). */
+export const isSpeaking = () => speaking;
 
 /** Stop whatever Bond is saying. */
 export function stopSpeaking() {
   speakToken++;
+  speaking = false;
   current?.pause();
   current = null;
   try {
@@ -256,7 +265,7 @@ function play(b64: string, token: number): Promise<void> {
   });
 }
 
-/** Bond's own voice: a sentence at a time, the next one prepared while this one plays. */
+/** Bond's own voice: piece by piece (speech.ts), the next one prepared while this one plays. */
 async function bondVoice(text: string, token: number) {
   const { voiceId, voiceSpeed } = loadSettings();
   const parts = sentences(text);
@@ -276,6 +285,17 @@ async function bondVoice(text: string, token: number) {
 export async function speak(text: string) {
   stopSpeaking();
   const token = speakToken;
+  text = speakable(text);
+  if (!text) return;
+  speaking = true;
+  try {
+    await speakWith(text, token);
+  } finally {
+    if (token === speakToken) speaking = false;
+  }
+}
+
+async function speakWith(text: string, token: number) {
   const choice = loadSettings().voice;
   if (inTauri && choice === "bond") {
     try {
@@ -289,30 +309,33 @@ export async function speak(text: string) {
     try {
       const b64 = await invoke<string>("ai_speak", { text });
       if (token !== speakToken) return; // closed or replaced meanwhile
-      current = new Audio(`data:audio/wav;base64,${b64}`);
-      await current.play();
+      await play(b64, token);
       return;
     } catch {
       if (token !== speakToken) return;
     }
   }
-  systemVoice(text);
+  await systemVoice(text);
 }
 
-function systemVoice(text: string) {
-  try {
-    const voices = window.speechSynthesis.getVoices();
-    // Prefer neural "Natural"/"Online" voices, then any English voice.
-    const pick =
-      voices.find((v) => /natural|online/i.test(v.name) && v.lang.startsWith("en")) ??
-      voices.find((v) => /aria|jenny|guy|zira|samantha|daniel/i.test(v.name)) ??
-      voices.find((v) => v.lang.startsWith("en"));
-    const u = new SpeechSynthesisUtterance(text);
-    if (pick) u.voice = pick;
-    u.rate = 1;
-    u.pitch = 1;
-    window.speechSynthesis.speak(u);
-  } catch {
-    /* no speech engine */
-  }
+function systemVoice(text: string): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      const voices = window.speechSynthesis.getVoices();
+      // Prefer neural "Natural"/"Online" voices, then any English voice.
+      const pick =
+        voices.find((v) => /natural|online/i.test(v.name) && v.lang.startsWith("en")) ??
+        voices.find((v) => /aria|jenny|guy|zira|samantha|daniel/i.test(v.name)) ??
+        voices.find((v) => v.lang.startsWith("en"));
+      const u = new SpeechSynthesisUtterance(text);
+      if (pick) u.voice = pick;
+      u.rate = 1;
+      u.pitch = 1;
+      u.onend = () => resolve();
+      u.onerror = () => resolve();
+      window.speechSynthesis.speak(u);
+    } catch {
+      resolve(); // no speech engine
+    }
+  });
 }

@@ -196,7 +196,7 @@ fn spawn_activity_watch(app: AppHandle, win: &WebviewWindow) {
                 fullscreen,
             };
             if last.as_ref() != Some(&activity) {
-                crate::memory::set_activity(&activity.name, &activity.title);
+                crate::memory::set_activity(&activity.app, &activity.name, &activity.title);
                 let _ = app.emit("activity", &activity);
                 last = Some(activity);
             }
@@ -385,6 +385,7 @@ pub fn run() {
             ai::ai_has_key,
             ai::ai_text,
             ai::ai_route,
+            ai::ai_prime,
             ai::ai_screen,
             agent::agent_run,
             agent::agent_approve,

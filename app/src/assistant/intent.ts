@@ -33,6 +33,7 @@ export type Action =
   | { do: "list_reminders" }
   | { do: "run_command"; command: string; why: string }
   | { do: "kill_process"; name: string }
+  | { do: "close_app"; name: string }
   | { do: "delete"; paths: string[]; permanent?: boolean };
 
 export type ScreenMode = "explain" | "help" | "task";
@@ -141,7 +142,12 @@ export function understand(input: string): Intent {
     return { kind: "do", actions: [{ do: "top_processes" }] };
   if (/^(how'?s|how is|check|show( me)?|what'?s|what is)( my| the)? (battery|laptop|pc|computer|system)( status| health| doing| life| level| percentage)?\??$|^(battery|system status|status)\??$|^how much (battery|ram|memory|disk space|storage|space)( do i have| is)?( left| free| used)?\??$|^(how much )?(free )?(disk|storage) space( left| do i have)?\??$/i.test(t))
     return { kind: "do", actions: [{ do: "system_status" }] };
-  if ((m = t.match(/^(?:kill|force[- ]?quit|end task(?: for)?|end|close|quit)\s+(?:the\s+)?(?:app\s+|program\s+|process\s+)?(.+?)(?:\s+(?:app|program|process|completely))?$/i)) && !NOT_A_PROGRAM.test(m[1]) && m[1].split(/\s+/).length <= 3)
+  // Closing asks the app nicely (it may ask about unsaved work); killing ends it at once.
+  if (/^(?:please\s+)?(?:close|quit|exit)\s+(?:it|this|that|this app|that app|the app|this one|that one)(?:\s+please)?[.!]?$/i.test(t))
+    return { kind: "do", actions: [{ do: "close_app", name: "it" }] };
+  if ((m = t.match(/^(?:close|quit|exit)\s+(?:the\s+)?(?:app\s+|program\s+)?(.+?)(?:\s+(?:app|program|window))?(?:\s+please)?[.!]?$/i)) && !NOT_A_PROGRAM.test(m[1]) && m[1].split(/\s+/).length <= 3)
+    return { kind: "do", actions: [{ do: "close_app", name: m[1] }] };
+  if ((m = t.match(/^(?:kill|force[- ]?quit|force[- ]?close|end task(?: for)?|end)\s+(?:the\s+)?(?:app\s+|program\s+|process\s+)?(.+?)(?:\s+(?:app|program|process|completely))?$/i)) && !NOT_A_PROGRAM.test(m[1]) && m[1].split(/\s+/).length <= 3)
     return { kind: "do", actions: [{ do: "kill_process", name: m[1] }] };
 
   // Clipboard.
@@ -165,6 +171,15 @@ const SAID_NO = /^(no|nope|cancel|don'?t|do not|stop|never ?mind|wait)\b/i;
 /** The last check before deleting needs the word itself, as typing it does. */
 const SAID_CONFIRM = /\b(delete( (it|them|those|these))?|confirm|yes,? (delete|do it))\b/i;
 const SAID_STOP = /^(stop|be quiet|quiet|shut up|enough|never ?mind|cancel|that'?s all|thanks?,? bond|thank you)[.!]?$/i;
+
+/** Answering "Notepad has unsaved changes": don't save / save / cancel. */
+export function unsavedAnswer(said: string): "discard" | "save" | "cancel" | null {
+  const t = said.trim().toLowerCase();
+  if (/\b(don'?t|do not|without|no) sav|^(don'?t|do not) say\b|\bdiscard|\bthrow (it|them) away|\bclose (it )?anyway|\blose (it|them)\b/.test(t)) return "discard";
+  if (/\bsave\b|\bkeep (it|them|the changes)\b/.test(t)) return "save";
+  if (/^(no|nope|cancel|stop|wait|leave it|never ?mind)\b|\b(cancel|leave it( open)?|keep it open)\b/.test(t)) return "cancel";
+  return null;
+}
 
 /** He asked "Do this?" and you answered out loud. `lastCheck`: the second check before deleting. */
 export function spokenAnswer(said: string, lastCheck: boolean): "yes" | "no" | null {
