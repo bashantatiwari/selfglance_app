@@ -344,7 +344,7 @@ export default function App() {
       const log = brainLog.current;
       log.push({ t: now, chat, build });
       while (log.length && now - log[0].t > BRAINSTORM_WINDOW_MS) log.shift();
-      if (!settingsRef.current.brainstormAlert || coach.inBreak || stage.busy) return;
+      if (!settingsRef.current.brainstormAlert || coach.inBreak || stage.busy || !stage.visible) return;
       if (now - lastBrainAlert.current < BRAINSTORM_COOLDOWN_MS) return;
       const tick = 2000;
       const chatMs = log.filter((e) => e.chat).length * tick;
@@ -362,8 +362,9 @@ export default function App() {
     // only acts when something should change.
     let behaving = false;
     let demoRunning = false;
+    let arrived = false; // his first drop-in after loading is done
     const behave = async () => {
-      if (behaving || stage.busy || Date.now() < playUntilRef.current || Date.now() < manualUntil.current) return;
+      if (!arrived || behaving || stage.busy || Date.now() < playUntilRef.current || Date.now() < manualUntil.current) return;
       const c = ctxRef.current;
       const hard = c === "meeting" || c === "game";
       behaving = true;
@@ -376,12 +377,15 @@ export default function App() {
           }
           if (stage.visible) {
             hiddenByCtx.current = true;
+            diag(`hiding: ${c}`);
             await stage.webClimb();
           }
           return;
         }
-        if (hiddenByCtx.current) {
+        // Nothing needs him out of the way: whatever hid him, he comes back.
+        if (hiddenByCtx.current || !stage.visible) {
           hiddenByCtx.current = false;
+          diag(`coming back (${c})`);
           await stage.webDrop(homeX());
           return;
         }
@@ -461,9 +465,11 @@ export default function App() {
       await stage.load(base, manifest);
       if (disposed) return;
       await stage.webDrop(homeX());
+      arrived = true;
       setBusy(false);
     })().catch((err) => {
       console.error("Failed to load character", err);
+      diag(`character failed to load: ${err}`);
       setBusy(false);
     });
 

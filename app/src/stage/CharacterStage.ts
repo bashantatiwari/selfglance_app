@@ -111,8 +111,10 @@ export class CharacterStage {
   get x() {
     return this.root.position.x;
   }
+  /** In the middle of something (walking, flying, hanging). Hidden isn't busy: he must be
+   * free to come back, or he'd stay away for good after a meeting or a game. */
   get busy() {
-    return this.mode !== "idle";
+    return this.mode !== "idle" && this.mode !== "hidden";
   }
   get isHanging() {
     return this.mode === "hanging";
