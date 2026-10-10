@@ -235,6 +235,9 @@ export const wakeEnrollRecord = () => invoke<EnrollStep>("wake_enroll_record");
 export const wakeEnrollSave = () => invoke<void>("wake_enroll_save");
 export const wakeEnrollCancel = () => (inTauri ? invoke<void>("wake_enroll_cancel").catch(() => {}) : Promise.resolve());
 export const wakeForgetVoice = () => invoke<void>("wake_forget_voice");
+/** "Was that you?" → yes: he learns that sample and does the request. */
+export const wakeConfirmYou = () => invoke<void>("wake_confirm_you");
+export const wakeNotYou = () => (inTauri ? invoke<void>("wake_not_you").catch(() => {}) : Promise.resolve());
 
 /** Play base64 WAV; resolves when it ends (or is stopped). */
 function play(b64: string, token: number): Promise<void> {

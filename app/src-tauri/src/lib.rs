@@ -428,6 +428,8 @@ pub fn run() {
             wake::wake_enroll_save,
             wake::wake_enroll_cancel,
             wake::wake_forget_voice,
+            wake::wake_confirm_you,
+            wake::wake_not_you,
             voice::voice_listen_stop
         ])
         .setup(move |app| {

@@ -17,6 +17,7 @@ export type AskState =
   | { step: "approve"; question: string; approval: Approval; done: string[]; info: string[] }
   | { step: "reminder"; reminder: Reminder }
   | { step: "suggest"; suggestion: Suggestion }
+  | { step: "unsure" }
   | { step: "error"; question: string; error: string };
 
 /** The word typed to confirm a deletion the second time. */
@@ -79,6 +80,9 @@ export interface CardActions {
   onTake: () => void;
   onNotNow: () => void;
   onNever: () => void;
+  /** "Was that you?": yes (he learns your voice and does it) or no. */
+  onItsMe: () => void;
+  onNotMe: () => void;
 }
 
 export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskState } & CardActions) {
@@ -112,6 +116,21 @@ export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskStat
                 Done
               </button>
             )}
+          </div>
+        </>
+      )}
+      {s.step === "unsure" && (
+        <>
+          <p className="q">Voice match</p>
+          <p className="a">Was that you? I wasn't sure it was your voice.</p>
+          <p className="why">If it was, I'll do what you asked and remember your voice better.</p>
+          <div className="choices">
+            <button className="btn-ghost" onClick={props.onNotMe}>
+              No
+            </button>
+            <button className="btn-primary" onClick={props.onItsMe}>
+              Yes, it was me
+            </button>
           </div>
         </>
       )}

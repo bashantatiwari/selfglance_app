@@ -60,7 +60,9 @@ import {
   takeFocus,
   voiceListen,
   voiceStatus,
+  wakeConfirmYou,
   wakeFollowUp,
+  wakeNotYou,
   wakeSet,
   diag,
   noticeAllowed,
@@ -514,6 +516,14 @@ export default function App() {
           return void closeAsk();
         }
         void doAsk(said, false);
+      }),
+      // Turned away by a little: rather than silence, he asks (and learns if it was you).
+      onTauriEvent<number>("wake-unsure", (score) => {
+        diag(`wake-unsure ${score.toFixed(2)}: asking`);
+        setPop(null);
+        clearTimeout(askTimer.current);
+        wake(60_000);
+        setAsk({ step: "unsure" });
       }),
       // "Hey Bond": a soft chime at once, like Siri, so you know he heard you.
       onTauriEvent<null>("wake", () => {
@@ -1183,6 +1193,19 @@ export default function App() {
                 }
               : null
           }
+          onItsMe={async () => {
+            setAsk({ step: "thinking", question: "", looking: false });
+            heardRef.current = true;
+            try {
+              await wakeConfirmYou();
+            } catch (e) {
+              setAsk({ step: "error", question: "", error: String(e) });
+            }
+          }}
+          onNotMe={() => {
+            void wakeNotYou();
+            void closeAsk();
+          }}
           onOpen={(page) => {
             if (inTauri) void invoke("open_dashboard", { page });
             closeAsk();

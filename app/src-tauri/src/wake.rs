@@ -48,6 +48,10 @@ const WAKE_AUDIO: usize = ASR_RATE as usize * 16 / 10;
 const MAX_REQUEST: Duration = Duration::from_secs(15);
 /// Voice match is looser on a follow-up (longer, different words than the enrolment).
 const FOLLOW_UP_SLACK: f32 = 0.85;
+/// Requests you confirmed were you ("Was that you?" → yes) kept in the voiceprint.
+const MAX_LEARNED: usize = 10;
+/// Turned away by less than this: he asks "Was that you?" instead of staying silent.
+const UNSURE_MARGIN: f32 = 0.12;
 /// Enrolment: at least this many lines read.
 pub const MIN_SAMPLES: usize = 3;
 /// What Settings asks you to read for enrolment (each starts with the wake word, so it's
@@ -204,11 +208,28 @@ impl Voiceprint {
     }
 
     /// Your least typical sample, less a margin: a request on another day, mood or mic
-    /// scores lower than the enrolment itself. With 0.2 a real 0.57 from the owner was
-    /// turned away (bar 0.58, 2026-10-10), so 0.25.
+    /// scores lower than the enrolment itself. The owner's real requests scored 0.50-0.77
+    /// against an enrolment whose least typical sample was 0.78 (2026-10-10), so 0.3. Other
+    /// voices scored at most 0.32 in tests.
     fn bar(samples: &[Vec<f32>], centroid: &[f32]) -> f32 {
         let worst = samples.iter().map(|s| cosine(s, centroid)).fold(f32::MAX, f32::min);
-        (worst - 0.25).clamp(0.45, 0.7)
+        (worst - 0.3).clamp(0.45, 0.7)
+    }
+
+    /// Learn from a request you confirmed was you: it joins the samples (the newest few
+    /// replace older learned ones; the enrolment lines stay).
+    fn learn(&mut self, e: Vec<f32>, enrolled: usize) {
+        self.samples.push(e);
+        while self.samples.len() > enrolled.max(5) + MAX_LEARNED {
+            self.samples.remove(enrolled.max(5));
+        }
+        let mut centroid = vec![0.0; self.centroid.len()];
+        for s in &self.samples {
+            centroid.iter_mut().zip(s).for_each(|(c, x)| *c += x);
+        }
+        normalize(&mut centroid);
+        self.threshold = Self::bar(&self.samples, &centroid);
+        self.centroid = centroid;
     }
 
     pub fn score(&self, e: &[f32]) -> f32 {
@@ -411,13 +432,54 @@ pub fn wake_follow_up(seconds: f64) {
 }
 
 /// Whether a voice is yours: always true with voice match off or before enrolment.
-fn is_you(audio: &[f32], slack: f32) -> Result<(bool, f32), String> {
+fn is_you(audio: &[f32], slack: f32) -> Result<(bool, f32, Option<(Vec<f32>, f32)>), String> {
     if !VOICE_MATCH.load(Ordering::SeqCst) {
-        return Ok((true, 1.0));
+        return Ok((true, 1.0, None));
     }
-    let Some(print) = PRINT.lock().unwrap().clone() else { return Ok((true, 1.0)) };
-    let score = print.score(&embed(audio)?);
-    Ok((score >= print.threshold * slack, score))
+    let Some(print) = PRINT.lock().unwrap().clone() else { return Ok((true, 1.0, None)) };
+    let e = embed(audio)?;
+    let score = print.score(&e);
+    let bar = print.threshold * slack;
+    Ok((score >= bar, score, Some((e, bar))))
+}
+
+/// A request turned away by a little: kept a minute in case you say it was you.
+pub(crate) struct Unsure {
+    voice: Vec<f32>,
+    audio: Vec<f32>,
+    spoke: bool,
+    at: Instant,
+}
+
+static UNSURE: Mutex<Option<Unsure>> = Mutex::new(None);
+
+/// "Was that you?" → yes: he learns that voice sample and does what you asked.
+#[tauri::command]
+pub async fn wake_confirm_you(app: AppHandle) -> Result<(), String> {
+    let u = UNSURE.lock().unwrap().take().filter(|u| u.at.elapsed() < Duration::from_secs(90)).ok_or("That was a while ago. Say it again?")?;
+    if let Some(print) = PRINT.lock().unwrap().as_mut() {
+        print.learn(u.voice, ENROL_LINES.len());
+        crate::diag::log(&format!("voiceprint: learned a confirmed request, {} samples, bar {:.2}", print.samples.len(), print.threshold));
+        if let (Some(file), Ok(json)) = (print_file(&app), serde_json::to_string(&*print)) {
+            let _ = std::fs::write(file, json);
+        }
+    }
+    if !u.spoke {
+        let _ = app.emit("wake-empty", ());
+        return Ok(());
+    }
+    let _ = app.emit("voice-state", "thinking");
+    let text = tauri::async_runtime::spawn_blocking(move || voice::transcribe(&u.audio, ASR_RATE).map(|t| strip_wake_word(&t))).await.map_err(|e| e.to_string())?;
+    let _ = app.emit("voice-state", "idle");
+    crate::diag::log(&format!("confirmed request heard {text:?}"));
+    let _ = app.emit("voice-heard", text?);
+    Ok(())
+}
+
+/// "Was that you?" → no.
+#[tauri::command]
+pub fn wake_not_you() {
+    UNSURE.lock().unwrap().take();
 }
 
 enum Mode {
@@ -429,14 +491,13 @@ enum Mode {
 }
 
 /// What the listener made of the latest audio.
-#[derive(Debug)]
-pub enum Event {
+pub(crate) enum Event {
     /// "Hey Bond": he's listening.
     Woke,
     /// You started a follow-up (no wake word needed).
     FollowUp,
-    /// Not your voice: ignored.
-    Rejected(f32),
+    /// Not your voice: ignored. `close`: only just under the bar, with what's needed to ask.
+    Rejected { score: f32, close: Option<Unsure> },
     /// "Hey Bond" and then nothing.
     Empty,
     /// The window closed with nothing said, or the request was dropped.
@@ -445,9 +506,22 @@ pub enum Event {
     Request(Vec<f32>),
 }
 
+impl Event {
+    fn describe(&self) -> String {
+        match self {
+            Event::Woke => "woke".into(),
+            Event::FollowUp => "follow-up".into(),
+            Event::Rejected { score, close } => format!("not your voice ({score:.2}){}", if close.is_some() { ", close: asking" } else { "" }),
+            Event::Empty => "wake word, then nothing".into(),
+            Event::Idle => "idle".into(),
+            Event::Request(a) => format!("request, {:.1} s of audio", a.len() as f32 / ASR_RATE as f32),
+        }
+    }
+}
+
 /// Microphone audio in (16 kHz chunks), events out. Kept apart from the microphone so it can
 /// be tested on recorded speech.
-pub struct Listener {
+pub(crate) struct Listener {
     kws: sherpa_onnx::KeywordSpotter,
     kstream: sherpa_onnx::OnlineStream,
     ring: VecDeque<f32>,
@@ -532,10 +606,13 @@ impl Listener {
                 }
                 // Your voice? The wake word and what followed it, together.
                 let said: Vec<f32> = wake.iter().chain(if spoke { audio.iter() } else { [].iter() }).copied().collect();
-                let (you, score) = is_you(&trim_silence(&said), if follow_up { FOLLOW_UP_SLACK } else { 1.0 })?;
+                let (you, score, check) = is_you(&trim_silence(&said), if follow_up { FOLLOW_UP_SLACK } else { 1.0 })?;
                 remember_score(score, you);
                 Ok(vec![match (you, spoke) {
-                    (false, _) => Event::Rejected(score),
+                    (false, _) => Event::Rejected {
+                        score,
+                        close: check.filter(|(_, bar)| score >= bar - UNSURE_MARGIN).map(|(voice, _)| Unsure { voice, audio, spoke, at: Instant::now() }),
+                    },
                     (true, false) => Event::Empty,
                     (true, true) => Event::Request(audio),
                 }])
@@ -593,8 +670,7 @@ fn listen(app: &AppHandle) -> Result<(), String> {
         let open = FOLLOW_UNTIL.lock().unwrap().is_some_and(|t| Instant::now() < t);
         for event in listener.push(&chunk, open)? {
             match &event {
-                Event::Request(a) => crate::diag::log(&format!("listener: request, {:.1} s of audio", a.len() as f32 / ASR_RATE as f32)),
-                e => crate::diag::log(&format!("listener: {e:?}")),
+                e => crate::diag::log(&format!("listener: {}", e.describe())),
             }
             match event {
                 Event::Woke | Event::FollowUp => {
@@ -607,9 +683,17 @@ fn listen(app: &AppHandle) -> Result<(), String> {
                 Event::Idle => {
                     let _ = app.emit("voice-state", "idle");
                 }
-                Event::Rejected(score) => {
+                Event::Rejected { score, close } => {
                     let _ = app.emit("voice-state", "idle");
-                    let _ = app.emit("wake-rejected", score);
+                    match close {
+                        Some(u) => {
+                            *UNSURE.lock().unwrap() = Some(u);
+                            let _ = app.emit("wake-unsure", score);
+                        }
+                        None => {
+                            let _ = app.emit("wake-rejected", score);
+                        }
+                    }
                 }
                 Event::Empty => {
                     let _ = app.emit("voice-state", "idle");
@@ -916,8 +1000,7 @@ mod tests {
                 for e in l.push(c, follow_open).unwrap() {
                     out.push(match e {
                         Event::Request(a) => format!("heard “{}”", strip_wake_word(&voice::transcribe(&a, ASR_RATE).unwrap())),
-                        Event::Rejected(s) => format!("rejected {s:.2}"),
-                        e => format!("{e:?}"),
+                        e => e.describe(),
                     });
                 }
             }
@@ -1017,8 +1100,7 @@ mod tests {
             for e in l.push(&chunk, false).unwrap() {
                 match e {
                     Event::Request(a) => println!("        → heard “{}”", strip_wake_word(&voice::transcribe(&a, ASR_RATE).unwrap())),
-                    Event::Rejected(s) => println!("        → woke, but not your voice ({s:.2})"),
-                    e => println!("        → {e:?}"),
+                    e => println!("        → {}", e.describe()),
                 }
             }
         }
@@ -1132,7 +1214,7 @@ mod tests {
                     match e {
                         Event::Woke => println!("{label}: fired {:.2}s into the speech; request starts with {:.2}s already said", (fed - before.len()) as f32 / ASR_RATE as f32, match &l.mode { Mode::Request { audio, .. } => audio.len() as f32 / ASR_RATE as f32, _ => 0.0 }),
                         Event::Request(a) => println!("{label}: request {:.2}s → “{}”", a.len() as f32 / ASR_RATE as f32, voice::transcribe(&a, ASR_RATE).unwrap()),
-                        e => println!("{label}: {e:?}"),
+                        e => println!("{label}: {}", e.describe()),
                     }
                 }
             }
@@ -1148,6 +1230,29 @@ mod tests {
         let mut talk = Endpoint::with_floor(noise_floor(&x));
         talk.feed(&x[32_000..32_640], Duration::from_millis(40));
         assert!(talk.speaking());
+    }
+
+    #[test]
+    fn learning_keeps_the_enrolment_and_the_newest_requests() {
+        let unit = |v: Vec<f32>| {
+            let mut v = v;
+            normalize(&mut v);
+            v
+        };
+        let enrol: Vec<Vec<f32>> = (0..5).map(|i| unit(vec![1.0, 0.05 * i as f32, 0.0])).collect();
+        let mut p = Voiceprint::from_samples(enrol.clone());
+        let before = p.threshold;
+        // A confirmed request a bit unlike the enrolment widens what counts as you.
+        let unlike = unit(vec![0.8, 0.0, 0.6]);
+        let score_before = p.score(&unlike);
+        p.learn(unlike.clone(), 5);
+        assert!(p.score(&unlike) > score_before);
+        assert!(p.threshold <= before);
+        for i in 0..20 {
+            p.learn(unit(vec![1.0, 0.0, 0.01 * i as f32]), 5);
+        }
+        assert_eq!(p.samples.len(), 5 + MAX_LEARNED);
+        assert_eq!(&p.samples[..5], &enrol[..], "the lines you read stay");
     }
 
     #[test]
