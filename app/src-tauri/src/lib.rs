@@ -29,6 +29,7 @@ mod ai;
 mod brain;
 mod experience;
 mod journal;
+mod memory;
 mod notice;
 mod reminders;
 mod screen;
@@ -195,6 +196,7 @@ fn spawn_activity_watch(app: AppHandle, win: &WebviewWindow) {
                 fullscreen,
             };
             if last.as_ref() != Some(&activity) {
+                crate::memory::set_activity(&activity.name, &activity.title);
                 let _ = app.emit("activity", &activity);
                 last = Some(activity);
             }
@@ -420,6 +422,8 @@ pub fn run() {
             voice::voice_say,
             voice::voice_listen,
             diag::diag_log,
+            memory::memory_list,
+            memory::memory_forget,
             wake::wake_install,
             wake::wake_status,
             wake::wake_set,
@@ -443,6 +447,7 @@ pub fn run() {
             enable_autostart_first_run(app.handle());
             agent::preload_apps();
             diag::init(app.handle());
+            memory::init(app.handle());
             diag::log("SelfGlance started");
             brain::init(app.handle());
             experience::init(app.handle());

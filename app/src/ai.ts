@@ -69,10 +69,15 @@ export const setKey = (provider: Provider, key: string) => invoke<void>("ai_set_
 export const aiText = (system: string, prompt: string) => invoke<string>("ai_text", { ...opts(), system, prompt });
 
 /** Let the AI classify a command Bond couldn't place himself (text only, no screenshot). */
-export const routeCommand = (text: string) => invoke<Route>("ai_route", { ...opts(), text });
+/** `spoken`: it came from the microphone, so words may be misheard. */
+export const routeCommand = (text: string, spoken = false) => invoke<Route>("ai_route", { ...opts(), text, spoken });
 
 /** Look at the screen now: explain it, help when stuck, or do a task on it. */
-export const screenAsk = (question: string, mode: ScreenMode) => invoke<ScreenAnswer>("ai_screen", { ...opts(), question, mode });
+export const screenAsk = (question: string, mode: ScreenMode, spoken = false) => invoke<ScreenAnswer>("ai_screen", { ...opts(), question, mode, spoken });
+
+/** What Bond remembers about you (memory.json), and forgetting it. */
+export const memoryList = () => (inTauri ? invoke<string[]>("memory_list").catch(() => []) : Promise.resolve([]));
+export const memoryForget = (fact: string | null) => invoke<void>("memory_forget", { fact });
 
 /** Run actions Bond understood on his own. */
 export const runActions = (actions: Action[]) => invoke<Outcome>("agent_run", { actions });

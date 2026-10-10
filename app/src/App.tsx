@@ -489,7 +489,9 @@ export default function App() {
           void bringIn();
           stopSpeaking();
           clearTimeout(askTimer.current);
-          setAsk(null);
+          // A question he asked you stays up: what you're saying may be the answer.
+          const asking = askRef.current?.step === "approve" || askRef.current?.step === "unsure";
+          if (!asking) setAsk(null);
           wake(25_000);
           stageRef.current?.play("nod", true);
           showPop(wokeRef.current ? "Yes?" : "Listening…", 25_000, true);
@@ -767,7 +769,7 @@ export default function App() {
 
   const lookAtScreen = async (question: string, mode: ScreenMode) => {
     setAsk({ step: "thinking", question, looking: true });
-    const res = await screenAsk(question, mode);
+    const res = await screenAsk(question, mode, heardRef.current);
     expRef.current = res.exp_id;
     const o = res.outcome ?? { done: [], info: [], pending: null };
     if (o.pending || (mode === "task" && !res.answer)) return showOutcome(question, o, res.answer);
@@ -814,7 +816,7 @@ export default function App() {
       if (own?.kind === "screen") return await lookAtScreen(question, own.mode);
 
       // 2. Not sure: the AI classifies it (text only), and runs simple tasks right away.
-      const r = await routeCommand(question);
+      const r = await routeCommand(question, heardRef.current);
       expRef.current = r.exp_id;
       switch (r.intent) {
         case "log":

@@ -382,7 +382,7 @@ A shortcut for the app in front (new tab, close tab, undo, save, refresh): hotke
 
 const ROUTER_SYSTEM: &str = r#"You are the command router of Bond, a friendly desktop companion on the user's OS_NAME computer.
 Classify the user's message and reply with ONLY one JSON object, no prose, no code fences:
-{"intent":"...","text":"...","reply":"...","actions":[],"needs_screen":false}
+{"intent":"...","text":"...","reply":"...","actions":[],"needs_screen":false,"remember":""}
 
 intent is one of (if you return any actions, intent is "task"):
 - "log": the user is telling you about their day or something they did/felt, to remember it. text = the entry, cleaned up, first person.
@@ -393,6 +393,10 @@ intent is one of (if you return any actions, intent is "task"):
 - "chat": anything else (a general question, small talk). reply = the answer, at most 4 short sentences, plain text.
 
 reply is always a very short, friendly line Bond says (for log/idea: a confirmation; for task: what you're doing).
+The message may come with what you know about the user, what is in front of them, and the conversation so far. Use them: "it", "that", "again" and short follow-ups refer to the conversation ("close it" right after opening Notepad means Notepad; "yes, run it" after you proposed a command means that command, so repeat that action). Answer questions about the user from what you know; never say you don't know something the conversation or the facts say.
+remember: only when the user's new message itself tells you something lasting about them (their name, people, preferences, projects, where they work or study), one short sentence in the third person ("The user's name is Alex."). Never from the screen, folders, the conversation or what you already know; otherwise "".
+To close an app (one the user names, or the one just opened): kill_process with its name. hotkey "ctrl+w" only closes a browser or editor tab.
+A spoken message may contain misheard words: read it by how it sounds ("open not bad" is "open Notepad", "they bond" is "hey Bond").
 Never invent actions that are not in the list. Almost anything on the computer can be done with run_command; use intent "chat" only when it really can't be done.
 
 ACTIONS_DOC
@@ -543,8 +547,9 @@ fn router_schema() -> Value {
             "reply": {"type": "string"},
             "actions": actions_schema(false),
             "needs_screen": {"type": "boolean"},
+            "remember": {"type": "string"},
         },
-        "required": ["intent", "text", "reply", "actions", "needs_screen"],
+        "required": ["intent", "text", "reply", "actions", "needs_screen", "remember"],
         "additionalProperties": false,
     })
 }
@@ -604,9 +609,10 @@ pub struct Route {
 
 /// Classify a command Bond couldn't place on his own; run simple tasks straight away.
 #[tauri::command]
-pub async fn ai_route(app: AppHandle, provider: Provider, gemini_model: Option<String>, text: String) -> Result<Route, String> {
+pub async fn ai_route(app: AppHandle, provider: Provider, gemini_model: Option<String>, text: String, spoken: Option<bool>) -> Result<Route, String> {
     let provider = effective(provider);
     let text = text.trim();
+    let prompt = with_context(text, spoken.unwrap_or(false));
     let mut system = router_system(&app);
     // What worked for similar requests before: how Bond learns your habits.
     let examples = crate::experience::examples_for(text, 4);
@@ -614,9 +620,14 @@ pub async fn ai_route(app: AppHandle, provider: Provider, gemini_model: Option<S
         system = format!("{system}\n\n{examples}");
     }
     let schema = router_schema();
-    let reply = complete(provider, gemini_model, &system, text, None, "low", Some(&schema)).await?;
+    let reply = complete(provider, gemini_model, &system, &prompt, None, "low", Some(&schema)).await?;
     let v = json_in(&reply)?;
     let s = |k: &str| v[k].as_str().unwrap_or("").trim().to_string();
+    // Only what you said about yourself, not what the model picked up from the screen or the
+    // conversation (the small model "remembered" both in tests).
+    if !s("remember").is_empty() && crate::memory::about_yourself(text) {
+        crate::memory::learn(&s("remember"));
+    }
     // Actions mean a task, whatever label the model gave it.
     let intent = if v["actions"].as_array().is_some_and(|a| !a.is_empty()) { "task".to_string() } else { s("intent") };
     let mut route = Route {
@@ -638,8 +649,47 @@ pub async fn ai_route(app: AppHandle, provider: Provider, gemini_model: Option<S
             Err(e) => result = Err(e),
         }
     }
+    crate::memory::turn(text, &what_bond_did(&route.reply, v["actions"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), route.outcome.as_ref(), result.as_ref().err()));
     route.exp_id = crate::experience::record("route", text, v, provider.name(), result.clone());
     result.map(|_| route)
+}
+
+/// Your message with what Bond knows around it (memory.rs).
+fn with_context(text: &str, spoken: bool) -> String {
+    let context = crate::memory::context_block();
+    let said = if spoken { "The user's new message (spoken, so words may be misheard)" } else { "The user's new message" };
+    if context.is_empty() {
+        return if spoken { format!("{said}: {text}") } else { text.to_string() };
+    }
+    format!("{context}\n\n{said}: {text}")
+}
+
+/// What Bond said and did, as the conversation remembers it.
+fn what_bond_did(reply: &str, actions: &[Value], outcome: Option<&crate::agent::Outcome>, error: Option<&String>) -> String {
+    let mut parts = vec![reply.to_string()];
+    let acts: Vec<String> = actions.iter().map(|a| {
+        let mut x = a.clone();
+        let name = x.as_object_mut().and_then(|o| o.remove("do")).and_then(|d| d.as_str().map(String::from)).unwrap_or_default();
+        format!("{name} {}", serde_json::to_string(&x).unwrap_or_default())
+    }).collect();
+    if !acts.is_empty() {
+        parts.push(format!("[actions: {}]", acts.join("; ")));
+    }
+    if let Some(o) = outcome {
+        if let Some(p) = &o.pending {
+            parts.push(format!("[waiting for the user's yes: {}]", p.title));
+        }
+        if !o.done.is_empty() {
+            parts.push(format!("[done: {}]", o.done.join("; ")));
+        }
+        if let Some(i) = o.info.first() {
+            parts.push(format!("[result: {}]", i.chars().take(200).collect::<String>()));
+        }
+    }
+    if let Some(e) = error {
+        parts.push(format!("[failed: {e}]"));
+    }
+    parts.join(" ")
 }
 
 #[derive(Serialize)]
@@ -651,8 +701,9 @@ pub struct ScreenAnswer {
 
 /// Look at the screen (only now, on request) to explain it, help when stuck, or do a task on it.
 #[tauri::command]
-pub async fn ai_screen(app: AppHandle, provider: Provider, gemini_model: Option<String>, question: String, mode: String) -> Result<ScreenAnswer, String> {
+pub async fn ai_screen(app: AppHandle, provider: Provider, gemini_model: Option<String>, question: String, mode: String, spoken: Option<bool>) -> Result<ScreenAnswer, String> {
     let provider = effective(provider);
+    let asked = with_context(question.trim(), spoken.unwrap_or(false));
     // Nothing to answer with → say so before taking a screenshot.
     if provider == Provider::Local {
         if !crate::brain::ready() {
@@ -672,7 +723,7 @@ pub async fn ai_screen(app: AppHandle, provider: Provider, gemini_model: Option<
         scale: shot.scale,
         normalized,
     };
-    let prompt = format!("Screenshot size: {}x{} pixels.\n{}\nUser: {}", shot.width, shot.height, shot.seen, question.trim());
+    let prompt = format!("Screenshot size: {}x{} pixels.\n{}\n{asked}", shot.width, shot.height, shot.seen);
     let image = Some(Image { b64: shot.b64 });
 
     if mode == "task" {
@@ -685,12 +736,15 @@ pub async fn ai_screen(app: AppHandle, provider: Provider, gemini_model: Option<
             Ok(actions) => crate::agent::run(&app, actions, Some(geometry)).await,
             Err(e) => Err(e),
         };
-        let exp_id = crate::experience::record("screen", question.trim(), v, provider.name(), result.as_ref().map(|_| ()).map_err(|e| e.clone()));
+        let exp_id = crate::experience::record("screen", question.trim(), v.clone(), provider.name(), result.as_ref().map(|_| ()).map_err(|e| e.clone()));
+        crate::memory::turn(question.trim(), &what_bond_did(&answer, v["actions"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), result.as_ref().ok(), result.as_ref().err()));
         return Ok(ScreenAnswer { answer, outcome: Some(result?), exp_id });
     }
     let system = if mode == "help" { SCREEN_HELP } else { SCREEN_EXPLAIN };
     let answer = complete(provider, gemini_model, system, &prompt, image, "medium", None).await?;
     let exp_id = crate::experience::record("screen", question.trim(), json!({"intent": mode, "reply": answer}), provider.name(), Ok(()));
+    // What he saw and said, so "what else is on it?" can follow.
+    crate::memory::turn(question.trim(), &format!("(looked at the screen) {answer}"));
     Ok(ScreenAnswer { answer, outcome: None, exp_id })
 }
 pub(crate) struct Shot {
@@ -790,6 +844,60 @@ mod eval {
             "CONTEXT",
             &format!("{STARTER_EXAMPLES}\n\n{}", r"Now: Thursday 2026-10-08 21:00 (the user's local time). OS: Windows. Home folder: C:\Users\me. Commands run in Windows PowerShell from the home folder."),
         )
+    }
+
+    /// The owner's real conversations from 2026-10-10, replayed with memory (memory.rs):
+    /// cargo test --lib eval::conversation -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn conversation() {
+        let local = std::env::var("LOCALAPPDATA").expect("LOCALAPPDATA");
+        crate::brain::use_dir(std::path::Path::new(&local).join("com.selfglance.app").join("brain"));
+        let schema = router_schema();
+        let sys = system();
+        // Each scenario: what came before (you, Bond), then the message and what a right answer has.
+        type Check = fn(&Value) -> bool;
+        let has = |v: &Value, name: &str| v["actions"].as_array().is_some_and(|a| a.iter().any(|x| x["do"] == name));
+        let _ = has;
+        let scenarios: Vec<(&str, Vec<(&str, &str)>, Option<&str>, &str, bool, Check)> = vec![
+            ("close it", vec![("Open Notepad", r#"[actions: open_app {"name":"notepad"}] [done: Opened Notepad]"#)], None, "Close it.", false,
+                |v| v["actions"].as_array().is_some_and(|a| a.iter().any(|x| x["do"] == "kill_process" && x["name"].as_str().unwrap_or("").to_lowercase().contains("notepad")))),
+            ("my name", vec![("Call me Alex.", "Sure, Alex! How can I help you today?")], None, "Say my name again.", true,
+                |v| v["reply"].as_str().unwrap_or("").contains("Alex")),
+            ("run it", vec![("What's my laptop specification?", r#"Checking your laptop specs. [actions: run_command {"command":"Get-ComputerInfo | Select-Object CsModel, CsProcessors, OsTotalVisibleMemorySize","why":"Shows the laptop's model, processor and memory."}] [waiting for the user's yes: Run this command?]"#)], None, "Yes, run it.", true,
+                |v| v["actions"].as_array().is_some_and(|a| a.iter().any(|x| x["do"] == "run_command" && !x["command"].as_str().unwrap_or("").is_empty()))),
+            ("about the screen", vec![("Read my screen.", "(looked at the screen) You are looking at the \"My Submissions\" page on the FLA platform. There is one active submission for a project named \"Hatch - Budget Ledger\", due Friday.")], None, "What else do you know about it?", true,
+                |v| { let r = v["reply"].as_str().unwrap_or("").to_lowercase(); ["submission", "hatch", "fla", "friday", "due"].iter().any(|w| r.contains(w)) || v["needs_screen"] == true }),
+            ("misheard", vec![], None, "Open not bad.", true,
+                |v| v["actions"].as_array().is_some_and(|a| a.iter().any(|x| x["do"] == "open_app" && x["name"].as_str().unwrap_or("").to_lowercase().contains("notepad")))),
+            ("remember nothing", vec![("Read my screen.", "(looked at the screen) The FLA platform, one submission named Hatch.")], None, "Thanks.", true,
+                |v| v["remember"].as_str().unwrap_or("").is_empty() || !crate::memory::about_yourself("Thanks.")),
+            ("what am I doing", vec![], Some("Visual Studio Code: “wake.rs - SelfGlance - Visual Studio Code”"), "What am I working on?", true,
+                |v| { let r = v["reply"].as_str().unwrap_or("").to_lowercase(); r.contains("wake.rs") || r.contains("selfglance") || r.contains("visual studio") || v["needs_screen"] == true }),
+        ];
+        tauri::async_runtime::block_on(async {
+            crate::brain::brain_warm().await.expect("brain starts");
+            let mut right = 0;
+            for (name, before, now, said, spoken, ok) in &scenarios {
+                crate::memory::memory_forget(None);
+                *crate::memory::tests_facts() = Some(Vec::new());
+                for (you, bond) in before {
+                    crate::memory::turn(you, bond);
+                }
+                if before.iter().any(|(y, _)| y.contains("Call me")) {
+                    crate::memory::learn("The user's name is Alex.");
+                }
+                let _ = crate::memory::about_yourself;
+                crate::memory::set_activity_for_tests(*now);
+                let prompt = with_context(said, *spoken);
+                let reply = complete(Provider::Local, None, &sys, &prompt, None, "low", Some(&schema)).await;
+                let v = reply.as_deref().map_err(|e| e.clone()).and_then(json_in).unwrap_or(Value::Null);
+                let good = ok(&v);
+                right += good as i32;
+                println!("{} {name:<17} “{said}” → {}", if good { "✓" } else { "✗" }, serde_json::to_string(&v).unwrap_or_default().chars().take(260).collect::<String>());
+            }
+            println!("\n{right} / {} right", scenarios.len());
+        });
     }
 
     #[test]

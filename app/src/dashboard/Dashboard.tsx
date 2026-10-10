@@ -25,6 +25,8 @@ import {
   setKey,
   speak,
   voiceInstall,
+  memoryForget,
+  memoryList,
   wakeEnrollCancel,
   wakeEnrollRecord,
   wakeEnrollSave,
@@ -798,6 +800,13 @@ function SettingsPage() {
         <Toggle label="Learn from me" checked={s.learnFromMe} onChange={(v) => update({ learnFromMe: v })} />
         <Learned />
       </Group>
+
+      <Group
+        title="What Bond remembers about you"
+        desc="Things you've told him about yourself (“call me Alex”), used in every conversation. He also keeps the last few minutes of what you talked about, so “close it” or “yes, run it” make sense. All on this computer."
+      >
+        <Memories />
+      </Group>
     </>
   );
 }
@@ -1138,6 +1147,36 @@ function HeyBond(props: { s: Settings; onChange: (p: Partial<Settings>) => void 
         </p>
       )}
       {msg && <p className="small muted">{msg}</p>}
+    </>
+  );
+}
+
+/** The facts Bond keeps about you; forget any or all. */
+function Memories() {
+  const [facts, setFacts] = useState<string[] | null>(null);
+  const refresh = () => void memoryList().then(setFacts);
+  useEffect(() => {
+    refresh();
+    const t = window.setInterval(refresh, 5000); // he may learn something while this is open
+    return () => clearInterval(t);
+  }, []);
+  if (!facts) return null;
+  if (facts.length === 0) return <p className="small muted">Nothing yet. Tell him something like “call me …” or “I study at …”.</p>;
+  return (
+    <>
+      <ul className="memories">
+        {facts.map((f) => (
+          <li key={f}>
+            <span>{f}</span>
+            <button className="btn ghost" onClick={() => void memoryForget(f).then(refresh)} aria-label={`Forget: ${f}`}>
+              Forget
+            </button>
+          </li>
+        ))}
+      </ul>
+      <button className="btn ghost" onClick={() => void memoryForget(null).then(refresh)}>
+        Forget everything
+      </button>
     </>
   );
 }

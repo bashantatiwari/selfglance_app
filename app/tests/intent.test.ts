@@ -40,6 +40,11 @@ test("answering his questions out loud", () => {
   assert.equal(spokenAnswer("I need you to run this command.", true), null); // deleting needs the word
 });
 
+test("\"run it\" is about something said before, not an app called it", () => {
+  for (const q of ["Run it.", "run this", "open it", "run the command", "start that"]) assert.equal(understand(q), null, q);
+  assert.deepEqual(understand("open notepad"), { kind: "do", actions: [{ do: "open_app", name: "notepad" }] });
+});
+
 test("telling him to stop", () => {
   for (const s of ["Stop.", "be quiet", "Thanks, Bond.", "thank you"]) assert.ok(saidStop(s), s);
   assert.ok(!saidStop("stop the music"));

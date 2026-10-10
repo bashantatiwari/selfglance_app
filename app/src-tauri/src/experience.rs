@@ -243,6 +243,15 @@ pub fn brain_feedback(id: String, value: String) {
 /// Something Bond understood on his own (no AI), worth learning from: it's always right.
 #[tauri::command]
 pub fn brain_record(input: String, output: Value, ok: bool, error: Option<String>) -> String {
+    // Understood without the brain ("open Notepad"): still part of the conversation.
+    let did = output["actions"].as_array().map(|a| a.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("; ")).filter(|s| !s.is_empty());
+    let said = output["text"].as_str().map(|t| format!("({} saved: {t})", output["intent"].as_str().unwrap_or("note")));
+    crate::memory::turn(&input, &match (did, said, &error) {
+        (_, _, Some(e)) if !ok => format!("[failed: {e}]"),
+        (Some(d), _, _) => format!("[actions: {d}]"),
+        (None, Some(s), _) => s,
+        _ => String::new(),
+    });
     record("rule", &input, output, "rules", if ok { Ok(()) } else { Err(error.unwrap_or_default()) })
 }
 
