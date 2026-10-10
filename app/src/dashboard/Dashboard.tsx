@@ -751,7 +751,7 @@ function SettingsPage() {
 
       <Group
         title="“Hey Bond”"
-        desc="Talk to him without a hotkey, like Siri. A small on-device model listens for “Hey Bond”; nothing is recorded or sent anywhere. With voice match he answers only you, not other people, videos or calls."
+        desc="Talk to him without a hotkey, like Siri. His ears, on this laptop, listen for “Hey Bond”; what isn't for him is dropped as soon as it's heard, and nothing is recorded or sent anywhere. With voice match he answers only you, not other people, videos or calls."
       >
         <HeyBond s={s} onChange={update} />
       </Group>

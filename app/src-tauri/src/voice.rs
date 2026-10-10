@@ -49,7 +49,8 @@ pub fn init(app: &AppHandle) {
     std::thread::spawn(|| loop {
         std::thread::sleep(Duration::from_secs(30));
         let idle = LAST_USED.lock().unwrap().is_some_and(|t| t.elapsed() > IDLE_UNLOAD);
-        if idle && !LISTENING.load(Ordering::SeqCst) {
+        // "Hey Bond" uses the ears for every stretch of speech: they stay loaded meanwhile.
+        if idle && !LISTENING.load(Ordering::SeqCst) && !crate::wake::active() {
             unload();
         }
     });
@@ -398,9 +399,12 @@ impl Endpoint {
         self.spoke_at.is_some() && self.quiet_since.is_none()
     }
 
-    /// Any speech so far.
-    pub(crate) fn spoke(&self) -> bool {
-        self.spoke_at.is_some()
+    /// How long it's been quiet since speech, at time `t` (zero while talking or before).
+    pub(crate) fn quiet_for(&self, t: Duration) -> Duration {
+        match (self.spoke_at, self.quiet_since) {
+            (Some(_), Some(q)) => t.saturating_sub(q),
+            _ => Duration::ZERO,
+        }
     }
 
     /// Feed new samples heard at time `t`; true when it's time to stop.
