@@ -202,6 +202,37 @@ export const voiceListen = () => (inTauri ? invoke<void>("voice_listen").catch((
 export const voiceListenStop = () => (inTauri ? invoke<void>("voice_listen_stop").catch(() => {}) : Promise.resolve());
 const voiceSay = (text: string, voice: number, speed: number) => invoke<string>("voice_say", { text, voice, speed });
 
+// --- "Hey Bond" and voice match (wake.rs) ------------------------------------------------
+
+export interface WakeStatus {
+  installed: boolean;
+  enrolled: boolean;
+  enabled: boolean;
+  listening: boolean;
+  /** Your voiceprint's bar (0-1), and the latest checks against it: [score, accepted]. */
+  threshold: number | null;
+  recent: [number, boolean][];
+  /** What to read when teaching him your voice. */
+  lines: string[];
+}
+
+export interface EnrollStep {
+  heard: boolean;
+  count: number;
+  needed: number;
+}
+
+export const wakeStatus = () => (inTauri ? invoke<WakeStatus>("wake_status").catch(() => null) : Promise.resolve(null));
+export const wakeInstall = () => invoke<void>("wake_install");
+/** Turn "Hey Bond" on or off; voiceMatch: answer only your voice. */
+export const wakeSet = (enabled: boolean, voiceMatch: boolean) => (inTauri ? invoke<void>("wake_set", { enabled, voiceMatch }) : Promise.resolve());
+/** After answering out loud: take a follow-up without the wake word for a few seconds. */
+export const wakeFollowUp = (seconds: number) => (inTauri ? invoke<void>("wake_follow_up", { seconds }).catch(() => {}) : Promise.resolve());
+export const wakeEnrollRecord = () => invoke<EnrollStep>("wake_enroll_record");
+export const wakeEnrollSave = () => invoke<void>("wake_enroll_save");
+export const wakeEnrollCancel = () => (inTauri ? invoke<void>("wake_enroll_cancel").catch(() => {}) : Promise.resolve());
+export const wakeForgetVoice = () => invoke<void>("wake_forget_voice");
+
 /** Play base64 WAV; resolves when it ends (or is stopped). */
 function play(b64: string, token: number): Promise<void> {
   return new Promise((resolve, reject) => {

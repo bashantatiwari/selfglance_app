@@ -60,6 +60,8 @@ import {
   takeFocus,
   voiceListen,
   voiceStatus,
+  wakeFollowUp,
+  wakeSet,
   noticeAllowed,
   noticeEnable,
   noticeHabits,
@@ -71,7 +73,7 @@ import {
   type Outcome,
   type Reminder,
 } from "./ai";
-import { understand, type ScreenMode } from "./assistant/intent";
+import { saidStop, spokenAnswer, understand, type ScreenMode } from "./assistant/intent";
 import { addIdea, dayKey, journalGet, logToJournal } from "./assistant/notes";
 import {
   blockedBy,
@@ -99,6 +101,7 @@ const BRAINSTORM_CHAT_MS = 20 * 60_000; // this much chatting / note-taking in t
 const BRAINSTORM_BUILD_MS = 2 * 60_000; // ...with less than this in an editor or terminal
 const BRAINSTORM_COOLDOWN_MS = 45 * 60_000;
 const SCAN_EVERY_MS = 30_000; // looking for an error on screen, during pauses in an editor/terminal
+const FOLLOW_UP_SEC = 6; // after he answers a spoken request, a follow-up needs no "Hey Bond"
 const CHATTY = /\b(chatgpt|claude|gemini|perplexity|copilot|deepseek|grok|notion|obsidian|onenote|google keep)\b/i;
 const POKE_REACTIONS: ClipName[] = ["wave", "nod", "celebrate", "hang"];
 const CLIPBOARD_SYSTEM =
@@ -422,6 +425,7 @@ export default function App() {
       coach.configure({ everyMin: st.breakEveryMin, enabled: st.breaksOn });
       void setLearning(st.learnFromMe);
       void noticeEnable(st.notice !== "off");
+      void wakeSet(st.wakeWord, st.voiceMatch).catch(() => {}); // not downloaded yet: Settings says so
       if (st.notice === "off") pendingRef.current = null;
     };
     coachBreakRef.current = () => coach.inBreak;
@@ -460,9 +464,29 @@ export default function App() {
       }),
       onTauriEvent<string>("voice-heard", (text) => {
         setPop(null);
-        if (!text.trim()) return showPop("I didn't catch that", 2200, true);
+        const said = text.trim();
+        if (!said) return showPop("I didn't catch that", 2200, true);
         heardRef.current = true;
-        void doAsk(text.trim(), false);
+        // Answering his question out loud: "yes" / "no", and "delete" for the last check.
+        const cur = askRef.current;
+        if (cur?.step === "approve") {
+          const reply = spokenAnswer(said, cur.approval.step > 1);
+          if (reply === "no") return void deny(cur.approval.id);
+          if (reply === "yes") return void approve(cur.approval.id);
+        }
+        if (saidStop(said)) {
+          stopSpeaking();
+          return void closeAsk();
+        }
+        void doAsk(said, false);
+      }),
+      // "Hey Bond" and then nothing: he asks, and listens for the answer.
+      onTauriEvent<null>("wake-empty", () => {
+        setPop(null);
+        heardRef.current = true;
+        stageRef.current?.play("wave", true);
+        showPop("Yes?", 6000, true);
+        talkBack("Yes?", true);
       }),
       onTauriEvent<string>("voice-error", (e) => {
         setPop(null);
@@ -620,7 +644,7 @@ export default function App() {
   /** An answer worth reading: shown in the card (and spoken if that's on). */
   const answer = (question: string, text: string, done: string[], say: boolean, info: string[] = []) => {
     setAsk({ step: "answer", question, answer: text, done, info });
-    if (say && (settingsRef.current.speakAnswers || heardRef.current) && text) speak(text);
+    if (say && (settingsRef.current.speakAnswers || heardRef.current) && text) talkBack(text);
     stageRef.current?.play("nod", true);
     if (info.length) {
       // Output to read: give it time (it also closes with ×).
@@ -639,7 +663,7 @@ export default function App() {
       wake(10 * 60_000);
       setAsk({ step: "approve", question, approval: o.pending, done: o.done, info: o.info });
       stageRef.current?.play("nod", true);
-      if (o.pending.step === 1 && settingsRef.current.speakAnswers) speak(o.pending.title.replace(/\?.*$/, "?"));
+      if (o.pending.step === 1 && (settingsRef.current.speakAnswers || heardRef.current)) talkBack(o.pending.title.replace(/\?.*$/, "?"));
       return;
     }
     if (o.info.length) return answer(question, reply, o.done, false, o.info);
@@ -670,6 +694,15 @@ export default function App() {
     confirm("Okay, I won't.");
   };
 
+  /** Say it out loud; if you asked by voice, keep listening a few seconds for a follow-up. */
+  const talkBack = (text: string, listen = false) => {
+    const byVoice = heardRef.current;
+    void speak(text).then(() => {
+      const st = settingsRef.current;
+      if (st.wakeWord && (listen || (byVoice && st.followUp))) void wakeFollowUp(FOLLOW_UP_SEC);
+    });
+  };
+
   /** Something done or saved: a short note beside his head, no card to dismiss. */
   const confirm = (text: string) => {
     clearTimeout(askTimer.current);
@@ -677,7 +710,7 @@ export default function App() {
     wake();
     stageRef.current?.play("nod", true);
     showPop(text.length > 60 ? `${text.slice(0, 57)}…` : text, 2800, true);
-    if (heardRef.current) speak(text.replace(/✓/g, "").trim()); // you talked to him: he answers out loud
+    if (heardRef.current) talkBack(text.replace(/✓/g, "").trim()); // you talked to him: he answers out loud
   };
 
   const lookAtScreen = async (question: string, mode: ScreenMode) => {

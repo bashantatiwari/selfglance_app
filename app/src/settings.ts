@@ -26,6 +26,12 @@ export interface Settings {
   voiceId: number;
   /** 1 = normal speed. */
   voiceSpeed: number;
+  /** Listen for "Hey Bond" all the time (the microphone stays on, nothing is recorded). */
+  wakeWord: boolean;
+  /** Answer only the voice he was taught (needs enrolment). */
+  voiceMatch: boolean;
+  /** After answering out loud, listen a few seconds for a follow-up without "Hey Bond". */
+  followUp: boolean;
   /** Seconds an answer stays on screen before it closes by itself. */
   answerSeconds: number;
   /** Nudge when you've been brainstorming/chatting with AI a long time without building. */
@@ -63,6 +69,9 @@ export const DEFAULT_SETTINGS: Settings = {
   voice: "bond",
   voiceId: 18,
   voiceSpeed: 1,
+  wakeWord: false,
+  voiceMatch: true,
+  followUp: true,
   answerSeconds: 12,
   brainstormAlert: true,
   batteryAlert: true,

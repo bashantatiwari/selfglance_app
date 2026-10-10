@@ -1213,3 +1213,19 @@ main {
   line-height: 28px;
   padding: 0 10px;
 }
+
+/* Teaching Bond your voice: one line to read at a time. */
+.teach {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.teach-line {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  font-size: 17px;
+  font-weight: 600;
+}

@@ -25,6 +25,7 @@ installers for Windows, macOS and Linux on GitHub (`.github/workflows/release.ym
 | `Ctrl+Alt+G` | Summon Bond |
 | `Ctrl+Alt+Space` | Ask Bond (type a request) |
 | Hold `Ctrl+Alt+V` | Talk to Bond; let go when you're done |
+| Say **"Hey Bond, …"** | Talk without a hotkey (turn on in Dashboard → Settings → "Hey Bond") |
 
 Click Bond for Dance / Jump / Wave, Ask Bond, and the Dashboard (journal, ideas,
 reminders, activity, settings). Things to ask:
@@ -40,7 +41,12 @@ reminders, activity, settings). Things to ask:
 - **Files:** `delete my screenshots` (shows thumbnails, asks twice, goes to the Recycle Bin)
 - **Screen:** `what am I looking at` · `I'm stuck` · `click the Save button`
 
-Running commands, ending programs and deleting files always ask first.
+Running commands, ending programs and deleting files always ask first. You can answer out
+loud: "yes" / "no", and "delete" for the last check before deleting.
+
+**Voice:** after "Hey Bond", say the request in the same breath or after a pause. With
+voice match (Settings → "Teach him my voice", 5 short lines) he answers only you. After he
+answers he listens ~6 s for a follow-up without "Hey Bond". "Stop" or "thanks Bond" ends it.
 
 On his own, Bond brings water breaks, warns about low battery, and suggests things
 when you seem stuck or copy an error. Tune or turn these off in Dashboard → Settings.
@@ -60,6 +66,7 @@ The app is in `app/`, built with [Tauri](https://tauri.app):
 | `agent.rs` | The actions Bond can take on the computer |
 | `screen.rs` | Reads the screen (Windows OCR + UI Automation) and finds controls by name |
 | `voice.rs` | Speech in and out (Parakeet and Kokoro via sherpa-onnx) |
+| `wake.rs` | "Hey Bond" (keyword spotter) and voice match (TitaNet speaker model) |
 | `notice.rs` | Decides when a suggestion is worth making |
 | `experience.rs` | Remembers past requests so Bond adapts to you |
 | `journal.rs`, `reminders.rs` | The journal files; reminders |

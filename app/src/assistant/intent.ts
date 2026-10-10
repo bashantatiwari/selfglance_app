@@ -155,3 +155,22 @@ export function understand(input: string): Intent {
 
   return null;
 }
+
+// --- Talking back to him (voice) -------------------------------------------------------
+
+const SAID_YES = /^(yes|yeah|yep|yup|sure|ok|okay|do it|go ahead|go for it|please do|confirm)\b/i;
+const SAID_NO = /^(no|nope|cancel|don'?t|do not|stop|never ?mind|wait)\b/i;
+/** The last check before deleting needs the word itself, as typing it does. */
+const SAID_CONFIRM = /\b(delete( (it|them|those|these))?|confirm|yes,? (delete|do it))\b/i;
+const SAID_STOP = /^(stop|be quiet|quiet|shut up|enough|never ?mind|cancel|that'?s all|thanks?,? bond|thank you)[.!]?$/i;
+
+/** He asked "Do this?" and you answered out loud. `lastCheck`: the second check before deleting. */
+export function spokenAnswer(said: string, lastCheck: boolean): "yes" | "no" | null {
+  const t = said.trim();
+  if (SAID_NO.test(t)) return "no";
+  if (lastCheck ? SAID_CONFIRM.test(t) : SAID_YES.test(t)) return "yes";
+  return null;
+}
+
+/** "Stop", "be quiet", "thanks Bond": stop talking and close. */
+export const saidStop = (said: string) => SAID_STOP.test(said.trim());

@@ -16,13 +16,17 @@ this laptop with your own voice and habits, not only in tests.
 | 3 | **Voice**: Kokoro (speaking) + Parakeet (listening); hold Ctrl+Alt+V | Done, untested with your voice |
 | 4 | **Speaks up on his own**: stuck, copied errors, habits; quiet hours | Done; tip wording sometimes off |
 | — | **Fixes, 10 Oct**: screenshots delete with previews, journal saved as files + evening reminder, "free up RAM", voice models unload when idle | Done |
+| 5 | **"Hey Bond" + voice match**: wake word, answers only your voice, follow-ups, spoken yes/no | Built 10 Oct; needs testing with your real voice |
 
 About 12,000 lines: TypeScript (the interface) and Rust (everything that touches Windows).
 
 ## Next, in order
 
-### Phase 5: "Hey Bond", and only for you
+### Phase 5: "Hey Bond", and only for you (built 10 Oct)
 Bond hears you without a hotkey, the way Siri does, and answers only your voice.
+Measured on 8 synthetic voices: wake word caught 21/24 with 0/56 false wakes; voice match
+accepted the right voice 13/13 and others 0/97; listening costs 2.2% of one CPU core.
+Left to do: try it with your own voice and mic and tune the bar if needed.
 - A small wake-word model listens all the time for "Hey Bond" (sherpa-onnx keyword
   spotting: a few MB, a few % of one CPU core). Nothing is recorded or saved.
 - **Voice match**: you say "Hey Bond" 5 times once to enroll. After that, a speaker model

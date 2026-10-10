@@ -24,7 +24,7 @@ use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-const RELEASES: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
+pub(crate) const RELEASES: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
 const TTS_ARCHIVE: &str = "tts-models/kokoro-multi-lang-v1_0.tar.bz2";
 const TTS_DIR: &str = "kokoro-multi-lang-v1_0";
 const ASR_ARCHIVE: &str = "asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2";
@@ -34,7 +34,7 @@ const TTS_MODEL: &str = "model.onnx";
 const TTS_THREADS: i32 = 8;
 
 /// The recognizer's sample rate.
-const ASR_RATE: u32 = 16_000;
+pub(crate) const ASR_RATE: u32 = 16_000;
 
 /// Let the models go after this long without speaking or listening.
 const IDLE_UNLOAD: Duration = Duration::from_secs(5 * 60);
@@ -72,7 +72,7 @@ pub fn use_dir(p: PathBuf) {
     let _ = DIR.set(p);
 }
 
-fn dir() -> Result<&'static Path, String> {
+pub(crate) fn dir() -> Result<&'static Path, String> {
     DIR.get().map(|p| p.as_path()).ok_or_else(|| "The app data folder isn't available.".to_string())
 }
 
@@ -143,7 +143,7 @@ async fn install(app: &AppHandle) -> Result<(), String> {
 }
 
 /// Unpack a .tar.bz2 into `target`, refusing paths that would land outside it.
-fn untar(archive: &Path, target: &Path) -> Result<(), String> {
+pub(crate) fn untar(archive: &Path, target: &Path) -> Result<(), String> {
     let f = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut tar = tar::Archive::new(bzip2::read::BzDecoder::new(f));
     for entry in tar.entries().map_err(|e| e.to_string())? {
@@ -244,7 +244,7 @@ pub fn transcribe(samples: &[f32], rate: u32) -> Result<String, String> {
 }
 
 /// Linear resampling: plenty for speech recognition.
-fn resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
+pub(crate) fn resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || x.is_empty() {
         return x.to_vec();
     }
@@ -262,14 +262,14 @@ fn resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
         .collect()
 }
 
-static LISTENING: AtomicBool = AtomicBool::new(false);
+pub(crate) static LISTENING: AtomicBool = AtomicBool::new(false);
 /// Set to stop the recording (key released, or the click-to-talk heard silence).
 static STOP: AtomicBool = AtomicBool::new(false);
 
 /// Longest a single request can be.
 const MAX_LISTEN: Duration = Duration::from_secs(20);
 /// Click-to-talk: quiet this long after speaking ends it.
-const END_SILENCE: Duration = Duration::from_millis(1200);
+pub(crate) const END_SILENCE: Duration = Duration::from_millis(1200);
 /// …or this long without any speech at all.
 const NO_SPEECH: Duration = Duration::from_secs(6);
 
@@ -322,6 +322,12 @@ pub fn voice_listen_stop() {
     stop();
 }
 
+/// One utterance from the microphone, ending when you go quiet (enrolment).
+pub(crate) fn record_once(on_ready: impl FnOnce()) -> Result<(Vec<f32>, u32), String> {
+    STOP.store(false, Ordering::SeqCst);
+    record(true, on_ready)
+}
+
 /// Record from the default microphone (mono) until stopped. `on_ready` runs when the first
 /// sound arrives.
 fn record(hands_free: bool, on_ready: impl FnOnce()) -> Result<(Vec<f32>, u32), String> {
@@ -368,22 +374,37 @@ fn record(hands_free: bool, on_ready: impl FnOnce()) -> Result<(Vec<f32>, u32), 
     Ok((samples, rate))
 }
 
-fn downmix<T: Copy>(data: &[T], channels: usize, to_f32: impl Fn(T) -> f32) -> Vec<f32> {
+pub(crate) fn downmix<T: Copy>(data: &[T], channels: usize, to_f32: impl Fn(T) -> f32) -> Vec<f32> {
     data.chunks(channels.max(1)).map(|c| c.iter().map(|s| to_f32(*s)).sum::<f32>() / c.len() as f32).collect()
 }
 
 /// Ends click-to-talk: speech, then a pause; or no speech at all for a while. The noise
 /// floor adapts to the room, so a fan or keyboard doesn't count as talking.
 #[derive(Default)]
-struct Endpoint {
+pub(crate) struct Endpoint {
     floor: Option<f32>,
     spoke_at: Option<Duration>,
     quiet_since: Option<Duration>,
 }
 
 impl Endpoint {
+    /// Start from a known room noise level, for listening that may begin mid-sentence.
+    pub(crate) fn with_floor(floor: f32) -> Self {
+        Endpoint { floor: Some(floor), ..Default::default() }
+    }
+
+    /// Talking right now (the last frame was speech).
+    pub(crate) fn speaking(&self) -> bool {
+        self.spoke_at.is_some() && self.quiet_since.is_none()
+    }
+
+    /// Any speech so far.
+    pub(crate) fn spoke(&self) -> bool {
+        self.spoke_at.is_some()
+    }
+
     /// Feed new samples heard at time `t`; true when it's time to stop.
-    fn feed(&mut self, frame: &[f32], t: Duration) -> bool {
+    pub(crate) fn feed(&mut self, frame: &[f32], t: Duration) -> bool {
         if frame.is_empty() {
             return false;
         }

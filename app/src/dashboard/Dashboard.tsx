@@ -25,6 +25,13 @@ import {
   setKey,
   speak,
   voiceInstall,
+  wakeEnrollCancel,
+  wakeEnrollRecord,
+  wakeEnrollSave,
+  wakeForgetVoice,
+  wakeInstall,
+  wakeStatus,
+  type WakeStatus,
   voiceStatus,
   type BrainProgress,
   type VoiceStatus,
@@ -743,6 +750,13 @@ function SettingsPage() {
       </Group>
 
       <Group
+        title="“Hey Bond”"
+        desc="Talk to him without a hotkey, like Siri. A small on-device model listens for “Hey Bond”; nothing is recorded or sent anywhere. With voice match he answers only you, not other people, videos or calls."
+      >
+        <HeyBond s={s} onChange={update} />
+      </Group>
+
+      <Group
         title="Suggestions"
         desc="Bond speaks up on his own at a natural pause: things you usually do in an app, a tip when you copy an error or keep searching while working. Tips come from the brain on this laptop only — nothing is sent anywhere. 👎 on a suggestion stops it."
       >
@@ -981,6 +995,149 @@ function LocalVoice(props: { voiceId: number; speed: number; onChange: (p: Parti
       </label>
       <Slider label="Speed" unit="×" min={0.8} max={1.3} step={0.05} value={props.speed} onChange={(v) => props.onChange({ voiceSpeed: v })} />
       <p className="small good">✓ On this laptop. {msg}</p>
+    </>
+  );
+}
+
+/** "Hey Bond": download, teach him your voice, turn it on. */
+function HeyBond(props: { s: Settings; onChange: (p: Partial<Settings>) => void }) {
+  const { s, onChange } = props;
+  const [st, setSt] = useState<WakeStatus | null>(null);
+  const [progress, setProgress] = useState<BrainProgress | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  // Teaching: which line you're on, and whether the mic is open.
+  const [teach, setTeach] = useState<{ line: number; saved: number; recording: boolean; note: string } | null>(null);
+  const refresh = () => wakeStatus().then(setSt);
+  useEffect(() => {
+    void refresh();
+    const off = onTauriEvent<BrainProgress>("brain-progress", setProgress);
+    const t = window.setInterval(refresh, 4000); // recent voice checks
+    return () => {
+      clearInterval(t);
+      void off.then((f) => f());
+      void wakeEnrollCancel();
+    };
+  }, []);
+
+  const install = async () => {
+    setMsg(null);
+    setInstalling(true);
+    try {
+      await wakeInstall();
+    } catch (e) {
+      setMsg(`${e}`);
+    }
+    setInstalling(false);
+    setProgress(null);
+    void refresh();
+  };
+
+  const record = async () => {
+    if (!teach || !st) return;
+    setTeach({ ...teach, recording: true, note: "Listening… read the line, then stop talking." });
+    try {
+      const r = await wakeEnrollRecord();
+      if (!r.heard) return setTeach({ ...teach, recording: false, note: "I didn't hear “Hey Bond” in that. Try the same line again, a little clearer." });
+      const line = teach.line + 1;
+      if (line < st.lines.length) return setTeach({ line, saved: r.count, recording: false, note: `Got it (${r.count} of ${r.needed}).` });
+      await wakeEnrollSave();
+      setTeach(null);
+      setMsg("✓ He knows your voice now.");
+      onChange({ voiceMatch: true });
+      void refresh();
+    } catch (e) {
+      setTeach({ ...teach, recording: false, note: String(e) });
+    }
+  };
+
+  if (!st) return <p className="small muted">Only in the desktop app.</p>;
+  if (!st.installed) {
+    const pct = progress && progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
+    return (
+      <>
+        <p className="small muted">The wake word and voice match models, on this laptop. A one-time 57 MB download (needs Bond's voice above).</p>
+        {installing ? (
+          <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+            <div className="bar" style={{ width: `${pct}%` }} />
+            <span className="small">{progress ? `${progress.what}: ${Math.round(progress.done / 1e6)} / ${Math.round(progress.total / 1e6)} MB` : "Starting download…"}</span>
+          </div>
+        ) : (
+          <button className="btn" onClick={() => void install()}>
+            Download “Hey Bond”
+          </button>
+        )}
+        {msg && <p className="small muted">{msg}</p>}
+      </>
+    );
+  }
+
+  if (teach) {
+    return (
+      <div className="teach">
+        <p className="small muted">
+          Line {teach.line + 1} of {st.lines.length}. Read it in your normal voice, where you usually sit.
+        </p>
+        <p className="teach-line">“{st.lines[teach.line]}”</p>
+        <div className="key-row">
+          <button className="btn" disabled={teach.recording} onClick={() => void record()}>
+            {teach.recording ? "Listening…" : "🎙 Record this line"}
+          </button>
+          <button
+            className="btn ghost"
+            disabled={teach.recording}
+            onClick={() => {
+              void wakeEnrollCancel();
+              setTeach(null);
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+        {teach.note && <p className="small muted">{teach.note}</p>}
+      </div>
+    );
+  }
+
+  const recent = st.recent.slice(-4);
+  return (
+    <>
+      <Toggle
+        label="Listen for “Hey Bond”"
+        hint="Then say what you want in the same breath, or after a pause. The microphone stays on while this is on."
+        checked={s.wakeWord}
+        onChange={(v) => onChange({ wakeWord: v })}
+      />
+      <Toggle
+        label="Answer only my voice"
+        hint={st.enrolled ? "Voice match is set up." : "Teach him your voice first (below)."}
+        checked={s.voiceMatch && st.enrolled}
+        onChange={(v) => (st.enrolled ? onChange({ voiceMatch: v }) : undefined)}
+      />
+      <Toggle label="Keep listening after he answers" hint="A few seconds for a follow-up, without saying “Hey Bond” again (still only your voice)." checked={s.followUp} onChange={(v) => onChange({ followUp: v })} />
+      <div className="key-row">
+        <button className="btn" onClick={() => setTeach({ line: 0, saved: 0, recording: false, note: "" })}>
+          {st.enrolled ? "Teach him my voice again" : "Teach him my voice"}
+        </button>
+        {st.enrolled && (
+          <button
+            className="btn ghost"
+            onClick={async () => {
+              await wakeForgetVoice();
+              setMsg("Your voiceprint is deleted.");
+              void refresh();
+            }}
+          >
+            Forget my voice
+          </button>
+        )}
+      </div>
+      {st.enrolled && recent.length > 0 && st.threshold !== null && (
+        <p className="small muted">
+          Last checks (bar {st.threshold.toFixed(2)}): {recent.map(([score, ok]) => `${score.toFixed(2)} ${ok ? "✓ you" : "✗ not you"}`).join(" · ")}
+        </p>
+      )}
+      {msg && <p className="small muted">{msg}</p>}
     </>
   );
 }

@@ -33,6 +33,7 @@ mod reminders;
 mod screen;
 mod system;
 mod voice;
+mod wake;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -417,6 +418,14 @@ pub fn run() {
             voice::voice_install,
             voice::voice_say,
             voice::voice_listen,
+            wake::wake_install,
+            wake::wake_status,
+            wake::wake_set,
+            wake::wake_follow_up,
+            wake::wake_enroll_record,
+            wake::wake_enroll_save,
+            wake::wake_enroll_cancel,
+            wake::wake_forget_voice,
             voice::voice_listen_stop
         ])
         .setup(move |app| {
@@ -435,11 +444,21 @@ pub fn run() {
             voice::init(app.handle());
             reminders::spawn_watch(app.handle().clone());
             system::spawn_battery_watch(app.handle().clone());
-            // Another app may already own the shortcut; the tray item still works then.
-            for key in [summon_shortcut(), ask_shortcut(), talk_shortcut()] {
+            // Another app may already own the shortcut; the tray item still works then, and
+            // Bond says which one is taken (once the overlay is up to show it).
+            let mut taken = Vec::new();
+            for (key, name) in [(summon_shortcut(), "Ctrl+Alt+G"), (ask_shortcut(), "Ctrl+Alt+Space"), (talk_shortcut(), "Ctrl+Alt+V")] {
                 if let Err(err) = app.global_shortcut().register(key) {
-                    eprintln!("hotkey unavailable: {err}");
+                    eprintln!("hotkey {name} unavailable: {err}");
+                    taken.push(name);
                 }
+            }
+            if !taken.is_empty() {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(8));
+                    let _ = handle.emit("voice-error", format!("Another app is using {}, so that shortcut won't reach me. Change it in that app, or use the tray menu (or “Hey Bond”).", taken.join(" and ")));
+                });
             }
             Ok(())
         })
