@@ -33,6 +33,11 @@ test("answering his questions out loud", () => {
   assert.equal(spokenAnswer("Yes, delete.", true), "yes");
   // Anything else is a new request.
   assert.equal(spokenAnswer("open spotify", false), null);
+  // Said in a sentence, as people do.
+  assert.equal(spokenAnswer("I need you to run this command.", false), "yes");
+  assert.equal(spokenAnswer("Go ahead and execute it", false), "yes");
+  assert.equal(spokenAnswer("Please don't run it", false), "no");
+  assert.equal(spokenAnswer("I need you to run this command.", true), null); // deleting needs the word
 });
 
 test("telling him to stop", () => {

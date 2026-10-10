@@ -61,6 +61,16 @@ fn entry(p: Provider) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, p.account()).map_err(|e| e.to_string())
 }
 
+/// The brain that will really answer: a cloud one chosen without a key saved means Bond's
+/// own (when it's downloaded), everywhere, rather than "add a key" errors.
+fn effective(p: Provider) -> Provider {
+    if p != Provider::Local && key(p).is_err() && crate::brain::ready() {
+        Provider::Local
+    } else {
+        p
+    }
+}
+
 fn key(p: Provider) -> Result<String, String> {
     entry(p)?
         .get_password()
@@ -315,6 +325,7 @@ pub(crate) fn wav(pcm: &[u8], rate: u32) -> Vec<u8> {
 /// Plain text request (e.g. the daily summary).
 #[tauri::command]
 pub async fn ai_text(provider: Provider, gemini_model: Option<String>, system: String, prompt: String) -> Result<String, String> {
+    let provider = effective(provider);
     complete(provider, gemini_model, &system, &prompt, None, "low", None).await
 }
 
@@ -594,6 +605,7 @@ pub struct Route {
 /// Classify a command Bond couldn't place on his own; run simple tasks straight away.
 #[tauri::command]
 pub async fn ai_route(app: AppHandle, provider: Provider, gemini_model: Option<String>, text: String) -> Result<Route, String> {
+    let provider = effective(provider);
     let text = text.trim();
     let mut system = router_system(&app);
     // What worked for similar requests before: how Bond learns your habits.
@@ -640,6 +652,7 @@ pub struct ScreenAnswer {
 /// Look at the screen (only now, on request) to explain it, help when stuck, or do a task on it.
 #[tauri::command]
 pub async fn ai_screen(app: AppHandle, provider: Provider, gemini_model: Option<String>, question: String, mode: String) -> Result<ScreenAnswer, String> {
+    let provider = effective(provider);
     // Nothing to answer with → say so before taking a screenshot.
     if provider == Provider::Local {
         if !crate::brain::ready() {

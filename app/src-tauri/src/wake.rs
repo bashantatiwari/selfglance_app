@@ -48,8 +48,11 @@ const RING: usize = ASR_RATE as usize * 3;
 /// The stretch of audio checked for your voice when the keyword spotter fires (tests).
 #[cfg(test)]
 const WAKE_AUDIO: usize = ASR_RATE as usize * 16 / 10;
-/// Voice match is looser on a follow-up (longer, different words than the enrolment).
-const FOLLOW_UP_SLACK: f32 = 0.85;
+/// Voice match is looser on a follow-up (different words than the enrolment, often short).
+const FOLLOW_UP_SLACK: f32 = 0.75;
+/// …and looser still for the request just after a "Hey Bond" that was already your voice:
+/// the owner's short requests scored 0.32-0.37 against a bar of 0.45 (2026-10-10).
+const AFTER_WAKE_SLACK: f32 = 0.6;
 /// Requests you confirmed were you ("Was that you?" → yes) kept in the voiceprint.
 const MAX_LEARNED: usize = 10;
 /// Turned away by less than this: he asks "Was that you?" instead of staying silent.
@@ -625,7 +628,8 @@ impl Listener {
             return Ok(out);
         }
         // Your voice? The whole stretch: wake word and request together when said in one go.
-        let (you, score, check) = is_you(&trim_silence(&audio), if woke { 1.0 } else { FOLLOW_UP_SLACK })?;
+        let slack = if woke { 1.0 } else if waiting { AFTER_WAKE_SLACK } else { FOLLOW_UP_SLACK };
+        let (you, score, check) = is_you(&trim_silence(&audio), slack)?;
         remember_score(score, you);
         if !you {
             let close = check.filter(|(_, bar)| score >= bar - UNSURE_MARGIN).map(|(voice, _)| Unsure { voice, text: rest, at: Instant::now() });
