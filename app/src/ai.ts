@@ -222,6 +222,9 @@ export interface EnrollStep {
   needed: number;
 }
 
+/** A line in Bond's diagnostics log (logs/bond.log in the app data folder). */
+export const diag = (line: string) => (inTauri ? void invoke("diag_log", { line }).catch(() => {}) : undefined);
+
 export const wakeStatus = () => (inTauri ? invoke<WakeStatus>("wake_status").catch(() => null) : Promise.resolve(null));
 export const wakeInstall = () => invoke<void>("wake_install");
 /** Turn "Hey Bond" on or off; voiceMatch: answer only your voice. */

@@ -199,9 +199,16 @@ impl Voiceprint {
         normalize(&mut centroid);
         // How alike your own samples are sets the bar: below your least typical one, since a
         // request on another day, mood or mic scores lower than the enrolment itself.
-        let worst = samples.iter().map(|s| cosine(s, &centroid)).fold(f32::MAX, f32::min);
-        let threshold = (worst - 0.2).clamp(0.5, 0.7);
+        let threshold = Self::bar(&samples, &centroid);
         Voiceprint { centroid, samples, threshold }
+    }
+
+    /// Your least typical sample, less a margin: a request on another day, mood or mic
+    /// scores lower than the enrolment itself. With 0.2 a real 0.57 from the owner was
+    /// turned away (bar 0.58, 2026-10-10), so 0.25.
+    fn bar(samples: &[Vec<f32>], centroid: &[f32]) -> f32 {
+        let worst = samples.iter().map(|s| cosine(s, centroid)).fold(f32::MAX, f32::min);
+        (worst - 0.25).clamp(0.45, 0.7)
     }
 
     pub fn score(&self, e: &[f32]) -> f32 {
@@ -221,7 +228,11 @@ fn print_file(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn load_print(app: &AppHandle) {
-    let p = print_file(app).and_then(|f| std::fs::read_to_string(f).ok()).and_then(|s| serde_json::from_str::<Voiceprint>(&s).ok());
+    let mut p = print_file(app).and_then(|f| std::fs::read_to_string(f).ok()).and_then(|s| serde_json::from_str::<Voiceprint>(&s).ok());
+    if let Some(p) = p.as_mut() {
+        p.threshold = Voiceprint::bar(&p.samples, &p.centroid);
+    }
+    crate::diag::log(&format!("voiceprint: {}", p.as_ref().map(|p| format!("{} samples, bar {:.2}", p.samples.len(), p.threshold)).unwrap_or("none".into())));
     *PRINT.lock().unwrap() = p;
 }
 
@@ -367,6 +378,7 @@ pub fn wake_status(app: AppHandle) -> WakeStatus {
 pub fn wake_set(app: AppHandle, enabled: bool, voice_match: bool) -> Result<(), String> {
     VOICE_MATCH.store(voice_match, Ordering::SeqCst);
     ENABLED.store(enabled, Ordering::SeqCst);
+    crate::diag::log(&format!("wake_set enabled={enabled} voice_match={voice_match} running={}", RUNNING.load(Ordering::SeqCst)));
     if !enabled {
         return Ok(());
     }
@@ -377,9 +389,12 @@ pub fn wake_set(app: AppHandle, enabled: bool, voice_match: bool) -> Result<(), 
     load_print(&app);
     if !RUNNING.swap(true, Ordering::SeqCst) {
         std::thread::spawn(move || {
+            crate::diag::log("listener: started");
             if let Err(e) = listen(&app) {
+                crate::diag::log(&format!("listener: stopped with error: {e}"));
                 let _ = app.emit("voice-error", format!("“Hey Bond” stopped: {e}"));
             }
+            crate::diag::log("listener: ended");
             RUNNING.store(false, Ordering::SeqCst);
             let _ = app.emit("wake-listening", false);
         });
@@ -466,14 +481,14 @@ impl Listener {
         match &mut self.mode {
             Mode::Waiting => {
                 self.kstream.accept_waveform(ASR_RATE as i32, chunk);
-                let mut woke = false;
+                let mut woke: Option<Vec<f32>> = None;
                 while self.kws.is_ready(&self.kstream) {
                     self.kws.decode(&self.kstream);
-                    if self.kws.get_result(&self.kstream).is_some_and(|r| !r.keyword.is_empty()) {
-                        woke = true;
+                    if let Some(r) = self.kws.get_result(&self.kstream).filter(|r| !r.keyword.is_empty()) {
+                        woke = Some(r.timestamps);
                     }
                 }
-                if woke {
+                if let Some(stamps) = woke {
                     self.kws.reset(&self.kstream);
                     self.kstream = self.kws.create_stream(); // a clean start, so one "hey bond" can't fire twice
                     self.follow_talk = None;
@@ -481,7 +496,10 @@ impl Listener {
                     let wake: Vec<f32> = self.ring.iter().skip(self.ring.len().saturating_sub(WAKE_AUDIO)).copied().collect();
                     // The room's noise from before the wake word: you may still be talking now.
                     let talk = Endpoint::with_floor(noise_floor(self.ring.make_contiguous()));
-                    self.mode = Mode::Request { started: now, talk, wake, audio: Vec::new(), follow_up: false };
+                    // What you said after "bond" so far (in one breath it fires only once you pause).
+                    let ring = self.ring.make_contiguous();
+                    let after: Vec<f32> = ring[keyword_end(ring, &stamps)..].to_vec();
+                    self.mode = Mode::Request { started: now, talk, wake, audio: after, follow_up: false };
                     return Ok(vec![Event::Woke]);
                 }
                 // A follow-up: speech within the window, without the wake word.
@@ -519,9 +537,7 @@ impl Listener {
                 Ok(vec![match (you, spoke) {
                     (false, _) => Event::Rejected(score),
                     (true, false) => Event::Empty,
-                    // With the wake word: it fires just after "bond", when the next word may
-                    // have begun, so the text is read from the wake word on and it's cut after.
-                    (true, true) => Event::Request(if follow_up { audio } else { [wake, audio].concat() }),
+                    (true, true) => Event::Request(audio),
                 }])
             }
         }
@@ -550,21 +566,36 @@ fn listen(app: &AppHandle) -> Result<(), String> {
     .map_err(|e| format!("Couldn't open the microphone: {e}"))?;
     stream.play().map_err(|e| format!("Couldn't start the microphone: {e}"))?;
     let _ = app.emit("wake-listening", true);
+    crate::diag::log(&format!("listener: microphone {:?} at {rate} Hz, {channels} ch", device.description().map(|d| d.name().to_string()).unwrap_or_default()));
 
+    // Every 20 s the log says how much sound arrived and how loud, so a silent or stalled
+    // microphone shows up.
+    let mut beat = (Instant::now(), 0usize, 0.0f32, 0usize);
     while ENABLED.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(40));
+        if beat.0.elapsed() > Duration::from_secs(20) {
+            crate::diag::log(&format!("listener: {:.1} s of sound in the last 20 s, loudest {:.3}, paused {} times", beat.1 as f32 / ASR_RATE as f32, beat.2, beat.3));
+            beat = (Instant::now(), 0, 0.0, 0);
+        }
         let raw = std::mem::take(&mut *buf.lock().unwrap());
         if raw.is_empty() {
             continue;
         }
         let chunk = voice::resample(&raw, rate, ASR_RATE);
+        beat.1 += chunk.len();
+        beat.2 = chunk.iter().fold(beat.2, |m, s| m.max(s.abs()));
         // Push-to-talk or enrolment has the microphone's attention.
         if voice::LISTENING.load(Ordering::SeqCst) || ENROLL_MODE.load(Ordering::SeqCst) {
+            beat.3 += 1;
             listener.pause();
             continue;
         }
         let open = FOLLOW_UNTIL.lock().unwrap().is_some_and(|t| Instant::now() < t);
         for event in listener.push(&chunk, open)? {
+            match &event {
+                Event::Request(a) => crate::diag::log(&format!("listener: request, {:.1} s of audio", a.len() as f32 / ASR_RATE as f32)),
+                e => crate::diag::log(&format!("listener: {e:?}")),
+            }
             match event {
                 Event::Woke | Event::FollowUp => {
                     *FOLLOW_UNTIL.lock().unwrap() = None;
@@ -587,6 +618,7 @@ fn listen(app: &AppHandle) -> Result<(), String> {
                 Event::Request(audio) => {
                     let _ = app.emit("voice-state", "thinking");
                     let text = voice::transcribe(&audio, ASR_RATE).map(|t| strip_wake_word(&t));
+                    crate::diag::log(&format!("listener: heard {text:?}"));
                     let _ = app.emit("voice-state", "idle");
                     match text {
                         Ok(t) => {
@@ -602,6 +634,40 @@ fn listen(app: &AppHandle) -> Result<(), String> {
     }
     drop(stream);
     Ok(())
+}
+
+/// Where "hey bond" ends in `ring` (which ends at the moment it fired). The spotter fires
+/// right after "bond" when you pause, but in one breath ("hey bond open spotify") only at
+/// the next pause, so the end is found from the other side: where your speech started,
+/// plus how long the wake word took (its token times are relative, but their spacing is
+/// right). Never later than 0.2 s before firing: with a pause, that's where the next word
+/// may begin (0.2 s heard 10/10 test requests exactly, 0.3 s+ caught the end of "bond").
+fn keyword_end(ring: &[f32], stamps: &[f32]) -> usize {
+    let frame = ASR_RATE as usize / 50; // 20 ms
+    let latest = ring.len().saturating_sub(ASR_RATE as usize / 5);
+    let (Some(first), Some(last)) = (stamps.first(), stamps.last()) else { return latest };
+    // "hey" starts a little before its first token, "bond" ends a little after its last.
+    let spoken = ((last - first + 0.35).max(0.4) * ASR_RATE as f32) as usize;
+    let rms: Vec<f32> = ring.chunks(frame).map(|c| (c.iter().map(|s| s * s).sum::<f32>() / c.len() as f32).sqrt()).collect();
+    let floor = noise_floor(ring);
+    let loud = |r: f32| r > (floor * 3.0).max(0.01);
+    // Back from the end to the start of this stretch of speech (gaps under 300 ms are inside it).
+    let (mut start, mut gap) = (rms.len(), 0);
+    for i in (0..rms.len()).rev() {
+        if loud(rms[i]) {
+            start = i;
+            gap = 0;
+        } else {
+            gap += 1;
+            if gap > 15 && start < rms.len() {
+                break;
+            }
+        }
+    }
+    if start == rms.len() {
+        return latest;
+    }
+    (start * frame + spoken).min(latest)
 }
 
 /// The room's background level: the quiet end of the last few seconds (20 ms frames).
@@ -658,12 +724,17 @@ mod tests {
         let p = Voiceprint::from_samples(vec![a.clone(), b, c]);
         assert!(p.score(&a) > p.threshold);
         assert!(p.score(&[0.0, 1.0, 0.0]) < p.threshold);
-        assert!((0.5..=0.7).contains(&p.threshold));
+        assert!((0.45..=0.7).contains(&p.threshold));
     }
 
     /// Feeds audio the way the live loop does (40 ms chunks); the sample index where the
     /// wake word fired, if it did.
     fn stream_detect(kws: &sherpa_onnx::KeywordSpotter, audio: &[f32]) -> Option<usize> {
+        stream_detect_stamps(kws, audio).map(|(at, _)| at)
+    }
+
+    /// Like `stream_detect`, with the wake word's token times.
+    fn stream_detect_stamps(kws: &sherpa_onnx::KeywordSpotter, audio: &[f32]) -> Option<(usize, Vec<f32>)> {
         let s = kws.create_stream();
         let chunk = ASR_RATE as usize / 25;
         let padded: Vec<f32> = audio.iter().copied().chain(std::iter::repeat_n(0.0, ASR_RATE as usize)).collect();
@@ -671,8 +742,8 @@ mod tests {
             s.accept_waveform(ASR_RATE as i32, c);
             while kws.is_ready(&s) {
                 kws.decode(&s);
-                if kws.get_result(&s).is_some_and(|r| !r.keyword.is_empty()) {
-                    return Some((i + 1) * chunk);
+                if let Some(r) = kws.get_result(&s).filter(|r| !r.keyword.is_empty()) {
+                    return Some(((i + 1) * chunk, r.timestamps));
                 }
             }
         }
@@ -869,6 +940,198 @@ mod tests {
         }
         let secs = talk.len() as f64 / ASR_RATE as f64;
         println!("waiting: {:.1} ms of work per second of audio ({:.1}% of one core), over {secs:.0} s of speech", t0.elapsed().as_secs_f64() * 1000.0 / secs, t0.elapsed().as_secs_f64() / secs * 100.0);
+    }
+
+    /// The real microphone, the real listener: plays "Hey Bond…" through the speakers and
+    /// prints the sound level and what the listener makes of it.
+    /// cargo test --lib wake::tests::live_mic -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn live_mic() {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        voice::use_dir(installed_dir());
+        // Your voiceprint, so the scores are the ones the app would see.
+        let print_path = PathBuf::from(std::env::var("APPDATA").unwrap()).join("com.selfglance.app").join("voiceprint.json");
+        let print: Option<Voiceprint> = std::fs::read_to_string(&print_path).ok().and_then(|s| serde_json::from_str(&s).ok());
+        println!("voiceprint: {}", print.as_ref().map(|p| format!("bar {:.2}", p.threshold)).unwrap_or("none".into()));
+        *PRINT.lock().unwrap() = print;
+        VOICE_MATCH.store(true, Ordering::SeqCst);
+
+        let host = cpal::default_host();
+        let device = host.default_input_device().unwrap();
+        let supported = device.default_input_config().unwrap();
+        println!("microphone: {:?}, {} Hz, {} channels, {:?}", device.description().map(|d| d.name().to_string()).unwrap_or_default(), supported.sample_rate(), supported.channels(), supported.sample_format());
+        let (rate, channels) = (supported.sample_rate(), supported.channels() as usize);
+        let buf: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = buf.clone();
+        let push = move |mono: Vec<f32>| sink.lock().unwrap().extend(mono);
+        let stream = match supported.sample_format() {
+            cpal::SampleFormat::F32 => device.build_input_stream(supported.config(), move |d: &[f32], _: &_| push(voice::downmix(d, channels, |s| s)), |e| eprintln!("{e}"), None),
+            cpal::SampleFormat::I16 => device.build_input_stream(supported.config(), move |d: &[i16], _: &_| push(voice::downmix(d, channels, |s| s as f32 / 32768.0)), |e| eprintln!("{e}"), None),
+            f => panic!("{f:?}"),
+        }
+        .unwrap();
+        stream.play().unwrap();
+
+        // Bond's voice says it through the speakers, as a person in the room would.
+        let dir = std::env::temp_dir();
+        let lines = ["Hey Bond, what time is it?", "Hey Bond.", "Hey Bond, open Notepad."];
+        for (i, t) in lines.iter().enumerate() {
+            let (x, r) = voice::synthesize(t, 16, 1.0).unwrap();
+            let pcm: Vec<u8> = x.iter().flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes()).collect();
+            std::fs::write(dir.join(format!("bond-live-{i}.wav")), crate::ai::wav(&pcm, r)).unwrap();
+        }
+        let wavs: Vec<PathBuf> = (0..lines.len()).map(|i| dir.join(format!("bond-live-{i}.wav"))).collect();
+        // BOND_PLAY=1: Bond's voice plays them (echo cancellation may hide that); otherwise you talk.
+        let play = std::env::var("BOND_PLAY").is_ok();
+        std::thread::spawn(move || {
+            for w in wavs.into_iter().filter(|_| play) {
+                std::thread::sleep(Duration::from_secs(4));
+                let _ = std::process::Command::new("powershell").args(["-NoProfile", "-c", &format!("(New-Object Media.SoundPlayer '{}').PlaySync()", w.display())]).status();
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        });
+
+        let mut l = Listener::new().unwrap();
+        let start = Instant::now();
+        let mut level = (0.0f32, 0usize);
+        println!("Listening for 40 s: say “Hey Bond, what time is it?” a few times, with pauses.");
+        while start.elapsed() < Duration::from_secs(40) {
+            std::thread::sleep(Duration::from_millis(40));
+            let raw = std::mem::take(&mut *buf.lock().unwrap());
+            if raw.is_empty() {
+                continue;
+            }
+            let chunk = voice::resample(&raw, rate, ASR_RATE);
+            let peak = chunk.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            level = (level.0.max(peak), level.1 + chunk.len());
+            if level.1 >= ASR_RATE as usize {
+                println!("{:>5.1}s  loudest {:.3}", start.elapsed().as_secs_f32(), level.0);
+                level = (0.0, 0);
+            }
+            for e in l.push(&chunk, false).unwrap() {
+                match e {
+                    Event::Request(a) => println!("        → heard “{}”", strip_wake_word(&voice::transcribe(&a, ASR_RATE).unwrap())),
+                    Event::Rejected(s) => println!("        → woke, but not your voice ({s:.2})"),
+                    e => println!("        → {e:?}"),
+                }
+            }
+        }
+        drop(stream);
+    }
+
+    /// Each microphone channel on its own, while Bond's voice plays through the speakers:
+    /// cargo test --lib wake::tests::mic_channels -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn mic_channels() {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        voice::use_dir(installed_dir());
+        let device = cpal::default_host().default_input_device().unwrap();
+        let supported = device.default_input_config().unwrap();
+        let channels = supported.channels() as usize;
+        let raw: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = raw.clone();
+        let stream = device.build_input_stream(supported.config(), move |d: &[f32], _: &_| sink.lock().unwrap().extend_from_slice(d), |e| eprintln!("{e}"), None).unwrap();
+        stream.play().unwrap();
+        let (x, r) = voice::synthesize("Hey Bond, what time is it? I am testing the microphone now.", 16, 1.0).unwrap();
+        let pcm: Vec<u8> = x.iter().flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes()).collect();
+        let w = std::env::temp_dir().join("bond-mic-test.wav");
+        std::fs::write(&w, crate::ai::wav(&pcm, r)).unwrap();
+        std::thread::sleep(Duration::from_millis(800));
+        let _ = std::process::Command::new("powershell").args(["-NoProfile", "-c", &format!("(New-Object Media.SoundPlayer '{}').PlaySync()", w.display())]).status();
+        std::thread::sleep(Duration::from_millis(500));
+        drop(stream);
+        let data = raw.lock().unwrap().clone();
+        let frames: Vec<&[f32]> = data.chunks(channels).collect();
+        let peak = |f: &dyn Fn(&[f32]) -> f32| frames.iter().map(|c| f(c).abs()).fold(0.0f32, f32::max);
+        let rms = |f: &dyn Fn(&[f32]) -> f32| (frames.iter().map(|c| f(c).powi(2)).sum::<f32>() / frames.len() as f32).sqrt();
+        for ch in 0..channels {
+            println!("channel {ch}: peak {:.4}  rms {:.5}", peak(&|c| c[ch]), rms(&|c| c[ch]));
+        }
+        if channels == 2 {
+            println!("average (L+R)/2: peak {:.4}  rms {:.5}", peak(&|c| (c[0] + c[1]) / 2.0), rms(&|c| (c[0] + c[1]) / 2.0));
+            println!("difference (L-R)/2: peak {:.4}  rms {:.5}", peak(&|c| (c[0] - c[1]) / 2.0), rms(&|c| (c[0] - c[1]) / 2.0));
+        }
+    }
+
+    /// What the spotter's timestamps mean: cargo test --lib wake::tests::timestamps -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn timestamps() {
+        voice::use_dir(installed_dir());
+        let kws = spotter().unwrap();
+        for lead in [0.5f32, 2.0] {
+            let (x, rate) = voice::synthesize("Hey Bond, open Spotify.", 16, 1.0).unwrap();
+            let speech = voice::resample(&x, rate, ASR_RATE);
+            let audio: Vec<f32> = std::iter::repeat_n(0.0, (lead * ASR_RATE as f32) as usize).chain(speech).chain(std::iter::repeat_n(0.0, ASR_RATE as usize)).collect();
+            let s = kws.create_stream();
+            let mut fed = 0;
+            for c in audio.chunks(640) {
+                s.accept_waveform(ASR_RATE as i32, c);
+                fed += c.len();
+                let mut hit = None;
+                while kws.is_ready(&s) {
+                    kws.decode(&s);
+                    if let Some(r) = kws.get_result(&s).filter(|r| !r.keyword.is_empty()) {
+                        hit = Some(r);
+                    }
+                }
+                if let Some(r) = hit {
+                    println!("lead {lead}s: fired at {:.2}s fed; start_time {:.2}; tokens {:?} at {:?}", fed as f32 / ASR_RATE as f32, r.start_time, r.tokens_arr, r.timestamps);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// How much audio from just before the wake word fired to keep for the request, so the
+    /// first word isn't lost and "bond" isn't heard: cargo test --lib wake::tests::lead_in -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn lead_in() {
+        voice::use_dir(installed_dir());
+        let kws = spotter().unwrap();
+        let phrases = ["Hey Bond, open Spotify.", "Hey Bond open Spotify", "Hey Bond, turn the volume down.", "Hey Bond what time is it", "Hey Bond, lock my laptop."];
+        for (sid, name) in [(16, "am_michael"), (2, "af_bella"), (26, "bm_george")] {
+            for p in phrases {
+                let (x, rate) = voice::synthesize(p, sid, 1.0).unwrap();
+                let audio: Vec<f32> = std::iter::repeat_n(0.0, 8000).chain(voice::resample(&x, rate, ASR_RATE)).chain(std::iter::repeat_n(0.0, 8000)).collect();
+                let padded: Vec<f32> = audio.iter().copied().chain(std::iter::repeat_n(0.0, ASR_RATE as usize)).collect();
+                let Some((at, stamps)) = stream_detect_stamps(&kws, &audio) else { println!("{name}: missed {p}"); continue };
+                let ring = &padded[at.saturating_sub(RING)..at];
+                let cut = keyword_end(ring, &stamps);
+                let heard = strip_wake_word(&voice::transcribe(&padded[at - ring.len() + cut..], ASR_RATE).unwrap());
+                println!("{name:<10} {p:<34} fired {:.2}s after the start, cut at -{:.2}s: “{heard}”", at as f32 / ASR_RATE as f32, (ring.len() - cut) as f32 / ASR_RATE as f32);
+            }
+        }
+    }
+
+    /// cargo test --lib wake::tests::fire_time -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn fire_time() {
+        voice::use_dir(installed_dir());
+        VOICE_MATCH.store(false, Ordering::SeqCst);
+        let (x, rate) = voice::synthesize("Hey Bond, open Spotify.", 16, 1.0).unwrap();
+        let speech = voice::resample(&x, rate, ASR_RATE);
+        println!("speech is {:.2}s long", speech.len() as f32 / ASR_RATE as f32);
+        let room = |n: usize| -> Vec<f32> { (0..n).map(|i| (((i * 7919) % 1000) as f32 / 1000.0 - 0.5) * 0.003).collect() };
+        for (label, before) in [("silence", vec![0.0; 24_000]), ("room noise", room(24_000))] {
+            let audio: Vec<f32> = before.iter().copied().chain(speech.iter().copied()).chain(room(32_000)).collect();
+            let mut l = Listener::new().unwrap();
+            let mut fed = 0;
+            for c in audio.chunks(640) {
+                fed += c.len();
+                for e in l.push(c, false).unwrap() {
+                    match e {
+                        Event::Woke => println!("{label}: fired {:.2}s into the speech; request starts with {:.2}s already said", (fed - before.len()) as f32 / ASR_RATE as f32, match &l.mode { Mode::Request { audio, .. } => audio.len() as f32 / ASR_RATE as f32, _ => 0.0 }),
+                        Event::Request(a) => println!("{label}: request {:.2}s → “{}”", a.len() as f32 / ASR_RATE as f32, voice::transcribe(&a, ASR_RATE).unwrap()),
+                        e => println!("{label}: {e:?}"),
+                    }
+                }
+            }
+        }
     }
 
     #[test]

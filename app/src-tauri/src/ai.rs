@@ -85,6 +85,7 @@ pub fn ai_has_key(provider: Provider) -> bool {
 }
 
 /// One image (base64 JPEG) to send along with the prompt.
+#[derive(Clone)]
 struct Image {
     b64: String,
 }
@@ -96,9 +97,32 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
+/// A cloud brain without a key, or one that fails (offline, rate limit, a bad key), falls
+/// back to Bond's own brain when it's downloaded, so you get an answer instead of an error.
+async fn complete(
+    provider: Provider,
+    gemini_model: Option<String>,
+    system: &str,
+    prompt: &str,
+    image: Option<Image>,
+    effort: &str,
+    schema: Option<&Value>,
+) -> Result<String, String> {
+    if provider == Provider::Local || !crate::brain::ready() {
+        return complete_with(provider, gemini_model, system, prompt, image, effort, schema).await;
+    }
+    match complete_with(provider, gemini_model, system, prompt, image.clone(), effort, schema).await {
+        Ok(reply) => Ok(reply),
+        Err(e) => {
+            crate::diag::log(&format!("cloud brain failed ({e}); answering with the local brain"));
+            complete_with(Provider::Local, None, system, prompt, image, effort, schema).await
+        }
+    }
+}
+
 /// `schema` (JSON Schema) makes the local brain's reply match it exactly; the cloud models
 /// follow the format from the prompt alone.
-async fn complete(
+async fn complete_with(
     provider: Provider,
     gemini_model: Option<String>,
     system: &str,
@@ -640,7 +664,8 @@ pub async fn ai_screen(app: AppHandle, provider: Provider, gemini_model: Option<
 
     if mode == "task" {
         let schema = screen_task_schema();
-        let reply = complete(provider, gemini_model, &screen_task_system(&app, normalized), &prompt, image, "medium", Some(&schema)).await?;
+        // No fallback here: click positions are read in the answering brain's own coordinates.
+        let reply = complete_with(provider, gemini_model, &screen_task_system(&app, normalized), &prompt, image, "medium", Some(&schema)).await?;
         let v = json_in(&reply)?;
         let answer = v["reply"].as_str().unwrap_or("").trim().to_string();
         let result = match actions_in(&v) {

@@ -62,6 +62,7 @@ import {
   voiceStatus,
   wakeFollowUp,
   wakeSet,
+  diag,
   noticeAllowed,
   noticeEnable,
   noticeHabits,
@@ -451,7 +452,10 @@ export default function App() {
       onTauriEvent<null>("ask-open", () => openAsk()),
       // Talking to him: listening → understanding → the same path as a typed request.
       onTauriEvent<string>("voice-state", (state) => {
+        diag(`voice-state ${state} (card: ${askRef.current?.step ?? "none"}, on screen: ${!document.hidden})`);
         if (state === "listening") {
+          // He may be out of the way (coding, a meeting): you called him, so he comes in.
+          void bringIn();
           stopSpeaking();
           clearTimeout(askTimer.current);
           setAsk(null);
@@ -465,6 +469,7 @@ export default function App() {
       onTauriEvent<string>("voice-heard", (text) => {
         setPop(null);
         const said = text.trim();
+        diag(`voice-heard “${said}”`);
         if (!said) return showPop("I didn't catch that", 2200, true);
         heardRef.current = true;
         // Answering his question out loud: "yes" / "no", and "delete" for the last check.
@@ -482,6 +487,7 @@ export default function App() {
       }),
       // "Hey Bond" and then nothing: he asks, and listens for the answer.
       onTauriEvent<null>("wake-empty", () => {
+        diag("wake-empty: saying Yes?");
         setPop(null);
         heardRef.current = true;
         stageRef.current?.play("wave", true);
@@ -489,6 +495,7 @@ export default function App() {
         talkBack("Yes?", true);
       }),
       onTauriEvent<string>("voice-error", (e) => {
+        diag(`voice-error ${e}`);
         setPop(null);
         setAsk({ step: "error", question: "", error: e });
         autoClose();

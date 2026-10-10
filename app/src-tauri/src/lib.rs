@@ -24,6 +24,7 @@
 // Everything visual lives in the React + Three.js frontend.
 
 mod agent;
+mod diag;
 mod ai;
 mod brain;
 mod experience;
@@ -418,6 +419,7 @@ pub fn run() {
             voice::voice_install,
             voice::voice_say,
             voice::voice_listen,
+            diag::diag_log,
             wake::wake_install,
             wake::wake_status,
             wake::wake_set,
@@ -438,6 +440,8 @@ pub fn run() {
             build_tray(app.handle())?;
             enable_autostart_first_run(app.handle());
             agent::preload_apps();
+            diag::init(app.handle());
+            diag::log("SelfGlance started");
             brain::init(app.handle());
             experience::init(app.handle());
             notice::spawn_clipboard_watch(app.handle().clone());
