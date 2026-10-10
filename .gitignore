@@ -1,7 +1,1 @@
-myenv/
-__pycache__/
-*.pyc
-.venv/
 node_modules/
-backend/db.sqlite3
-src/screenshots/
