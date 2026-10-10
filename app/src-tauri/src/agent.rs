@@ -5,7 +5,7 @@
 //   open_app        start an installed app by name (Windows: the Start menu's app list)
 //   open_url        a web page in the default browser (http/https only)
 //   web_search      a Google search
-//   open_folder     Downloads / Documents / Desktop / Pictures / Music / Videos / Home
+//   open_folder     Downloads / Documents / Desktop / Pictures / Screenshots / Music / Videos / Home
 //   media           play/pause, next, previous, volume up/down, mute
 //   set_volume      an exact volume, 0-100%
 //   show_desktop    minimise everything
@@ -13,6 +13,7 @@
 //   set_wallpaper   a solid-colour desktop background ("black", "#1e1e2e")
 //   system_status   battery, memory, CPU, disks
 //   top_processes   what is using the CPU and memory
+//   free_memory     unload Bond's own models, then list what holds the most memory
 //   clipboard_get / clipboard_set
 //   remind / list_reminders                   (reminders.rs)
 //   find_files      search for files by name (read-only)
@@ -24,7 +25,8 @@
 // Need your approval first (agent_approve / agent_deny):
 //   run_command     any command in PowerShell (Windows) or sh: you see the exact command
 //   kill_process    end a program: you see what it is and how many processes
-//   delete          files/folders: you see every path and its size, and confirm TWICE.
+//   delete          files/folders: you see every path and its size (and a preview of the
+//                   pictures), and confirm TWICE.
 //                   They go to the Recycle Bin unless "permanent" was asked for.
 //                   A command that deletes things (rm, del, Remove-Item…) also needs two yeses.
 
@@ -57,6 +59,7 @@ pub enum Action {
     SetWallpaper { color: String },
     SystemStatus,
     TopProcesses,
+    FreeMemory,
     ClipboardGet,
     ClipboardSet { text: String },
     Remind {
@@ -138,6 +141,15 @@ pub struct Approval {
     /// Why Bond wants to do it, or what to know before saying yes.
     pub why: String,
     pub button: String,
+    /// Small pictures of the images about to be deleted, so you see what goes.
+    pub previews: Vec<Preview>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct Preview {
+    pub name: String,
+    /// A JPEG thumbnail, base64.
+    pub jpeg: String,
 }
 
 /// What an approval unlocks: already resolved, so the yes applies to exactly what was shown.
@@ -233,7 +245,7 @@ async fn proceed(app: &AppHandle, mut out: Outcome, actions: Vec<Action>, shot: 
                 tokio_sleep(settle).await;
             }
             Ok(Err(g)) => {
-                let approval = Approval { id: new_id(), kind: g.kind, step: 1, steps: g.steps, title: g.title, items: g.items, why: g.why, button: g.button };
+                let approval = Approval { id: new_id(), kind: g.kind, step: 1, steps: g.steps, title: g.title, items: g.items, why: g.why, button: g.button, previews: g.previews };
                 out.pending = Some(approval.clone());
                 park(Pending { approval, task: g.task, rest: queue.into(), shot, created: Instant::now() });
                 return Ok(out);
@@ -297,6 +309,7 @@ struct Gate {
     items: Vec<String>,
     why: String,
     button: String,
+    previews: Vec<Preview>,
     task: Approved,
 }
 
@@ -316,6 +329,7 @@ fn gate(app: &AppHandle, action: &Action) -> Result<Option<Gate>, String> {
                 items: vec![command.clone()],
                 why: why.trim().to_string(),
                 button: "Run it".into(),
+                previews: Vec::new(),
                 task: Approved::Command { command, home: app.path().home_dir().map_err(|e| e.to_string())? },
             }
         }
@@ -328,13 +342,21 @@ fn gate(app: &AppHandle, action: &Action) -> Result<Option<Gate>, String> {
                 items: vec![found.summary],
                 why: String::new(),
                 button: "End it".into(),
+                previews: Vec::new(),
                 task: Approved::Kill { pids: found.pids, name: name.trim().to_string() },
             }
         }
         Action::Delete { paths, permanent } => {
             let resolved = resolve_paths(app, paths)?;
             let n = resolved.len();
-            let what = if n == 1 { "this".to_string() } else { format!("these {n} items") };
+            let bytes: u64 = resolved.iter().filter(|p| p.is_file()).filter_map(|p| p.metadata().ok()).map(|m| m.len()).sum();
+            let mut what = if n == 1 { "this".to_string() } else { format!("these {n} items") };
+            if n > 1 && bytes > 0 {
+                what = format!("{what} ({})", size_text(bytes));
+            }
+            if let Some(dir) = common_parent(&resolved) {
+                what = format!("{what} from {}", dir.display());
+            }
             Gate {
                 kind: "delete",
                 steps: 2,
@@ -342,6 +364,7 @@ fn gate(app: &AppHandle, action: &Action) -> Result<Option<Gate>, String> {
                 items: resolved.iter().map(|p| describe_path(p)).collect(),
                 why: if *permanent { "This can't be undone.".into() } else { "They go to the Recycle Bin, so you can still restore them.".into() },
                 button: "Yes, delete".into(),
+                previews: previews(&resolved),
                 task: Approved::Delete { paths: resolved, permanent: *permanent },
             }
         }
@@ -476,6 +499,7 @@ fn resolve_paths(app: &AppHandle, raw: &[String]) -> Result<Vec<PathBuf>, String
             let mut hits: Vec<PathBuf> = std::fs::read_dir(dir)
                 .map_err(|_| format!("There's no folder {}.", dir.display()))?
                 .flatten()
+                .filter(|e| !is_hidden_helper(&e.file_name().to_string_lossy()))
                 .filter(|e| wildcard(&name.to_lowercase(), &e.file_name().to_string_lossy().to_lowercase()))
                 .map(|e| e.path())
                 .collect();
@@ -507,9 +531,11 @@ fn resolve_paths(app: &AppHandle, raw: &[String]) -> Result<Vec<PathBuf>, String
 
 fn expand(app: &AppHandle, home: &Path, s: &str) -> PathBuf {
     let s = s.replace("%USERPROFILE%", &home.to_string_lossy()).replace("$HOME", &home.to_string_lossy());
-    if let Some(rest) = s.strip_prefix("~") {
-        return home.join(rest.trim_start_matches(['/', '\\']));
-    }
+    // "~/Pictures/x" → the real Pictures folder below, which may be in OneDrive, not home.
+    let s = match s.strip_prefix("~") {
+        Some(rest) => rest.trim_start_matches(['/', '\\']).to_string(),
+        None => s,
+    };
     let p = PathBuf::from(&s);
     if p.is_absolute() {
         return p;
@@ -530,6 +556,7 @@ fn refuse_protected(app: &AppHandle, home: &Path, p: &Path) -> Result<(), String
     let mut protected: Vec<PathBuf> = vec![home.to_path_buf()];
     let ap = app.path();
     protected.extend([ap.download_dir(), ap.document_dir(), ap.desktop_dir(), ap.picture_dir(), ap.audio_dir(), ap.video_dir()].into_iter().flatten());
+    protected.extend(folder(app, "screenshots").ok().map(|(_, d)| d));
     if c.parent().is_none() || protected.iter().any(|x| canon(x) == c) {
         return Err(format!("Bond won't delete {} itself — name the files inside it.", p.display()));
     }
@@ -587,6 +614,41 @@ fn modified_text(p: &Path) -> String {
 }
 
 /// "C:\…\offer.pdf — 2.3 MB, 3 Oct 2026" or "C:\…\old — folder, 120 files, 1.4 GB".
+/// The one folder everything is in, when there are several items in it.
+fn common_parent(paths: &[PathBuf]) -> Option<&Path> {
+    let first = paths.first()?.parent()?;
+    (paths.len() > 1 && paths.iter().all(|p| p.parent() == Some(first))).then_some(first)
+}
+
+const PREVIEW_MAX: usize = 12;
+const PREVIEW_PX: u32 = 160;
+
+/// Thumbnails of the first few pictures in the list (other files have none).
+fn previews(paths: &[PathBuf]) -> Vec<Preview> {
+    use base64::Engine;
+    let is_image = |p: &&PathBuf| {
+        let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        p.is_file() && matches!(ext.as_str(), "png" | "jpg" | "jpeg")
+    };
+    paths
+        .iter()
+        .filter(is_image)
+        .take(PREVIEW_MAX)
+        .filter_map(|p| {
+            let img = image::open(p).ok()?.thumbnail(PREVIEW_PX, PREVIEW_PX).to_rgb8();
+            let mut jpeg = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 70).encode_image(&img).ok()?;
+            Some(Preview { name: p.file_name()?.to_string_lossy().to_string(), jpeg: base64::engine::general_purpose::STANDARD.encode(jpeg) })
+        })
+        .collect()
+}
+
+/// Files Windows keeps in folders for itself, never meant by "everything in there".
+fn is_hidden_helper(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.starts_with('.') || n == "desktop.ini" || n == "thumbs.db"
+}
+
 fn describe_path(p: &Path) -> String {
     if p.is_dir() {
         let (mut files, mut bytes, mut seen) = (0u64, 0u64, 0u32);
@@ -748,6 +810,20 @@ fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Resul
         }
         Action::SystemStatus => Ok(Effect::info(crate::system::status())),
         Action::TopProcesses => Ok(Effect::info(crate::system::top_processes())),
+        Action::FreeMemory => {
+            let before = crate::system::available_memory();
+            let mut unloaded = Vec::new();
+            if crate::brain::running_pid().is_some() {
+                crate::brain::brain_stop();
+                unloaded.push("brain");
+            }
+            if crate::voice::unload() {
+                unloaded.push("voice");
+            }
+            std::thread::sleep(Duration::from_millis(800));
+            let freed = crate::system::available_memory().checked_sub(before);
+            Ok(Effect::info(crate::system::free_memory_report(freed, &unloaded)))
+        }
         Action::ClipboardGet => Ok(Effect::info(crate::system::clipboard_get()?)),
         Action::ClipboardSet { text } => {
             crate::system::clipboard_set(&text)?;
@@ -885,6 +961,8 @@ fn folder(app: &AppHandle, name: &str) -> Result<(String, std::path::PathBuf), S
         "documents" | "document" | "docs" => ("Documents", p.document_dir()),
         "desktop" => ("Desktop", p.desktop_dir()),
         "pictures" | "photos" | "images" => ("Pictures", p.picture_dir()),
+        // Where Windows saves Win+PrtScn and Snipping Tool shots.
+        "screenshots" | "screenshot" => ("Screenshots", p.picture_dir().map(|d| d.join("Screenshots"))),
         "music" => ("Music", p.audio_dir()),
         "videos" | "video" => ("Videos", p.video_dir()),
         "home" | "user" => ("your home folder", p.home_dir()),
@@ -1207,6 +1285,23 @@ mod tests {
         assert!(!deletes_things("Get-ChildItem ~/Downloads"));
         assert!(!deletes_things("ipconfig /all"));
         assert!(!deletes_things("git remote -v"));
+    }
+
+    #[test]
+    fn delete_card_shows_pictures_and_skips_windows_own_files() {
+        let dir = std::env::temp_dir().join(format!("bond-preview-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shot = dir.join("Screenshot 1.png");
+        image::RgbImage::from_pixel(1920, 1080, image::Rgb([30, 90, 200])).save(&shot).unwrap();
+        let note = dir.join("notes.txt");
+        std::fs::write(&note, "hi").unwrap();
+        let p = previews(&[shot.clone(), note.clone()]);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].name, "Screenshot 1.png");
+        assert!(p[0].jpeg.len() < 20_000, "thumbnail should be small, was {} bytes", p[0].jpeg.len());
+        assert_eq!(common_parent(&[shot, note]), Some(dir.as_path()));
+        assert!(is_hidden_helper("desktop.ini") && is_hidden_helper("Thumbs.db") && !is_hidden_helper("Screenshot.png"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

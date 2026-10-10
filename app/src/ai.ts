@@ -21,6 +21,8 @@ export interface Approval {
   items: string[];
   why: string;
   button: string;
+  /** Thumbnails of the pictures about to be deleted (base64 JPEG). */
+  previews: { name: string; jpeg: string }[];
 }
 
 /** What a plan of actions did: short lines, longer text to read, maybe a pending approval. */
@@ -52,6 +54,8 @@ export interface Reminder {
   text: string;
   /** Due time, ms epoch. */
   at: number;
+  /** A dashboard page the card offers to open ("journal"). */
+  open?: "journal";
 }
 
 const opts = () => {

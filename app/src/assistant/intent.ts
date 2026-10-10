@@ -8,6 +8,7 @@
 //   "remind me in 45 minutes to stretch", "remind me at 5pm to call mom", "timer 10 min",
 //   "what are my reminders"             → reminders
 //   "how's my battery", "why is my laptop slow", "close chrome" → the laptop itself
+//   "delete my screenshots"             → delete, after showing them and asking twice
 //   "what's on my clipboard", "copy hello to clipboard", "summarize my clipboard"
 //   "$ ipconfig", "cmd: git status"     → run a command (you approve first)
 //   "what's on my screen?"              → look at the screen and explain
@@ -25,12 +26,14 @@ export type Action =
   | { do: "set_wallpaper"; color: string }
   | { do: "system_status" }
   | { do: "top_processes" }
+  | { do: "free_memory" }
   | { do: "clipboard_get" }
   | { do: "clipboard_set"; text: string }
   | { do: "remind"; text: string; in_minutes?: number; at?: string }
   | { do: "list_reminders" }
   | { do: "run_command"; command: string; why: string }
-  | { do: "kill_process"; name: string };
+  | { do: "kill_process"; name: string }
+  | { do: "delete"; paths: string[]; permanent?: boolean };
 
 export type ScreenMode = "explain" | "help" | "task";
 
@@ -42,7 +45,7 @@ export type Intent =
   | { kind: "clipboard" }
   | null;
 
-const FOLDERS = /^(?:my\s+|the\s+)?(downloads?|documents?|docs|desktop|pictures|photos|music|videos?)(?:\s+folder)?$/i;
+const FOLDERS = /^(?:my\s+|the\s+)?(downloads?|documents?|docs|desktop|pictures|photos|screenshots?|music|videos?)(?:\s+folder)?$/i;
 const URLISH = /^(?:https?:\/\/)?[\w-]+(\.[\w-]+)+(\/\S*)?$/i;
 const CLOCK = /^\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?$/i;
 
@@ -107,6 +110,10 @@ export function understand(input: string): Intent {
   if (r) return { kind: "do", actions: [r] };
   if (/^(?:what are |show(?: me)? |list |what'?s )?(?:my |all )?(?:upcoming )?reminders\??$|^what reminders do i have\??$/i.test(t)) return { kind: "do", actions: [{ do: "list_reminders" }] };
 
+  // Clearing out screenshots: Bond shows them (with previews) and asks twice before anything goes.
+  if (/^(?:delete|remove|clear|clean up|get rid of|empty)\s+(?:all\s+)?(?:of\s+)?(?:my\s+|the\s+)?screen\s?shots?(?:\s+folder)?(?:\s+(?:images?|pictures?|files?))?$/i.test(t))
+    return { kind: "do", actions: [{ do: "delete", paths: ["screenshots/*"] }] };
+
   // A command, word for word (the raw text: a trailing "." can matter in a command).
   if ((m = raw.match(/^(?:\$|>|cmd:|command:|powershell:|terminal:|shell:|run (?:the )?command:?|execute:?)\s*(.+)$/is))) return { kind: "do", actions: [{ do: "run_command", command: m[1].trim(), why: "You asked me to run it." }] };
 
@@ -128,6 +135,8 @@ export function understand(input: string): Intent {
   if (/^lock (my |the )?(screen|computer|laptop|pc)$/i.test(t)) return { kind: "do", actions: [{ do: "lock_screen" }] };
 
   // The laptop itself.
+  if (/^(?:please\s+)?(?:free|clear|save|release)\s+(?:up\s+)?(?:some\s+)?(?:my\s+)?(?:ram|memory)(?:\s+usage)?\??$|^(?:reduce|lower|cut)\s+(?:my\s+)?(?:ram|memory)(?:\s+usage)?\??$/i.test(t))
+    return { kind: "do", actions: [{ do: "free_memory" }] };
   if (/\bwhy is (my |the )?(laptop|pc|computer|it|everything) (so |running )?(slow|hot|lagging|laggy|loud|hanging)\b|\bwhat'?s (using|eating|hogging|slowing)\b|\b(top|heavy|busy) (processes|apps|programs)\b|^what'?s (running|slow)\??$/i.test(t))
     return { kind: "do", actions: [{ do: "top_processes" }] };
   if (/^(how'?s|how is|check|show( me)?|what'?s|what is)( my| the)? (battery|laptop|pc|computer|system)( status| health| doing| life| level| percentage)?\??$|^(battery|system status|status)\??$|^how much (battery|ram|memory|disk space|storage|space)( do i have| is)?( left| free| used)?\??$|^(how much )?(free )?(disk|storage) space( left| do i have)?\??$/i.test(t))

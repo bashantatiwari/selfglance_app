@@ -72,6 +72,7 @@ export interface CardActions {
   /** The confirmation box wants the keyboard. */
   onWantFocus: () => void;
   onSnooze: (r: Reminder, minutes: number) => void;
+  onOpen: (page: "journal") => void;
   /** 👍 / 👎 on an answer, or null when there's nothing to rate. */
   onRate: ((value: Feedback) => void) | null;
   /** A suggestion he made: take it, not now, or never again. */
@@ -102,9 +103,15 @@ export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskStat
             <button className="btn-ghost" onClick={() => props.onSnooze(s.reminder, 10)}>
               Snooze 10 min
             </button>
-            <button className="btn-primary" onClick={props.onClose}>
-              Done
-            </button>
+            {s.reminder.open ? (
+              <button className="btn-primary" onClick={() => props.onOpen(s.reminder.open!)}>
+                Write it now
+              </button>
+            ) : (
+              <button className="btn-primary" onClick={props.onClose}>
+                Done
+              </button>
+            )}
           </div>
         </>
       )}
@@ -202,6 +209,14 @@ function ApproveBody(props: { approval: Approval; done: string[] } & CardActions
       )}
       <p className="q">{a.steps > 1 ? `Needs your OK · check ${a.step} of ${a.steps}` : "Needs your OK"}</p>
       <p className="a approve-title">{second ? "Are you sure? Last check." : a.title}</p>
+      {a.previews.length > 0 && (
+        <div className="previews" aria-label="Pictures that will be deleted">
+          {a.previews.map((p) => (
+            <img key={p.name} src={`data:image/jpeg;base64,${p.jpeg}`} alt={p.name} title={p.name} />
+          ))}
+          {a.items.length > a.previews.length && <span className="more">+{a.items.length - a.previews.length} more, listed below</span>}
+        </div>
+      )}
       <pre className={`out items ${a.kind}`}>{a.items.join("\n")}</pre>
       {a.why && <p className="why">{a.why}</p>}
       <form

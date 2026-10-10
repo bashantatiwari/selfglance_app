@@ -1,64 +1,85 @@
-// Journal: at the end of the day, type about your whole day (laptop or not) and save it.
-// One entry per day, stored locally. Past entries are listed below, newest first.
+// Journal: at the end of the day, type about your whole day (laptop or not). It saves as
+// you type, one file per day (journal.rs). Past entries are listed below, newest first.
 // "log …" to Bond appends a timestamped line; an open Journal picks it up right away.
 
-import { useEffect, useMemo, useState } from "react";
-import { dayKey, JOURNAL_PREFIX as PREFIX } from "../assistant/notes";
+import { useEffect, useRef, useState } from "react";
+import { dayKey, journalGet, journalList, journalSet } from "../assistant/notes";
 import { onTauriEvent } from "../platform";
 
-function read(key: string): string {
-  try {
-    return localStorage.getItem(PREFIX + key) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function allEntries(): { day: string; text: string }[] {
-  const out: { day: string; text: string }[] = [];
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k?.startsWith(PREFIX)) out.push({ day: k.slice(PREFIX.length), text: localStorage.getItem(k) ?? "" });
-    }
-  } catch {
-    /* storage unavailable */
-  }
-  return out.filter((e) => e.text.trim()).sort((a, b) => b.day.localeCompare(a.day));
-}
+/** Save this long after the last keystroke. */
+const SAVE_AFTER_MS = 700;
 
 const pretty = (day: string) =>
   new Date(`${day}T12:00:00`).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 
+type SaveState = "idle" | "saving" | "saved" | "error";
+
 export default function Journal() {
   const today = dayKey();
-  const [text, setText] = useState(() => read(today));
-  const [savedText, setSavedText] = useState(() => read(today));
-  const [version, setVersion] = useState(0);
-  const past = useMemo(() => allEntries().filter((e) => e.day !== today), [version, today]);
-  const dirty = text !== savedText;
+  const [text, setText] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [past, setPast] = useState<{ day: string; text: string }[]>([]);
+  const [state, setState] = useState<SaveState>("idle");
+  const savedRef = useRef("");
+  const textRef = useRef("");
+  textRef.current = text;
 
-  // Bond logged something: take it in (unless you're mid-edit, which Save would overwrite).
+  const refreshPast = () => void journalList().then((all) => setPast(all.filter((e) => e.day !== today))).catch(() => {});
+
   useEffect(() => {
-    const un = onTauriEvent<null>("notes-changed", () => {
-      const fresh = read(today);
-      setSavedText(fresh);
-      setText((t) => (t === savedText ? fresh : t));
-      setVersion((v) => v + 1);
-    });
-    return () => void un.then((u) => u());
-  }, [today, savedText]);
+    void journalGet(today)
+      .then((t) => {
+        savedRef.current = t;
+        setText(t);
+      })
+      .catch(() => setState("error"))
+      .finally(() => setLoaded(true));
+    refreshPast();
+  }, [today]);
 
-  const save = () => {
+  const save = async (value: string) => {
+    if (value === savedRef.current) return;
+    setState("saving");
     try {
-      if (text.trim()) localStorage.setItem(PREFIX + today, text);
-      else localStorage.removeItem(PREFIX + today);
-      setSavedText(text);
-      setVersion((v) => v + 1);
+      await journalSet(today, value);
+      savedRef.current = value;
+      setState("saved");
     } catch {
-      /* storage full or unavailable */
+      setState("error");
     }
   };
+
+  // Save shortly after you stop typing.
+  useEffect(() => {
+    if (!loaded || text === savedRef.current) return;
+    const t = window.setTimeout(() => void save(text), SAVE_AFTER_MS);
+    return () => clearTimeout(t);
+  }, [text, loaded]);
+
+  // Leaving the page (or hiding the window) saves whatever is left.
+  useEffect(() => {
+    const flush = () => void save(textRef.current);
+    window.addEventListener("blur", flush);
+    return () => {
+      window.removeEventListener("blur", flush);
+      flush();
+    };
+  }, [loaded]);
+
+  // Bond logged something: take it in, keeping anything you typed that isn't saved yet.
+  useEffect(() => {
+    const un = onTauriEvent<null>("notes-changed", async () => {
+      const fresh = await journalGet(today).catch(() => null);
+      if (fresh === null) return;
+      const mine = textRef.current;
+      const unsaved = mine !== savedRef.current;
+      savedRef.current = fresh;
+      setText(unsaved && !fresh.includes(mine.trim()) ? `${fresh.trimEnd()}\n${mine}` : fresh);
+    });
+    return () => void un.then((u) => u());
+  }, [today]);
+
+  const status = { idle: "", saving: "Saving…", saved: "✓ Saved", error: "Couldn't save — your text is still here" }[state];
 
   return (
     <>
@@ -73,20 +94,14 @@ export default function Journal() {
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-              e.preventDefault();
-              save();
-            }
-          }}
+          disabled={!loaded}
           placeholder="How did today go? What did you do, on and off the laptop?"
           aria-label="Today's journal entry"
         />
         <div className="journal-actions">
-          <span className="muted small">{dirty ? "Not saved yet · Ctrl+S" : savedText.trim() ? "✓ Saved" : ""}</span>
-          <button className="btn" onClick={save} disabled={!dirty}>
-            Save
-          </button>
+          <span className="muted small" role="status">
+            {status || "Saves as you type"}
+          </span>
         </div>
       </section>
 

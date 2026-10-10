@@ -111,6 +111,11 @@ function Tooltip() {
 // --- Shell -----------------------------------------------------------------------------
 export default function Dashboard() {
   const [page, setPage] = useState<Page>("today");
+  // Bond can open the dashboard on a page ("time for your journal").
+  useEffect(() => {
+    const un = onTauriEvent<Page>("dashboard-page", (p) => PAGES.some((n) => n.id === p) && setPage(p));
+    return () => void un.then((u) => u());
+  }, []);
   const [offset, setOffset] = useState(0);
   const today = useSegments(0);
   const viewed = useSegments(offset);
@@ -693,6 +698,8 @@ function SettingsPage() {
         />
         <Toggle label="Read his answers aloud" checked={s.speakAnswers} onChange={(v) => update({ speakAnswers: v })} />
         <Toggle label="Warn me when the battery is low" hint="At 15% and again at 7%, while unplugged." checked={s.batteryAlert} onChange={(v) => update({ batteryAlert: v })} />
+        <Toggle label="Remind me to write my journal" hint="Once each evening, if today's entry is still empty and you're at the laptop." checked={s.journalNudge} onChange={(v) => update({ journalNudge: v })} />
+        <Slider label="Journal from" unit=":00" min={16} max={23} step={1} value={s.journalAt} disabled={!s.journalNudge} onChange={(v) => update({ journalAt: v })} />
         <Slider label="Answers close after" unit="seconds" min={4} max={60} step={2} value={s.answerSeconds} onChange={(v) => update({ answerSeconds: v })} />
         <Autostart />
       </Group>

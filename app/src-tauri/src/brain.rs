@@ -232,6 +232,11 @@ pub async fn brain_warm() -> Result<(), String> {
     port().await.map(|_| ())
 }
 
+/// The engine's process id while it's running.
+pub fn running_pid() -> Option<u32> {
+    SERVER.lock().unwrap().as_ref().map(|s| s.child.id())
+}
+
 /// Stop the engine now and free the GPU.
 #[tauri::command]
 pub fn brain_stop() {

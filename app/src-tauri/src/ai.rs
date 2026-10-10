@@ -319,7 +319,7 @@ const ACTIONS_DOC: &str = r#"Actions (JSON objects, run in order, at most 8):
 {"do":"open_app","name":"Spotify"}            start an installed app by its name
 {"do":"open_url","url":"https://..."}          open a web page
 {"do":"web_search","query":"..."}              Google search
-{"do":"open_folder","name":"downloads"}        downloads, documents, desktop, pictures, music, videos, home, or an absolute path
+{"do":"open_folder","name":"downloads"}        downloads, documents, desktop, pictures, screenshots, music, videos, home, or an absolute path
 {"do":"media","key":"play_pause"}              play_pause, next, previous, volume_up, volume_down, mute
 {"do":"set_volume","percent":30}               exact volume 0-100
 {"do":"show_desktop"}
@@ -327,6 +327,7 @@ const ACTIONS_DOC: &str = r#"Actions (JSON objects, run in order, at most 8):
 {"do":"set_wallpaper","color":"black"}       solid-colour desktop background: a colour name or #rrggbb
 {"do":"system_status"}                         battery, memory, CPU, disk space
 {"do":"top_processes"}                         what is using CPU and memory ("why is my laptop slow/hot")
+{"do":"free_memory"}                           "free up RAM": unload Bond's own models, then show what holds the most memory
 {"do":"clipboard_get"}                         show the text on the clipboard
 {"do":"clipboard_set","text":"..."}            copy text to the clipboard
 {"do":"remind","text":"stretch","in_minutes":45}       a reminder "in N minutes"; for a clock time or a day use "at" instead of in_minutes: "at":"17:30" or "at":"2026-10-09 09:00" (local time; never work out minutes yourself)
@@ -338,7 +339,7 @@ const ACTIONS_DOC: &str = r#"Actions (JSON objects, run in order, at most 8):
 These three always wait for the user to approve (Bond shows exactly what will happen):
 {"do":"run_command","command":"...","why":"..."}   one SHELL command, for anything else the user wants done on the computer (files, settings, info, installs). why = one short sentence.
 {"do":"kill_process","name":"chrome"}         end a program by process name or PID
-{"do":"delete","paths":["~/Downloads/old.zip"],"permanent":false}   delete files/folders; * ? allowed in the file name; Recycle Bin unless the user said permanently
+{"do":"delete","paths":["~/Downloads/old.zip"],"permanent":false}   delete files/folders; * ? allowed in the file name; Recycle Bin unless the user said permanently. Folder names above work as the start of a path: "screenshots/*" is every screenshot, "downloads/*.zip" the zips in Downloads
 To play something on YouTube use open_url with https://www.youtube.com/results?search_query=...
 Prefer a specific action over run_command. To delete files always use delete (never a command), so the user sees each file first.
 Settings (dark mode, sleep, Wi-Fi, Bluetooth, brightness…), creating files or folders, and system info (IP address, Wi-Fi name…): one run_command, not clicks or typing.
@@ -447,6 +448,7 @@ const ACTION_FIELDS: &[(&str, &[(&str, &str)])] = &[
     ("set_wallpaper", &[("color", "string")]),
     ("system_status", &[]),
     ("top_processes", &[]),
+    ("free_memory", &[]),
     ("clipboard_get", &[]),
     ("clipboard_set", &[("text", "string")]),
     ("remind", &[("text", "string"), ("in_minutes", "?number"), ("at", "?string")]),
@@ -726,9 +728,11 @@ mod eval {
         ("show me my ip address", "task", "run_command"),
         ("close all the notepad windows", "task", "kill_process"),
         ("delete the zip files in my downloads", "task", "delete"),
+        ("delete all the screenshots in my screenshots folder", "task", "delete"),
         ("new tab", "task", "hotkey"),
         ("lock it", "task", "lock_screen"),
         ("what's eating my ram", "task", "top_processes"),
+        ("free up some ram", "task", "free_memory"),
         ("copy 'see you at 5' to the clipboard", "task", "clipboard_set"),
         ("wake me up at 7am tomorrow", "task", "remind"),
         ("remind me to call the bank tomorrow morning", "task", "remind"),

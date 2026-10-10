@@ -27,6 +27,7 @@ mod agent;
 mod ai;
 mod brain;
 mod experience;
+mod journal;
 mod notice;
 mod reminders;
 mod screen;
@@ -73,10 +74,13 @@ fn overlay(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("overlay")
 }
 
-/// Show the dashboard window (stats + settings).
+/// Show the dashboard window (stats + settings), optionally on one page ("journal").
 #[tauri::command]
-fn open_dashboard(app: AppHandle) {
+fn open_dashboard(app: AppHandle, page: Option<String>) {
     show_dashboard(&app);
+    if let Some(page) = page {
+        let _ = app.emit_to("dashboard", "dashboard-page", page);
+    }
 }
 
 fn show_dashboard(app: &AppHandle) {
@@ -382,6 +386,10 @@ pub fn run() {
             agent::agent_approve,
             agent::agent_deny,
             system::clipboard_text,
+            journal::journal_get,
+            journal::journal_set,
+            journal::journal_append,
+            journal::journal_list,
             reminders::reminders_list,
             reminders::reminder_add,
             reminders::reminder_remove,

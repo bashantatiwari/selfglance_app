@@ -12,6 +12,8 @@
 //              What he hears goes through exactly the same path as typed requests.
 //
 // Models are downloaded once into <local app data>/voice. Nothing is sent anywhere.
+// Loaded they take about 1 GB of RAM, so they're let go after a few quiet minutes and
+// load again (about a second) the next time he speaks or listens.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,12 +36,35 @@ const TTS_THREADS: i32 = 8;
 /// The recognizer's sample rate.
 const ASR_RATE: u32 = 16_000;
 
+/// Let the models go after this long without speaking or listening.
+const IDLE_UNLOAD: Duration = Duration::from_secs(5 * 60);
+
 static DIR: OnceLock<PathBuf> = OnceLock::new();
+static LAST_USED: Mutex<Option<Instant>> = Mutex::new(None);
 
 pub fn init(app: &AppHandle) {
     if let Ok(d) = app.path().app_local_data_dir() {
         let _ = DIR.set(d.join("voice"));
     }
+    std::thread::spawn(|| loop {
+        std::thread::sleep(Duration::from_secs(30));
+        let idle = LAST_USED.lock().unwrap().is_some_and(|t| t.elapsed() > IDLE_UNLOAD);
+        if idle && !LISTENING.load(Ordering::SeqCst) {
+            unload();
+        }
+    });
+}
+
+fn touch() {
+    *LAST_USED.lock().unwrap() = Some(Instant::now());
+}
+
+/// Free the voice and ears models' memory now. True if anything was loaded.
+pub fn unload() -> bool {
+    let tts = TTS.lock().unwrap().take().is_some();
+    let asr = ASR.lock().unwrap().take().is_some();
+    *LAST_USED.lock().unwrap() = None;
+    tts || asr
 }
 
 #[cfg(test)]
@@ -134,6 +159,7 @@ fn untar(archive: &Path, target: &Path) -> Result<(), String> {
 static TTS: Mutex<Option<Arc<sherpa_onnx::OfflineTts>>> = Mutex::new(None);
 
 fn tts() -> Result<Arc<sherpa_onnx::OfflineTts>, String> {
+    touch();
     let mut guard = TTS.lock().unwrap();
     if let Some(t) = guard.as_ref() {
         return Ok(t.clone());
@@ -186,6 +212,7 @@ pub fn synthesize(text: &str, voice: i32, speed: f32) -> Result<(Vec<f32>, u32),
 static ASR: Mutex<Option<Arc<sherpa_onnx::OfflineRecognizer>>> = Mutex::new(None);
 
 fn asr() -> Result<Arc<sherpa_onnx::OfflineRecognizer>, String> {
+    touch();
     let mut guard = ASR.lock().unwrap();
     if let Some(r) = guard.as_ref() {
         return Ok(r.clone());

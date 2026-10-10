@@ -72,7 +72,7 @@ import {
   type Reminder,
 } from "./ai";
 import { understand, type ScreenMode } from "./assistant/intent";
-import { addIdea, logToJournal } from "./assistant/notes";
+import { addIdea, dayKey, journalGet, logToJournal } from "./assistant/notes";
 import {
   blockedBy,
   errorFallback,
@@ -396,6 +396,27 @@ export default function App() {
       clearTimeout(askTimer.current);
       setAsk({ step: "reminder", reminder: r });
     };
+    // Evening: today's journal is still empty (Bond's own "log" lines don't count) and you're
+    // here, so he asks once. Snoozing brings it back like any reminder.
+    let journalChecking = false;
+    const checkJournal = async (idleSec: number) => {
+      const st = settingsRef.current;
+      const day = dayKey();
+      if (!st.journalNudge || journalChecking || idleSec >= AWAY_AFTER_SEC || coach.inBreak) return;
+      if (new Date().getHours() < st.journalAt || store.get("selfglance.journalNudged") === day) return;
+      if (ctxRef.current === "meeting" || ctxRef.current === "game") return;
+      journalChecking = true;
+      try {
+        const text = await journalGet(day);
+        store.set("selfglance.journalNudged", day);
+        const written = text.split("\n").some((l) => l.trim() && !/^\d{1,2}:\d{2}(\s?[ap]m)? — /i.test(l.trim()));
+        if (!written) await remind({ id: "journal", text: "Time to write today's journal. How did the day go?", at: Date.now(), open: "journal" });
+      } catch {
+        /* try again on the next tick */
+      } finally {
+        journalChecking = false;
+      }
+    };
     const applySettings = (st: Settings) => {
       settingsRef.current = st;
       coach.configure({ everyMin: st.breakEveryMin, enabled: st.breaksOn });
@@ -458,6 +479,7 @@ export default function App() {
         void behave();
         void deliverSuggestion();
         void scanForError();
+        void checkJournal(sec);
       }),
       onTauriEvent<Activity>("activity", (a) => {
         activityRef.current = a;
@@ -681,7 +703,7 @@ export default function App() {
       const own = understand(question);
       // What he understood on his own is a sure example for the brain to learn from.
       if (own?.kind === "log") {
-        logToJournal(own.text);
+        await logToJournal(own.text);
         void recordOwn(question, { intent: "log", text: own.text });
         return confirm("Logged in your journal ✓");
       }
@@ -711,7 +733,7 @@ export default function App() {
       expRef.current = r.exp_id;
       switch (r.intent) {
         case "log":
-          logToJournal(r.text || question);
+          await logToJournal(r.text || question);
           return confirm("Logged in your journal ✓");
         case "idea":
           addIdea(r.text || question);
@@ -1086,6 +1108,10 @@ export default function App() {
                 }
               : null
           }
+          onOpen={(page) => {
+            if (inTauri) void invoke("open_dashboard", { page });
+            closeAsk();
+          }}
           onSnooze={async (r, min) => {
             try {
               await snoozeReminder(r.text, min);

@@ -132,6 +132,41 @@ pub fn top_processes() -> String {
     out.join("\n")
 }
 
+/// Free memory available right now, in bytes.
+pub fn available_memory() -> u64 {
+    let mut sys = System::new();
+    sys.refresh_memory();
+    sys.available_memory()
+}
+
+/// "Free up some RAM": what Bond let go of, then the programs holding the most memory,
+/// so you can pick which to close (each one still asks first).
+pub fn free_memory_report(freed_own: Option<u64>, unloaded: &[&str]) -> String {
+    let mut sys = System::new();
+    sys.refresh_memory();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    let mut out = Vec::new();
+    match (unloaded.is_empty(), freed_own) {
+        (true, _) => out.push("My own models weren't loaded, so nothing of mine to free.".to_string()),
+        (false, Some(b)) if b > 50 * 1024 * 1024 => out.push(format!("Unloaded my {}: about {:.1} GB back.", unloaded.join(" and "), b as f64 / GB)),
+        (false, _) => out.push(format!("Unloaded my {} (their memory is on the graphics card or was already small).", unloaded.join(" and "))),
+    }
+    let mut gs = groups(&sys);
+    gs.sort_by(|a, b| b.mem.cmp(&a.mem));
+    out.push("Holding the most memory now:".into());
+    out.extend(gs.iter().take(6).map(|g| {
+        let many = if g.count > 1 { format!(" ({} processes)", g.count) } else { String::new() };
+        format!("  {} — {:.1} GB{many}", g.name, g.mem as f64 / GB)
+    }));
+    let total = sys.total_memory() as f64;
+    if total > 0.0 {
+        let free = sys.available_memory() as f64;
+        out.push(format!("{:.1} of {:.1} GB free.", free / GB, total / GB));
+    }
+    out.push("Say “close <name>” to end one of these (you approve first).".into());
+    out.join("\n")
+}
+
 /// Processes matching a name ("chrome", "chrome.exe") or a PID, for the approval card.
 pub struct Found {
     pub pids: Vec<u32>,

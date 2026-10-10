@@ -32,6 +32,10 @@ export interface Settings {
   brainstormAlert: boolean;
   /** Bond warns when the battery is low and the laptop isn't plugged in. */
   batteryAlert: boolean;
+  /** In the evening, if today's journal is still empty, Bond asks you to write it. */
+  journalNudge: boolean;
+  /** From this hour (local time, 0-23). */
+  journalAt: number;
   /** Keep what you ask and how it went, so Bond adapts to you (stays on this computer). */
   learnFromMe: boolean;
   /** Suggestions he makes on his own: off, only when you seem stuck, helpful, chatty. */
@@ -62,6 +66,8 @@ export const DEFAULT_SETTINGS: Settings = {
   answerSeconds: 12,
   brainstormAlert: true,
   batteryAlert: true,
+  journalNudge: true,
+  journalAt: 21,
   learnFromMe: true,
   notice: "helpful",
   noticeMaxPerHour: 3,
