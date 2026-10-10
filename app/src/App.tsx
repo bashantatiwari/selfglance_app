@@ -102,6 +102,28 @@ const BRAINSTORM_CHAT_MS = 20 * 60_000; // this much chatting / note-taking in t
 const BRAINSTORM_BUILD_MS = 2 * 60_000; // ...with less than this in an editor or terminal
 const BRAINSTORM_COOLDOWN_MS = 45 * 60_000;
 const SCAN_EVERY_MS = 30_000; // looking for an error on screen, during pauses in an editor/terminal
+/** Two quick soft notes: "I heard you". Short and wordless, so it never talks over you. */
+function chime() {
+  try {
+    const ctx = new AudioContext();
+    [880, 1320].forEach((f, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      const t = ctx.currentTime + i * 0.09;
+      o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.08, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+      o.connect(g).connect(ctx.destination);
+      o.start(t);
+      o.stop(t + 0.15);
+    });
+    window.setTimeout(() => void ctx.close(), 600);
+  } catch {
+    /* no audio */
+  }
+}
+
 const FOLLOW_UP_SEC = 6; // after he answers a spoken request, a follow-up needs no "Hey Bond"
 const CHATTY = /\b(chatgpt|claude|gemini|perplexity|copilot|deepseek|grok|notion|obsidian|onenote|google keep)\b/i;
 const POKE_REACTIONS: ClipName[] = ["wave", "nod", "celebrate", "hang"];
@@ -156,6 +178,7 @@ export default function App() {
   const scanRef = useRef({ at: 0, last: "" });
   /** The request on screen was spoken: answer out loud even if "read answers aloud" is off. */
   const heardRef = useRef(false);
+  const wokeRef = useRef(false); // "Hey Bond" just now: the listening cue says "Yes?"
   const [canListen, setCanListen] = useState(false);
   const coachBreakRef = useRef<() => boolean>(() => false);
   const idleRef = useRef(0);
@@ -461,7 +484,8 @@ export default function App() {
           setAsk(null);
           wake(25_000);
           stageRef.current?.play("nod", true);
-          showPop("Listening…", 25_000, true);
+          showPop(wokeRef.current ? "Yes?" : "Listening…", 25_000, true);
+          wokeRef.current = false;
         } else if (state === "thinking") {
           setPop(null);
         }
@@ -484,6 +508,11 @@ export default function App() {
           return void closeAsk();
         }
         void doAsk(said, false);
+      }),
+      // "Hey Bond": a soft chime at once, like Siri, so you know he heard you.
+      onTauriEvent<null>("wake", () => {
+        wokeRef.current = true;
+        chime();
       }),
       // "Hey Bond" and then nothing: he asks, and listens for the answer.
       onTauriEvent<null>("wake-empty", () => {

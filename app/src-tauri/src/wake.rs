@@ -617,10 +617,15 @@ fn listen(app: &AppHandle) -> Result<(), String> {
                 }
                 Event::Request(audio) => {
                     let _ = app.emit("voice-state", "thinking");
-                    let text = voice::transcribe(&audio, ASR_RATE).map(|t| strip_wake_word(&t));
-                    crate::diag::log(&format!("listener: heard {text:?}"));
+                    let raw = voice::transcribe(&audio, ASR_RATE);
+                    let text = raw.as_ref().map(|t| strip_wake_word(t)).map_err(|e| e.clone());
+                    crate::diag::log(&format!("listener: heard {raw:?} → {text:?}"));
                     let _ = app.emit("voice-state", "idle");
                     match text {
+                        // Only the wake word (said during a follow-up): treat it as "Hey Bond".
+                        Ok(t) if t.is_empty() && raw.as_ref().is_ok_and(|r| !r.trim().is_empty()) => {
+                            let _ = app.emit("wake-empty", ());
+                        }
                         Ok(t) => {
                             let _ = app.emit("voice-heard", t);
                         }
