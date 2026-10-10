@@ -36,6 +36,8 @@ reminders, activity, settings). Things to ask:
   `lock my laptop` · `set wallpaper to dark blue` · `what's using my cpu` ·
   `kill chrome` · `$ ipconfig`
 - **Clipboard:** `what's on my clipboard` · `copy hello to clipboard`
+- **Memory:** `free up ram` · `what's eating my ram`
+- **Files:** `delete my screenshots` (shows thumbnails, asks twice, goes to the Recycle Bin)
 - **Screen:** `what am I looking at` · `I'm stuck` · `click the Save button`
 
 Running commands, ending programs and deleting files always ask first.
@@ -64,6 +66,10 @@ The app is in `app/`, built with [Tauri](https://tauri.app):
 
 Data stays on the computer in `%LOCALAPPDATA%\com.selfglance.app` (models, notes,
 reminders, the learning log). Cloud API keys go in the Windows Credential Manager.
+
+## Roadmap
+
+Where Bond is and what comes next: [ROADMAP.md](ROADMAP.md).
 
 ## Tests
 
