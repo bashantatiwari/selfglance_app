@@ -62,3 +62,22 @@ test("answering \"it has unsaved changes\"", () => {
   for (const s of ["Save.", "save it", "keep the changes"]) assert.equal(unsavedAnswer(s), "save", s);
   for (const s of ["Cancel", "no", "leave it open"]) assert.equal(unsavedAnswer(s), "cancel", s);
 });
+
+test("jobs you want to do yourself start guide mode", () => {
+  for (const q of [
+    "walk me through buying a domain",
+    "guide me through this form",
+    "show me how to change my DNS",
+    "show me where to click",
+    "where do I click?",
+    "I'm about to buy a domain, help me out",
+    "help me buy a domain name",
+    "point me to the checkout button",
+  ]) {
+    assert.deepEqual(understand(q), { kind: "screen", mode: "guide" }, q);
+  }
+  // Not these: Bond does them himself, or they're something else.
+  assert.deepEqual(understand("open spotify"), { kind: "do", actions: [{ do: "open_app", name: "spotify" }] });
+  assert.deepEqual(understand("help"), { kind: "screen", mode: "help" });
+  assert.equal(understand("show me my reminders")?.kind, "do");
+});

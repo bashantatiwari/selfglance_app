@@ -41,13 +41,16 @@ import { Tracker } from "./companion/tracker";
 import { loadSettings, type Settings } from "./settings";
 import { ActionMenu, ARC, arcBox, type ActionId } from "./ui/ActionMenu";
 import { AnswerCard, AskBox, type AskState } from "./ui/Ask";
+import { Guide, type GuideView } from "./ui/Guide";
 import {
+  aiGuide,
   aiText,
   approveAction,
   aiPrime,
   clipboardText,
   denyAction,
   giveFeedback,
+  guideMouse,
   recordOwn,
   releaseFocus,
   routeCommand,
@@ -210,6 +213,11 @@ export default function App() {
   const [ask, setAsk] = useState<AskState | null>(null);
   const askRef = useRef<AskState | null>(null);
   askRef.current = ask;
+  // Guide mode: he points, you click. guideRun is the running guide's id (0 = none).
+  const [guide, setGuide] = useState<GuideView | null>(null);
+  const [guideFrom, setGuideFrom] = useState<{ x: number; y: number } | null>(null);
+  const guideRun = useRef(0);
+  const guideTipRef = useRef<HTMLDivElement>(null);
 
   const homeX = () => {
     const saved = Number(store.get("selfglance.homeX"));
@@ -291,6 +299,11 @@ export default function App() {
         left = Math.min(Math.max(8, left), window.innerWidth - w - 8);
         el.style.transform = `translate(${left}px, ${top}px)`;
         regions.push({ x: left, y: top, w, h: hh });
+      }
+      const tip = guideTipRef.current;
+      if (tip) {
+        const r = tip.getBoundingClientRect();
+        regions.push({ x: r.x, y: r.y, w: r.width, h: r.height });
       }
       sendHitRegions(regions);
     };
@@ -522,6 +535,7 @@ export default function App() {
         }
         if (saidStop(said)) {
           stopSpeaking();
+          if (guideRun.current) return stopGuide("Okay, you've got it from here.");
           return void closeAsk();
         }
         void doAsk(said, false);
@@ -791,7 +805,127 @@ export default function App() {
     answer(question, res.answer, o.done, mode !== "task", o.info);
   };
 
+  // The screen has been read: bring the note back while his brain works out the step.
+  useEffect(() => {
+    const un = onTauriEvent("guide-looked", () => setGuide((g) => (g ? { ...g, hidden: false } : g)));
+    return () => void un.then((f) => f());
+  }, []);
+
+  /** End guide mode (no more looking, the cursor and note go away). */
+  const stopGuide = (say?: string) => {
+    guideRun.current = 0;
+    setGuide(null);
+    void releaseFocus();
+    if (say) showPop(say, 2800, true);
+  };
+
+  /**
+   * "Walk me through buying a domain": look, point the cursor at the one next thing, wait
+   * for you to click it yourself, look again. Nothing is clicked or typed for you.
+   */
+  const runGuide = async (goal: string) => {
+    const id = Date.now();
+    guideRun.current = id;
+    const alive = () => guideRun.current === id;
+    const pause = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
+    const shown: string[] = [];
+    const say = (text: string) => {
+      if (heardRef.current) void speak(text);
+    };
+    const fail = (text: string) => {
+      stopGuide();
+      setAsk({ step: "error", question: goal, error: text });
+      stageRef.current?.play("annoyed", true);
+      autoClose();
+    };
+    setAsk(null);
+    setGuideFrom(await cursorPosition());
+    let misses = 0;
+    let quiet = 0;
+    for (let n = 1; n <= 40 && alive(); ) {
+      // Out of the screenshot (the note would be read as part of the page), back once it's taken.
+      setGuide((g) => ({ say: "Looking at your screen…", step: "wait", target: null, n: 0, ...g, hidden: true }));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      await pause(60);
+      let s;
+      try {
+        s = await aiGuide(goal, shown);
+      } catch (e) {
+        return alive() ? fail(String(e)) : undefined;
+      }
+      if (!alive()) return;
+      void aiPrime();
+      const target = s.target;
+      setGuide({ say: s.say, step: s.step, target, n: target ? n : 0 });
+      if (s.step === "done") {
+        say(s.say);
+        stageRef.current?.play("celebrate", true);
+        window.setTimeout(() => guideRun.current === id && stopGuide(), 6000);
+        return;
+      }
+      say(s.say);
+      if (!target) {
+        // Nothing to point at yet (a page loading, something to open first): look again shortly.
+        if (++misses >= 8) return stopGuide("I can't find the next step — ask me again when you're ready.");
+        await pause(5000);
+        continue;
+      }
+      misses = 0;
+      // Wait for your click on it (and, for a text box, for you to finish typing).
+      const [l, t, r, b] = target.phys;
+      const inside = (x: number, y: number) => x >= l - 24 && x <= r + 24 && y >= t - 24 && y <= b + 24;
+      const typing = s.step === "type";
+      const started = Date.now();
+      let pressed = false;
+      let clickedAt = 0;
+      let typedAfter = false;
+      let outcome: "clicked" | "elsewhere" | "timeout" = "timeout";
+      while (alive() && Date.now() - started < 60_000) {
+        await pause(70);
+        const m = await guideMouse().catch(() => null);
+        if (!m) continue;
+        if (m.down) pressed = true;
+        else if (pressed) {
+          pressed = false;
+          if (inside(m.x, m.y)) {
+            if (!typing) {
+              outcome = "clicked";
+              break;
+            }
+            clickedAt = Date.now();
+          } else if (!clickedAt) {
+            outcome = "elsewhere";
+            break;
+          }
+        }
+        if (typing && clickedAt) {
+          if (Date.now() - clickedAt > 500 && m.idle_ms < 400) typedAfter = true;
+          if (typedAfter && m.idle_ms >= 2000) {
+            outcome = "clicked";
+            break;
+          }
+        }
+      }
+      if (!alive()) return;
+      if (outcome === "timeout") {
+        // Nobody touched anything for a minute: look again once or twice, then stop.
+        const m = await guideMouse().catch(() => null);
+        quiet = m && m.idle_ms > 50_000 ? quiet + 1 : 0;
+        if (quiet >= 3) return stopGuide("Still there? I'll stop pointing — ask me again anytime.");
+        continue;
+      }
+      if (outcome === "clicked") {
+        shown.push(s.say);
+        n++;
+      }
+      await pause(outcome === "clicked" ? 1500 : 1200); // let the page react before looking again
+    }
+    if (alive()) stopGuide("That's as far as I'll go — ask me again if you need more.");
+  };
+
   const doAsk = async (question: string, typed = true) => {
+    guideRun.current = 0; // a new request ends the old guide
+    setGuide(null);
     setAsk({ step: "thinking", question, looking: false });
     expRef.current = "";
     if (typed) {
@@ -828,6 +962,7 @@ export default function App() {
         const reply = await aiText(CLIPBOARD_SYSTEM, `${question}\n\n--- Clipboard ---\n${copied.slice(0, 20_000)}`);
         return answer(question, reply, [], true);
       }
+      if (own?.kind === "screen" && own.mode === "guide") return await runGuide(question);
       if (own?.kind === "screen") return await lookAtScreen(question, own.mode);
 
       // 2. Not sure: the AI classifies it (text only), and runs simple tasks right away.
@@ -1135,7 +1270,7 @@ export default function App() {
 
   // --- Render -----------------------------------------------------------------------------
   const inBreak = phase !== "idle";
-  const awake = hover || busy || touched || menu || following || !!ask || phase === "arriving" || phase === "offering";
+  const awake = hover || busy || touched || menu || following || !!ask || !!guide || phase === "arriving" || phase === "offering";
   const dim = !awake && inBreak; // waiting / away: half visible, bottle still in view
   const look = awake ? "" : dim ? "dim" : ctx === "watching" ? "watch" : ctx === "focus" ? "faint" : "ghost";
 
@@ -1237,6 +1372,7 @@ export default function App() {
           }}
         />
       )}
+      {guide && <Guide view={guide} origin={guideFrom} tipRef={guideTipRef} onStop={() => stopGuide()} />}
       {menu && <ActionMenu menuRef={menuRef} sitting={stageRef.current?.currentPose === "sit"} following={following} inBreak={phase !== "idle"} laterMin={settingsRef.current.snoozeMin} onPick={act} />}
     </>
   );

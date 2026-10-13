@@ -102,6 +102,12 @@ pub fn element_center(id: usize) -> Result<(i32, i32), String> {
     Ok(((e.rect.0 + e.rect.2) / 2, (e.rect.1 + e.rect.3) / 2))
 }
 
+/// The box (left, top, right, bottom, physical pixels) of element `id` from the last look.
+pub fn element_rect(id: usize) -> Option<(i32, i32, i32, i32)> {
+    let guard = LAST.lock().unwrap();
+    guard.as_ref()?.elements.iter().find(|e| e.id == id).map(|e| e.rect)
+}
+
 /// Centre of the visible text `target` from the last look (the `nth` match, 1-based,
 /// top to bottom). Matches whole words, ignoring case and punctuation around them.
 pub fn text_center(target: &str, nth: usize) -> Result<(i32, i32), String> {

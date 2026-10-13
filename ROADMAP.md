@@ -17,6 +17,7 @@ this laptop with your own voice and habits, not only in tests.
 | 4 | **Speaks up on his own**: stuck, copied errors, habits; quiet hours | Done; tip wording sometimes off |
 | — | **Fixes, 10 Oct**: screenshots delete with previews, journal saved as files + evening reminder, "free up RAM", voice models unload when idle | Done |
 | 5 | **"Hey Bond" + voice match**: wake word, answers only your voice, follow-ups, spoken yes/no | Built 10 Oct; needs testing with your real voice |
+| — | **Guide mode, 12 Oct**: "walk me through buying a domain": a virtual cursor points at each next click; you click, Bond re-reads the screen and points again | Built; needs a real try |
 
 About 12,000 lines: TypeScript (the interface) and Rust (everything that touches Windows).
 

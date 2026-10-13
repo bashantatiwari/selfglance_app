@@ -36,7 +36,7 @@ export type Action =
   | { do: "close_app"; name: string }
   | { do: "delete"; paths: string[]; permanent?: boolean };
 
-export type ScreenMode = "explain" | "help" | "task";
+export type ScreenMode = "explain" | "help" | "task" | "guide";
 
 export type Intent =
   | { kind: "log"; text: string }
@@ -58,6 +58,19 @@ const MEDIA: [RegExp, string][] = [
   [/^(next|skip)( (the )?(song|track|video))?$/i, "next"],
   [/^(previous|prev|last)( (song|track|video))?$/i, "previous"],
 ];
+
+/** "Walk me through buying a domain", "show me how to...", "I'm about to buy a domain, help me", "where do I click?" */
+const GUIDE_ME = new RegExp(
+  [
+    String.raw`^(?:please\s+)?(?:guide|walk|talk|take|lead) me (?:through|to|with|along)\b`,
+    String.raw`^(?:please\s+)?(?:show|teach) me (?:how to|where to|where i (?:should |can |have to )?(?:click|go|press|type))\b`,
+    String.raw`^(?:please\s+)?point (?:me )?(?:to|at|out)\b`,
+    String.raw`^where (?:do|should|can) i (?:click|press|tap|go|type)\b`,
+    String.raw`^(?:i(?:'m| am) (?:about|going|trying|gonna) to|i want to|i need to|i have to|let'?s) .+\b(?:help|guide|walk|show|point|assist)\b`,
+    String.raw`^(?:help|assist) me (?:to |with )?(?:buy|book|register|sign (?:up|in)|set ?up|create|fill|apply|order|install|find|change|reset|pay|renew|transfer|get|open|make|add|enable|disable|turn)\b`,
+  ].join("|"),
+  "i",
+);
 
 /** Words after "close"/"end" that are not a program ("close this tab"). */
 const NOT_A_PROGRAM = /^(this|it|that|them|tab|window|all|everything|the call|call|meeting|this tab|this window|the tab|the window|everything else)$/i;
@@ -154,6 +167,9 @@ export function understand(input: string): Intent {
   if (/^(what'?s|what is|show( me)?|read( me)?)( on| in)? (my |the )?clipboard\??$/i.test(t)) return { kind: "do", actions: [{ do: "clipboard_get" }] };
   if ((m = raw.match(/^copy (.+?) (?:to|into|on) (?:my |the )?clipboard\.?$/is))) return { kind: "do", actions: [{ do: "clipboard_set", text: m[1].replace(/^["“'](.*)["”']$/s, "$1") }] };
   if (/\bclipboard\b|\bwhat i (just )?copied\b|\bthe copied text\b/i.test(t)) return { kind: "clipboard" };
+
+  // Guide: you do it yourself, Bond moves a virtual cursor to each next step.
+  if (GUIDE_ME.test(t)) return { kind: "screen", mode: "guide" };
 
   // Look: explain the screen, or help when stuck.
   if (/\b(stuck|not working|doesn'?t work|isn'?t working|what'?s wrong|what is wrong|can'?t figure|fix (this|it))\b|^help( me)?\??$/i.test(t)) return { kind: "screen", mode: "help" };

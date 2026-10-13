@@ -1,0 +1,100 @@
+/* Guide mode: a virtual cursor glides to the next thing to click, with a note beside it. */
+.guide-ring,
+.guide-cursor,
+.guide-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  font-family: system-ui, "Segoe UI", -apple-system, "Ubuntu", sans-serif;
+}
+
+.guide-ring {
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 3px solid #5b9dff;
+  border-radius: 10px;
+  background: rgba(91, 157, 255, 0.12);
+  box-shadow: 0 0 0 4px rgba(91, 157, 255, 0.25), 0 0 24px rgba(91, 157, 255, 0.6);
+  animation: guide-pulse 1.4s ease-in-out infinite;
+  transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1), width 700ms cubic-bezier(0.22, 1, 0.36, 1), height 700ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes guide-pulse {
+  50% {
+    box-shadow: 0 0 0 9px rgba(91, 157, 255, 0.1), 0 0 34px rgba(91, 157, 255, 0.85);
+  }
+}
+
+/* The cursor itself: an arrow whose tip sits exactly on its position. */
+.guide-cursor {
+  pointer-events: none;
+  width: 30px;
+  height: 36px;
+  margin: -2px 0 0 -2px;
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.45));
+  transition: transform 800ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.guide-tip {
+  width: 280px;
+  box-sizing: border-box;
+  padding: 10px 12px 10px 14px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  color: #eef2f8;
+  background: rgba(22, 26, 34, 0.96);
+  border: 1px solid rgba(91, 157, 255, 0.55);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  animation: guide-in 220ms ease-out both;
+}
+
+.guide-tip .n {
+  flex: none;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  background: #2f6fed;
+  font-size: 12px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.guide-tip p {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.guide-tip button {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: #9aa6ba;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+
+.guide-tip button:hover {
+  color: #fff;
+}
+
+@keyframes guide-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guide-ring,
+  .guide-cursor,
+  .guide-tip {
+    animation: none;
+    transition: none;
+  }
+}

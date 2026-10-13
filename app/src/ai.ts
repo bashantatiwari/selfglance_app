@@ -339,3 +339,25 @@ function systemVoice(text: string): Promise<void> {
     }
   });
 }
+
+/** Where guide mode's cursor goes: the box in overlay pixels, and in physical screen pixels. */
+export interface GuideTarget {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** left, top, right, bottom */
+  phys: [number, number, number, number];
+}
+
+export interface GuideStep {
+  say: string;
+  step: "click" | "type" | "wait" | "done";
+  target: GuideTarget | null;
+}
+
+/** The next step towards `goal` from a fresh look at the screen. Nothing is clicked. `done`: steps already shown. */
+export const aiGuide = (goal: string, done: string[]) => invoke<GuideStep>("ai_guide", { ...opts(), goal, done });
+
+/** The real mouse, in physical screen pixels, and how long the user has been idle. */
+export const guideMouse = () => invoke<{ x: number; y: number; down: boolean; idle_ms: number }>("guide_mouse");
