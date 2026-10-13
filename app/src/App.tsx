@@ -829,6 +829,7 @@ export default function App() {
     const alive = () => guideRun.current === id;
     const pause = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
     const shown: string[] = [];
+    const seen: Record<string, number> = {};
     const say = (text: string) => {
       if (heardRef.current) void speak(text);
     };
@@ -915,6 +916,10 @@ export default function App() {
         continue;
       }
       if (outcome === "clicked") {
+        // The same step for the third time is going in circles: the job is most likely done.
+        const key = `${s.say}|${s.debug.picked}`;
+        seen[key] = (seen[key] ?? 0) + 1;
+        if (seen[key] >= 3) return stopGuide("That looks done — we're going in circles, so I'll stop.");
         shown.push(s.say);
         n++;
       }

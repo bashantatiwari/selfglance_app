@@ -44,7 +44,7 @@ export function Guide(props: { view: GuideView; origin: { x: number; y: number }
   const d = props.showDebug ? view.debug : undefined;
   return (
     <>
-      {d?.candidates.map((c) => (
+      {t && d?.candidates.map((c) => (
         <div key={c.id} className={`guide-box ${t && c.x === t.x && c.y === t.y ? "picked" : ""}`} style={{ transform: `translate(${c.x}px, ${c.y}px)`, width: c.w, height: c.h }}>
           <span>{c.id}</span>
         </div>

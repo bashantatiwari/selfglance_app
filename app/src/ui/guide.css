@@ -28,9 +28,9 @@
 /* The cursor itself: an arrow whose tip sits exactly on its position. */
 .guide-cursor {
   pointer-events: none;
-  width: 30px;
-  height: 36px;
-  margin: -2px 0 0 -2px;
+  width: 18px;
+  height: 22px;
+  margin: -1px 0 0 -1px;
   filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.45));
   transition: transform 800ms cubic-bezier(0.22, 1, 0.36, 1);
 }
