@@ -3,7 +3,7 @@
 // Nothing here clicks: the page under it is untouched, and only the note can be clicked.
 
 import { useEffect, useState, type Ref } from "react";
-import type { GuideTarget } from "../ai";
+import type { GuideDebug, GuideTarget } from "../ai";
 import "./guide.css";
 
 export interface GuideView {
@@ -12,13 +12,15 @@ export interface GuideView {
   target: GuideTarget | null;
   /** 1, 2, 3… */
   n: number;
+  /** What he picked and could have picked; shown only with "show what he picked" on. */
+  debug?: GuideDebug;
   /** Hidden while Bond takes a screenshot, so the note never ends up in what he reads. */
   hidden?: boolean;
 }
 
 const TIP_W = 280;
 
-export function Guide(props: { view: GuideView; origin: { x: number; y: number } | null; tipRef: Ref<HTMLDivElement>; onStop: () => void }) {
+export function Guide(props: { view: GuideView; origin: { x: number; y: number } | null; showDebug: boolean; tipRef: Ref<HTMLDivElement>; onStop: () => void }) {
   const { view, origin } = props;
   const t = view.target;
   // The cursor starts where your real one is, then glides to the target.
@@ -39,8 +41,14 @@ export function Guide(props: { view: GuideView; origin: { x: number; y: number }
     top = t.y + t.h + 16 + 80 < window.innerHeight ? t.y + t.h + 16 : Math.max(8, t.y - 16 - 64);
   }
 
+  const d = props.showDebug ? view.debug : undefined;
   return (
     <>
+      {d?.candidates.map((c) => (
+        <div key={c.id} className={`guide-box ${t && c.x === t.x && c.y === t.y ? "picked" : ""}`} style={{ transform: `translate(${c.x}px, ${c.y}px)`, width: c.w, height: c.h }}>
+          <span>{c.id}</span>
+        </div>
+      ))}
       {t && (
         <>
           <div className="guide-ring" style={{ transform: `translate(${t.x}px, ${t.y}px)`, width: t.w, height: t.h }} />
@@ -55,6 +63,7 @@ export function Guide(props: { view: GuideView; origin: { x: number; y: number }
         <button onClick={props.onStop} aria-label="Stop guiding" title="Stop">
           ✕
         </button>
+        {d && <pre className="dbg">{`picked: ${d.picked}\n${d.provider}, ${d.secs.toFixed(1)}s, ${d.candidates.length} controls shown\n${d.raw}`}</pre>}
       </div>
     </>
   );

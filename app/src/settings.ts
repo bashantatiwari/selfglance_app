@@ -32,6 +32,8 @@ export interface Settings {
   voiceMatch: boolean;
   /** After answering out loud, listen a few seconds for a follow-up without "Hey Bond". */
   followUp: boolean;
+  /** Guide mode shows what he picked and what he could have picked (for finding out why he pointed wrong). */
+  guideDebug: boolean;
   /** Seconds an answer stays on screen before it closes by itself. */
   answerSeconds: number;
   /** Nudge when you've been brainstorming/chatting with AI a long time without building. */
@@ -72,6 +74,7 @@ export const DEFAULT_SETTINGS: Settings = {
   wakeWord: false,
   voiceMatch: true,
   followUp: true,
+  guideDebug: false,
   answerSeconds: 12,
   brainstormAlert: true,
   batteryAlert: true,

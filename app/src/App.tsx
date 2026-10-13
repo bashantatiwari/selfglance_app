@@ -856,7 +856,7 @@ export default function App() {
       if (!alive()) return;
       void aiPrime();
       const target = s.target;
-      setGuide({ say: s.say, step: s.step, target, n: target ? n : 0 });
+      setGuide({ say: s.say, step: s.step, target, n: target ? n : 0, debug: s.debug });
       if (s.step === "done") {
         say(s.say);
         stageRef.current?.play("celebrate", true);
@@ -1372,7 +1372,7 @@ export default function App() {
           }}
         />
       )}
-      {guide && <Guide view={guide} origin={guideFrom} tipRef={guideTipRef} onStop={() => stopGuide()} />}
+      {guide && <Guide view={guide} origin={guideFrom} showDebug={settingsRef.current.guideDebug} tipRef={guideTipRef} onStop={() => stopGuide()} />}
       {menu && <ActionMenu menuRef={menuRef} sitting={stageRef.current?.currentPose === "sit"} following={following} inBreak={phase !== "idle"} laterMin={settingsRef.current.snoozeMin} onPick={act} />}
     </>
   );

@@ -350,10 +350,21 @@ export interface GuideTarget {
   phys: [number, number, number, number];
 }
 
+export interface GuideDebug {
+  provider: string;
+  secs: number;
+  /** "[12] button “Add to cart”", "words “Sign in”", "position (x, y)", or why nothing. */
+  picked: string;
+  raw: string;
+  /** Every control he was shown, in overlay pixels. */
+  candidates: { id: number; kind: string; name: string; x: number; y: number; w: number; h: number }[];
+}
+
 export interface GuideStep {
   say: string;
   step: "click" | "type" | "wait" | "done";
   target: GuideTarget | null;
+  debug: GuideDebug;
 }
 
 /** The next step towards `goal` from a fresh look at the screen. Nothing is clicked. `done`: steps already shown. */

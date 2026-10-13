@@ -705,6 +705,7 @@ function SettingsPage() {
           checked={s.brainstormAlert}
           onChange={(v) => update({ brainstormAlert: v })}
         />
+        <Toggle label="Guide mode: show what he picked" hint="Outlines every control he could point at and says which one he chose and why. For finding out why he pointed wrong." checked={s.guideDebug} onChange={(v) => update({ guideDebug: v })} />
         <Toggle label="Read his answers aloud" checked={s.speakAnswers} onChange={(v) => update({ speakAnswers: v })} />
         <Toggle label="Warn me when the battery is low" hint="At 15% and again at 7%, while unplugged." checked={s.batteryAlert} onChange={(v) => update({ batteryAlert: v })} />
         <Toggle label="Remind me to write my journal" hint="Once each evening, if today's entry is still empty and you're at the laptop." checked={s.journalNudge} onChange={(v) => update({ journalNudge: v })} />

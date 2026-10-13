@@ -98,3 +98,44 @@
     transition: none;
   }
 }
+
+/* Debug view (Settings: "Guide mode: show what he picked"): every control he saw, his pick in green. */
+.guide-box {
+  position: fixed;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 1px solid rgba(255, 190, 60, 0.85);
+  background: rgba(255, 190, 60, 0.07);
+}
+
+.guide-box.picked {
+  border: 2px solid #38d27a;
+  background: rgba(56, 210, 122, 0.14);
+}
+
+.guide-box span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 0 3px;
+  font: 700 10px/12px system-ui, sans-serif;
+  color: #1a1400;
+  background: rgba(255, 190, 60, 0.95);
+}
+
+.guide-tip {
+  flex-wrap: wrap;
+}
+
+.guide-tip .dbg {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 11px/1.35 ui-monospace, Consolas, monospace;
+  color: #9fe7bd;
+}

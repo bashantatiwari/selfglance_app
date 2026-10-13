@@ -822,6 +822,32 @@ pub struct GuideStep {
     /// "click" | "type" | "wait" | "done"
     step: String,
     target: Option<GuideTarget>,
+    debug: GuideDebug,
+}
+
+/// Why he pointed where he did: what he could have picked and what he said.
+#[derive(Serialize)]
+pub struct GuideDebug {
+    provider: String,
+    /// Seconds from asking to answer.
+    secs: f64,
+    /// "[12] button “Add to cart”", "words “Sign in”", "position (x, y)", or why nothing.
+    picked: String,
+    /// The model's reply as written (clipped).
+    raw: String,
+    /// Every control he was shown, in overlay pixels.
+    candidates: Vec<DebugBox>,
+}
+
+#[derive(Serialize)]
+pub struct DebugBox {
+    id: usize,
+    kind: &'static str,
+    name: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
 }
 
 /// Physical screen pixels → the overlay's CSS pixels.
@@ -872,16 +898,26 @@ pub async fn ai_guide(app: AppHandle, provider: Provider, gemini_model: Option<S
         .replace("COORDS", &format!("Positions are {}.", if normalized { COORDS_NORMALIZED } else { COORDS_PIXELS }))
         .replace("CONTEXT", &context(&app));
     let (mx, my, w, h, scale) = (shot.mx, shot.my, shot.width as f64, shot.height as f64, shot.scale);
+    let asked_at = std::time::Instant::now();
     let reply = complete_with(provider, gemini_model, &system, &prompt, Some(Image { b64: shot.b64 }), "medium", Some(&guide_schema())).await?;
+    let secs = asked_at.elapsed().as_secs_f64();
     let v = json_in(&reply)?;
     let step = match v["step"].as_str() {
         Some(s @ ("click" | "type" | "wait" | "done")) => s.to_string(),
         _ => "wait".to_string(),
     };
     let say = v["say"].as_str().unwrap_or("").trim().to_string();
+    let elements = crate::screen::elements_now();
+    let mut picked = match step.as_str() {
+        "wait" | "done" => format!("nothing to point at (step: {step})"),
+        _ => "nothing: no control, words or position resolved".to_string(),
+    };
     let rect = if step == "wait" || step == "done" {
         None
-    } else if let Some(r) = v["element_id"].as_u64().filter(|id| *id > 0).and_then(|id| crate::screen::element_rect(id as usize)) {
+    } else if let Some((id, r)) = v["element_id"].as_u64().filter(|id| *id > 0).and_then(|id| crate::screen::element_rect(id as usize).map(|r| (id as usize, r))) {
+        if let Some(e) = elements.iter().find(|e| e.id == id) {
+            picked = format!("[{id}] {} “{}”", e.kind, e.name);
+        }
         Some(r)
     } else {
         let point = v["text"]
@@ -897,11 +933,22 @@ pub async fn ai_guide(app: AppHandle, provider: Provider, gemini_model: Option<S
                 let (sx, sy) = if normalized { (x / 1000.0 * w, y / 1000.0 * h) } else { (x, y) };
                 Some(((mx + sx / scale).round() as i32, (my + sy / scale).round() as i32))
             });
+        if let Some((x, y)) = point {
+            picked = match v["text"].as_str().map(str::trim).filter(|t| !t.is_empty()) {
+                Some(t) if crate::screen::text_center(t, 1).ok() == Some((x, y)) => format!("words “{t}” at ({x}, {y})"),
+                _ => format!("position ({x}, {y}) (his own guess: least reliable)"),
+            };
+        }
         point.map(|(x, y)| (x - 45, y - 16, x + 45, y + 16))
     };
     let target = rect.and_then(|r| to_overlay(&app, r));
-    crate::diag::log(&format!("guide: {step} “{say}” target={}", target.is_some()));
-    Ok(GuideStep { say, step, target })
+    let candidates = elements
+        .iter()
+        .filter_map(|e| to_overlay(&app, e.rect).map(|b| DebugBox { id: e.id, kind: e.kind, name: e.name.clone(), x: b.x, y: b.y, w: b.w, h: b.h }))
+        .collect::<Vec<_>>();
+    crate::diag::log(&format!("guide: {step} “{say}” picked {picked}; {} controls shown; {secs:.1}s", candidates.len()));
+    let debug = GuideDebug { provider: provider.name().to_string(), secs, picked, raw: reply.chars().take(700).collect(), candidates };
+    Ok(GuideStep { say, step, target, debug })
 }
 
 #[derive(Serialize)]
