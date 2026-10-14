@@ -77,6 +77,8 @@ test("jobs you want to do yourself start guide mode", () => {
     "help me how to do that",
     "help me figure out how to share my screen",
     "how do I record my screen in OBS",
+    "Help me to record my screen as well as my face using OBS Studio.",
+    "help me set up a second monitor",
   ]) {
     assert.deepEqual(understand(q), { kind: "screen", mode: "guide" }, q);
   }
@@ -84,4 +86,7 @@ test("jobs you want to do yourself start guide mode", () => {
   assert.deepEqual(understand("open spotify"), { kind: "do", actions: [{ do: "open_app", name: "spotify" }] });
   assert.deepEqual(understand("help"), { kind: "screen", mode: "help" });
   assert.equal(understand("show me my reminders")?.kind, "do");
+  // Help with words is not a walkthrough.
+  assert.notDeepEqual(understand("help me write an email to my landlord"), { kind: "screen", mode: "guide" });
+  assert.notDeepEqual(understand("help me summarize this article please"), { kind: "screen", mode: "guide" });
 });

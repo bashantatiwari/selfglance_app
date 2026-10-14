@@ -543,7 +543,7 @@ const MAX_STRETCH: usize = ASR_RATE as usize * 10;
 /// Shorter than this isn't a word (a knock, a click).
 const MIN_STRETCH: usize = ASR_RATE as usize * 3 / 10;
 /// After "Hey Bond" alone, the next thing you say within this long is the request.
-const AWAIT_REQUEST: Duration = Duration::from_secs(7);
+const AWAIT_REQUEST: Duration = Duration::from_secs(10);
 
 struct Stretch {
     audio: Vec<f32>,
@@ -619,6 +619,10 @@ impl Listener {
         }
         let text = voice::transcribe(&audio, ASR_RATE)?;
         let wanted = waiting || follow_up_open;
+        if wanted {
+            // So "he said Yes? and then nothing happened" can be traced to what he heard.
+            crate::diag::log(&format!("listener: {:.1} s of speech while waiting, heard “{}”", audio.len() as f32 / ASR_RATE as f32, text.trim()));
+        }
         let (rest, woke) = match asr_wake_with(&text, &self.aliases) {
             Some(rest) => (rest, true),
             None if wanted => (text.trim().to_string(), false),

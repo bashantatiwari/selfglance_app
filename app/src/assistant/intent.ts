@@ -67,6 +67,7 @@ const GUIDE_ME = new RegExp(
     String.raw`^(?:please\s+)?point (?:me )?(?:to|at|out)\b`,
     String.raw`^where (?:do|should|can) i (?:click|press|tap|go|type)\b`,
     String.raw`^(?:please\s+)?help me (?:figure out |understand |learn |know )?how (?:to|do i|can i)\b`,
+    String.raw`^(?:please\s+)?(?:help|assist) me (?:to |with |in )?(?!(?:write|draft|compose|summari[sz]e|translate|explain|fix|debug|code|solve|decide|choose|think|plan|brainstorm|name|understand|learn|remember|study|check|find out|figure)\b)\w+(?:\s+\S+){2,}`,
     String.raw`\bhelp me (?:how )?to do (?:that|this|it)\b`,
     String.raw`^how (?:do|can|would|should) i .{3,}\b(?:in|on|with|using|from) (?:obs|chrome|edge|brave|firefox|word|excel|powerpoint|outlook|teams|zoom|discord|photoshop|premiere|davinci|vs ?code|settings|windows|the browser)\b`,
     String.raw`^(?:i(?:'m| am) (?:about|going|trying|gonna) to|i want to|i need to|i have to|let'?s) .+\b(?:help|guide|walk|show|point|assist)\b`,
