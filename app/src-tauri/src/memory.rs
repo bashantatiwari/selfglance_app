@@ -152,6 +152,10 @@ pub fn context_block() -> String {
     if let Some(now) = NOW.lock().unwrap().clone() {
         out.push(format!("In front of the user right now: {now}"));
     }
+    let open = crate::system::open_windows_summary();
+    if !open.is_empty() {
+        out.push(format!("Open windows now (front first): {open}"));
+    }
     let turns = TURNS.lock().unwrap();
     let recent: Vec<String> = turns
         .iter()

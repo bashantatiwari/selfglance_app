@@ -298,10 +298,238 @@ pub fn wait_closed(pids: &[u32], within: Duration) -> bool {
     }
 }
 
+/// A window you could switch to.
+#[derive(Clone, Debug)]
+pub struct Win {
+    pub hwnd: usize,
+    /// Process name, lower-case, without ".exe" or a trailing "64" ("obs64" → "obs").
+    pub proc: String,
+    pub title: String,
+    pub minimized: bool,
+}
+
+/// Programs' main windows in front-to-back order. Windows that are only there in name (cloaked
+/// ghosts of closed Store apps), the desktop and the taskbar are left out, and so is Bond.
+#[cfg(target_os = "windows")]
+pub fn top_windows() -> Vec<Win> {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::Graphics::Dwm::DwmGetWindowAttribute;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, GW_OWNER};
+    struct Ctx {
+        out: Vec<(usize, u32, String, bool)>,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, lp: LPARAM) -> i32 {
+        let ctx = &mut *(lp as *mut Ctx);
+        if IsWindowVisible(hwnd) == 0 || !GetWindow(hwnd, GW_OWNER).is_null() {
+            return 1;
+        }
+        let mut cloaked = 0u32;
+        DwmGetWindowAttribute(hwnd, 14, &mut cloaked as *mut u32 as *mut _, 4);
+        if cloaked != 0 {
+            return 1;
+        }
+        let mut class = [0u16; 64];
+        let len = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32).max(0) as usize;
+        let class = String::from_utf16_lossy(&class[..len]);
+        if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
+            return 1;
+        }
+        let mut buf = [0u16; 256];
+        let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
+        if n == 0 {
+            return 1;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        ctx.out.push((hwnd as usize, pid, String::from_utf16_lossy(&buf[..n]), IsIconic(hwnd) != 0));
+        1
+    }
+    let mut ctx = Ctx { out: Vec::new() };
+    unsafe {
+        EnumWindows(Some(each), &mut ctx as *mut Ctx as LPARAM);
+    }
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    let own = std::process::id();
+    ctx.out
+        .into_iter()
+        .filter(|(_, pid, _, _)| *pid != own)
+        .map(|(hwnd, pid, title, minimized)| {
+            let name = sys.process(Pid::from_u32(pid)).map(|p| p.name().to_string_lossy().to_lowercase()).unwrap_or_default();
+            let name = name.trim_end_matches(".exe").trim_end_matches("64").to_string();
+            Win { hwnd, proc: name, title, minimized }
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn top_windows() -> Vec<Win> {
+    Vec::new()
+}
+
+/// What is open, for Bond's instructions: "Windows Terminal (in front), OBS Studio (minimized)".
+pub fn open_windows_summary() -> String {
+    let mut seen = Vec::new();
+    let mut out = Vec::new();
+    for (i, w) in top_windows().into_iter().enumerate() {
+        if seen.contains(&w.proc) {
+            continue;
+        }
+        seen.push(w.proc.clone());
+        let short: String = w.title.chars().take(40).collect();
+        let state = if w.minimized { " (minimized)" } else if i == 0 { " (in front)" } else { "" };
+        out.push(format!("{} “{short}”{state}", w.proc));
+        if out.len() >= 10 {
+            break;
+        }
+    }
+    out.join("; ")
+}
+
+/// Bring a window to the front the way Windows allows: restore it if it is minimized, then
+/// take the keyboard focus over from the window in front.
+#[cfg(target_os = "windows")]
+pub fn force_foreground(hwnd: usize) -> bool {
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, VK_MENU};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW};
+    let h = hwnd as *mut core::ffi::c_void;
+    unsafe {
+        ShowWindow(h, if IsIconic(h) != 0 { SW_RESTORE } else { SW_SHOW });
+        // A tap on Alt tells Windows a person is at the keyboard, so it lets focus move.
+        keybd_event(VK_MENU as u8, 0, 0, 0);
+        keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
+        let front = GetForegroundWindow();
+        let (me, them) = (GetCurrentThreadId(), GetWindowThreadProcessId(front, std::ptr::null_mut()));
+        if them != me {
+            AttachThreadInput(me, them, 1);
+        }
+        BringWindowToTop(h);
+        SetForegroundWindow(h);
+        if them != me {
+            AttachThreadInput(me, them, 0);
+        }
+        std::thread::sleep(Duration::from_millis(120));
+        GetForegroundWindow() == h
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn force_foreground(_hwnd: usize) -> bool {
+    false
+}
+
+/// Programs' names mean little to say out loud ("obs64"); this is the word to look for in
+/// the request ("OBS Studio" → "obs").
+fn first_word(name: &str) -> String {
+    name.split(|c: char| !c.is_alphanumeric()).find(|w| !w.is_empty()).unwrap_or("").to_lowercase()
+}
+
+/// Find a running program's window by what the user calls it: its title contains the whole
+/// name, or its program name contains the first word ("OBS Studio" → obs64).
+fn window_for(name: &str) -> Option<Win> {
+    let n = name.trim().to_lowercase();
+    let n = n.trim_start_matches("the ").trim_end_matches(" app").trim_end_matches(" window").trim().to_string();
+    if n.is_empty() || matches!(n.as_str(), "it" | "this" | "that" | "app" | "window") {
+        return None;
+    }
+    let token = first_word(&n);
+    top_windows().into_iter().find(|w| w.title.to_lowercase().contains(&n) || (token.len() >= 3 && w.proc.contains(&token)))
+}
+
+/// "Switch to OBS": restore it if minimized and bring it to the front. The name of what was
+/// brought forward, or why it couldn't be.
+pub fn focus_app(name: &str) -> Result<String, String> {
+    let w = window_for(name).ok_or_else(|| format!("{} isn't open.", name.trim()))?;
+    let shown: String = w.title.chars().take(40).collect();
+    if force_foreground(w.hwnd) || force_foreground(w.hwnd) {
+        Ok(shown)
+    } else {
+        Err(format!("Windows wouldn't let me switch to {}. Click it in the taskbar.", name.trim()))
+    }
+}
+
+/// Wait for a program just started to show a window, then bring it to the front.
+pub fn focus_app_wait(name: &str, within: Duration) -> Option<String> {
+    let start = std::time::Instant::now();
+    loop {
+        if let Ok(t) = focus_app(name) {
+            return Some(t);
+        }
+        if start.elapsed() > within {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+}
+
+/// "Minimise it": put the program's windows away (it = the app in front before Bond).
+#[cfg(target_os = "windows")]
+pub fn minimize_app(name: &str) -> Result<String, String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_MINIMIZE};
+    let (pids, shown) = which_app(name)?;
+    let wins = windows_of(&pids, false);
+    if wins.is_empty() {
+        return Err(format!("{shown} has no window to minimize."));
+    }
+    for w in wins {
+        unsafe {
+            ShowWindow(w as _, SW_MINIMIZE);
+        }
+    }
+    Ok(shown)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn minimize_app(_name: &str) -> Result<String, String> {
+    Err("Minimizing works on Windows for now.".into())
+}
+
+/// Words that are also program names but mean something else in a sentence.
+const NOT_A_PROGRAM: &[&str] = &["code", "host", "service", "helper", "setup", "runtime", "explorer", "search", "settings", "windows", "app", "client", "main", "launcher", "system"];
+
+/// Before guiding: if the goal names an app that is open, bring it to the front (restoring it
+/// if minimized); if it names one that is installed but closed, start it and wait for its
+/// window. The name of the app brought forward, if any.
+#[tauri::command]
+pub async fn guide_prepare(goal: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let g = goal.to_lowercase();
+        let words: Vec<&str> = g.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+        // 1. Already open: the window whose program is named in the goal.
+        for w in top_windows() {
+            if w.proc.len() >= 3 && !NOT_A_PROGRAM.contains(&w.proc.as_str()) && words.contains(&w.proc.as_str()) {
+                if force_foreground(w.hwnd) || force_foreground(w.hwnd) {
+                    return Some(w.title.chars().take(40).collect());
+                }
+                return None;
+            }
+        }
+        // 2. Named after "using / in / on / with / from" and installed: start it.
+        for (i, w) in words.iter().enumerate() {
+            if !matches!(*w, "using" | "in" | "on" | "with" | "from" | "via") {
+                continue;
+            }
+            for take in [3usize, 2, 1] {
+                let Some(cand) = words.get(i + 1..i + 1 + take) else { continue };
+                let cand = cand.join(" ");
+                if let Ok(shown) = crate::agent::start_app(&cand) {
+                    focus_app_wait(&cand, Duration::from_secs(10));
+                    return Some(shown);
+                }
+            }
+        }
+        None
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// Put the program's front window (its question, if it is asking) in front of you.
 #[cfg(target_os = "windows")]
 pub fn bring_to_front(pids: &[u32]) -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
     let front = |pids: &[u32]| unsafe {
         let mut pid = 0u32;
         GetWindowThreadProcessId(GetForegroundWindow(), &mut pid);
@@ -314,10 +542,7 @@ pub fn bring_to_front(pids: &[u32]) -> bool {
     let mut wins = windows_of(pids, true);
     wins.sort_by_key(|w| windows_of(pids, false).contains(w));
     for w in wins {
-        unsafe {
-            SetForegroundWindow(w as _);
-        }
-        std::thread::sleep(Duration::from_millis(200));
+        force_foreground(w);
         if front(pids) {
             return true;
         }
@@ -420,5 +645,17 @@ mod tests {
         println!("{}\n\n{}", super::status(), super::top_processes());
         assert!(super::find_processes("csrss").is_err());
         assert!(super::find_processes("no-such-program-xyz").is_err());
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    /// Run by hand on a real desktop: cargo test --lib windows_on_this_desktop -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn windows_on_this_desktop() {
+        println!("open: {}", super::open_windows_summary());
+        let name = std::env::var("BOND_FOCUS").unwrap_or_else(|_| "obs".into());
+        println!("focus {name}: {:?}", super::focus_app(&name));
     }
 }

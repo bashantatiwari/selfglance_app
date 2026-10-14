@@ -79,6 +79,8 @@ test("jobs you want to do yourself start guide mode", () => {
     "how do I record my screen in OBS",
     "Help me to record my screen as well as my face using OBS Studio.",
     "help me set up a second monitor",
+    "Help me  to record my screen as well as my face in obs studio",
+    "Help me to capture my screen as well as my face using obs studio",
   ]) {
     assert.deepEqual(understand(q), { kind: "screen", mode: "guide" }, q);
   }

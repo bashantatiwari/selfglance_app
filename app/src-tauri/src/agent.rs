@@ -52,6 +52,9 @@ const APPROVAL_TTL: Duration = Duration::from_secs(10 * 60);
 #[serde(tag = "do", rename_all = "snake_case")]
 pub enum Action {
     OpenApp { name: String },
+    /// Switch to a program that is already open (restoring it if it is minimized).
+    FocusApp { name: String },
+    MinimizeApp { #[serde(default)] name: String },
     OpenUrl { url: String },
     WebSearch { query: String },
     OpenFolder { name: String },
@@ -813,7 +816,17 @@ fn find_files(app: &AppHandle, query: &str, folder_name: Option<&str>) -> Result
 /// One action that needs no approval. Returns what was done and how long to let it settle.
 fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Result<Effect, String> {
     match action {
-        Action::OpenApp { name } => open_app(&name).map(|n| Effect::line(format!("Opened {n}"), 1500)),
+        Action::OpenApp { name } => {
+            // Already running, even minimized? Bring it forward instead of starting it again.
+            if let Ok(title) = crate::system::focus_app(&name) {
+                return Ok(Effect::line(format!("Brought {title} to the front"), 800));
+            }
+            let n = open_app(&name)?;
+            crate::system::focus_app_wait(&name, Duration::from_secs(3)); // in front once its window appears
+            Ok(Effect::line(format!("Opened {n}"), 1000))
+        }
+        Action::FocusApp { name } => crate::system::focus_app(&name).map(|t| Effect::line(format!("Brought {t} to the front"), 800)),
+        Action::MinimizeApp { name } => crate::system::minimize_app(&name).map(|n| Effect::line(format!("Minimized {n}"), 400)),
         Action::OpenUrl { url } => {
             let url = clean_url(&url)?;
             open_target(&url)?;
@@ -1177,6 +1190,15 @@ const SITES: &[(&str, &str)] = &[
     ("twitter", "https://x.com"),
     ("x", "https://x.com"),
 ];
+
+/// Start an app by name (not a website): its display name.
+pub fn start_app(name: &str) -> Result<String, String> {
+    let wanted = name.trim().to_lowercase();
+    let wanted = ALIASES.iter().find(|(a, _)| *a == wanted).map(|(_, b)| b.to_string()).unwrap_or(wanted);
+    let (display, target) = find_app(&wanted).ok_or_else(|| format!("I couldn't find an app called “{name}”."))?;
+    open_target(&target)?;
+    Ok(display)
+}
 
 fn open_app(name: &str) -> Result<String, String> {
     let wanted = name.trim().to_lowercase();

@@ -115,7 +115,7 @@ function reminder(t: string): Action | null {
 }
 
 export function understand(input: string): Intent {
-  const raw = input.trim();
+  const raw = input.trim().replace(/[ \t]+/g, " ");
   const t = raw.replace(/[.!]+$/, "");
   let m: RegExpMatchArray | null;
 

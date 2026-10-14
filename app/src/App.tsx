@@ -52,6 +52,7 @@ import {
   denyAction,
   giveFeedback,
   guideMouse,
+  guidePrepare,
   recordOwn,
   releaseFocus,
   routeCommand,
@@ -856,6 +857,15 @@ export default function App() {
     };
     setAsk(null);
     keepEars();
+    // The app you named comes to the front first (opened if it was closed, restored if minimized):
+    // he can only point at what is on screen.
+    setGuide({ say: "Getting things ready…", step: "wait", target: null, n: 0 });
+    const brought = await guidePrepare(goal);
+    if (!alive()) return;
+    if (brought) {
+      showPop(`${brought} is ready`, 2200, true);
+      await pause(1200);
+    }
     setGuideFrom(await cursorPosition());
     let misses = 0;
     let quiet = 0;

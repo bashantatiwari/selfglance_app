@@ -352,6 +352,8 @@ const COORDS_NORMALIZED: &str = "coordinates normalized to 0-1000 (x from left, 
 
 const ACTIONS_DOC: &str = r#"Actions (JSON objects, run in order, at most 8):
 {"do":"open_app","name":"Spotify"}            start an installed app by its name
+{"do":"focus_app","name":"OBS Studio"}        switch to a program that is already open (restores it if minimized, brings it in front of the others)
+{"do":"minimize_app","name":"terminal"}        put a program's window away ("it" = the app in front)
 {"do":"open_url","url":"https://..."}          open a web page
 {"do":"web_search","query":"..."}              Google search
 {"do":"open_folder","name":"downloads"}        downloads, documents, desktop, pictures, screenshots, music, videos, home, or an absolute path
@@ -398,6 +400,8 @@ intent is one of (if you return any actions, intent is "task"):
 reply is always a very short, friendly line Bond says (for log/idea: a confirmation; for task: what you're doing).
 The message may come with what you know about the user, what is in front of them, and the conversation so far. Use them: "it", "that", "again" and short follow-ups refer to the conversation ("close it" right after opening Notepad means Notepad; "yes, run it" after you proposed a command means that command, so repeat that action). Answer questions about the user from what you know; never say you don't know something the conversation or the facts say.
 remember: only when the user's new message itself tells you something lasting about them (their name, people, preferences, projects, where they work or study), one short sentence in the third person ("The user's name is Alex."). Never from the screen, folders, the conversation or what you already know; otherwise "".
+Programs that may already be running: "Open windows now" below lists them. "switch to / go to / bring up / show me OBS" is focus_app; open_app starts a program (and brings it forward if it is already open). "minimize the terminal" is minimize_app.
+Never say you started, recorded, sent or finished something unless one of your actions does exactly that. Never invent a hotkey for a particular app: hotkey is only for shortcuts every app shares (ctrl+t, ctrl+w, ctrl+s, ctrl+z, ctrl+f, ctrl+c, ctrl+v, alt+tab, f5). When the user wants to DO something inside an app (record, export, set up, configure) and asks for help or how, that is "guide", not a hotkey.
 To close an app (one the user names, or the one just opened): close_app with its name. hotkey "ctrl+w" only closes a tab, and only when the user says "tab".
 A spoken message may contain misheard words: read it by how it sounds ("open not bad" is "open Notepad", "they bond" is "hey Bond").
 Never invent actions that are not in the list. Almost anything on the computer can be done with run_command; use intent "chat" only when it really can't be done.
@@ -480,6 +484,8 @@ fn actions_in(v: &Value) -> Result<Vec<crate::agent::Action>, String> {
 /// A leading "?" marks an optional field.
 const ACTION_FIELDS: &[(&str, &[(&str, &str)])] = &[
     ("open_app", &[("name", "string")]),
+    ("focus_app", &[("name", "string")]),
+    ("minimize_app", &[("name", "string")]),
     ("open_url", &[("url", "string")]),
     ("web_search", &[("query", "string")]),
     ("open_folder", &[("name", "string")]),
