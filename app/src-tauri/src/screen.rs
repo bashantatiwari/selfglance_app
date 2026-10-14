@@ -244,7 +244,12 @@ pub fn user_window() -> usize {
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, &mut pid);
         if pid == std::process::id() {
-            crate::agent::previous_foreground()
+            // Bond has the focus (you clicked his note): the window you were using is the one
+            // in front of the others that isn't minimized.
+            match crate::system::top_windows().into_iter().find(|w| !w.minimized) {
+                Some(w) => w.hwnd,
+                None => crate::agent::previous_foreground(),
+            }
         } else {
             hwnd as usize
         }

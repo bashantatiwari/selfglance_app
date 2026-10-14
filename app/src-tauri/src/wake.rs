@@ -566,6 +566,11 @@ pub(crate) fn unfinished(text: &str) -> bool {
     if t.ends_with([',', ';', ':', '-', '…']) {
         return true;
     }
+    // His ears put a full stop or question mark on a sentence they hear end; a stretch without
+    // one was cut off ("I want to generate"). A single word ("Stop", "Yes") is a whole request.
+    if t.split_whitespace().count() >= 3 {
+        return true;
+    }
     let last = t.trim_end_matches(|c: char| !c.is_alphanumeric()).rsplit(|c: char| c.is_whitespace()).next().unwrap_or("");
     const OPEN: &[&str] = &[
         "and", "or", "but", "so", "to", "the", "a", "an", "my", "your", "our", "with", "using", "in", "on", "at", "for", "of", "from", "into",
@@ -871,10 +876,10 @@ pub fn strip_wake_word(text: &str) -> String {
 mod tests {
     #[test]
     fn knows_when_a_sentence_is_unfinished() {
-        for t in ["Help me to record my screen as well as", "open the", "I want to record my screen using", "Hey Bond, I want to,", "uh"] {
+        for t in ["Help me to record my screen as well as", "open the", "I want to record my screen using", "Hey Bond, I want to,", "uh", "I want to generate"] {
             assert!(super::unfinished(t), "{t}");
         }
-        for t in ["Help me to record my screen as well as my face.", "Open Notepad", "What time is it?", "Stop", ""] {
+        for t in ["Help me to record my screen as well as my face.", "Open Notepad", "What time is it?", "Stop", "Hey Bond", ""] {
             assert!(!super::unfinished(t), "{t}");
         }
     }
