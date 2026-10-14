@@ -94,6 +94,18 @@ export async function journalList(): Promise<{ day: string; text: string }[]> {
   return out.filter((e) => e.text.trim()).sort((a, b) => b.day.localeCompare(a.day));
 }
 
+/** Whether an entry holds something you wrote (Bond's own timestamped "log" lines don't count). */
+export const journalWritten = (text: string) => text.split("\n").some((l) => l.trim() && !/^\d{1,2}:\d{2}(\s?[ap]m)? — /i.test(l.trim()));
+
+/** How many words you wrote (not counting Bond's timestamped log lines). */
+export const journalWords = (text: string) =>
+  text
+    .split("\n")
+    .filter((l) => l.trim() && !/^\d{1,2}:\d{2}(\s?[ap]m)? — /i.test(l.trim()))
+    .join(" ")
+    .split(/\s+/)
+    .filter(Boolean).length;
+
 /** Add a timestamped line to today's journal entry. */
 export async function logToJournal(text: string): Promise<void> {
   const line = `${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} — ${text.trim()}`;

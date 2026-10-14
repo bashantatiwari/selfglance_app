@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { addIdea, loadIdeas, saveIdeas, type Idea } from "../assistant/notes";
 import { onTauriEvent } from "../platform";
 import { toast } from "./ui";
+import IdeaChat from "./IdeaChat";
 
 const when = (ms: number) => new Date(ms).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
 
@@ -17,6 +18,7 @@ export default function Ideas() {
   const [filter, setFilter] = useState<Filter>("all");
   const [editing, setEditing] = useState<string | null>(null);
   const [edit, setEdit] = useState("");
+  const [chatId, setChatId] = useState<string | null>(null);
   useEffect(() => {
     const read = () => setIdeas(loadIdeas());
     const un = onTauriEvent<null>("notes-changed", read);
@@ -38,6 +40,7 @@ export default function Ideas() {
     setDraft("");
   };
   const remove = (id: string) => {
+    if (chatId === id) setChatId(null);
     const before = ideas;
     update(ideas.filter((i) => i.id !== id));
     toast("Idea removed", { label: "Undo", run: () => update(before) });
@@ -47,6 +50,7 @@ export default function Ideas() {
     setEditing(null);
   };
 
+  const chatIdea = ideas.find((i) => i.id === chatId) ?? null;
   const counts = { all: ideas.length, active: ideas.filter((i) => !i.done).length, started: ideas.filter((i) => i.done).length };
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -103,6 +107,7 @@ export default function Ideas() {
       {ideas.length > 0 && shown.length === 0 && <p className="muted">Nothing matches.</p>}
 
       {shown.length > 0 && (
+        <div className={`explorer ${chatIdea ? "with-detail" : ""}`}>
         <ul className="idea-list">
           {shown.map((i) => (
             <li key={i.id} className={i.done ? "done" : ""}>
@@ -139,11 +144,20 @@ export default function Ideas() {
                   </p>
                 )}
                 <small className="muted">
+                  <button className="linkish discuss" onClick={() => setChatId(chatId === i.id ? null : i.id)}>
+                    Talk it through
+                  </button>
+                  {" · "}
                   {when(i.at)}
                   {i.done && " · started"}
                 </small>
               </div>
               <div className="row-actions">
+                <button className={`icon-btn ${chatId === i.id ? "on" : ""}`} onClick={() => setChatId(chatId === i.id ? null : i.id)} aria-label="Talk this idea through with Bond" title="Talk it through with Bond">
+                  <svg viewBox="0 0 24 24" aria-hidden>
+                    <path d="M4 5h16v11H9l-5 4z" />
+                  </svg>
+                </button>
                 <button
                   className="icon-btn"
                   onClick={() => {
@@ -166,6 +180,8 @@ export default function Ideas() {
             </li>
           ))}
         </ul>
+        {chatIdea && <IdeaChat idea={chatIdea} onClose={() => setChatId(null)} />}
+        </div>
       )}
     </>
   );

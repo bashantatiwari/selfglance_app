@@ -1590,3 +1590,154 @@ th.num,
     min-width: 660px;
   }
 }
+
+/* --- Journal status on Today, idea conversation ---------------------------------------- */
+.jstatus {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow-1);
+  transition: border-color 120ms;
+}
+
+.jstatus:hover {
+  border-color: var(--accent-line);
+}
+
+.jstatus > i {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--cat-browsing) 18%, transparent);
+  color: var(--cat-browsing);
+  font-style: normal;
+  font-weight: 700;
+}
+
+.jstatus.done > i {
+  background: color-mix(in srgb, var(--good) 16%, transparent);
+  color: var(--good);
+}
+
+.jstatus span {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.jstatus small {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.jstatus em {
+  font-style: normal;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.discuss {
+  padding: 0;
+  font-size: 12.5px;
+}
+
+.icon-btn.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: min(620px, calc(100vh - 80px));
+  overflow: hidden;
+}
+
+.chat-idea {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-s);
+  background: var(--hover);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.chat-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 2px;
+}
+
+.chat-empty p {
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.bubble {
+  max-width: 92%;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bubble.you {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.bubble.bond {
+  align-self: flex-start;
+  background: var(--hover);
+  border-bottom-left-radius: 4px;
+}
+
+.bubble.thinking {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.chat-form {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.chat-form textarea {
+  flex: 1;
+  resize: none;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--page);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+}

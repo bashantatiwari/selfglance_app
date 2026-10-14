@@ -45,6 +45,7 @@ import { analyzeDay, CATS, catName, catOf, clock, durOf, fmt, insights, kindOf, 
 import { loadDay, type Segment } from "../companion/tracker";
 import { glassesToday } from "../break/BreakCoach";
 import { loadSettings, saveSettings, type Settings } from "../settings";
+import { dayKey as todayKey, journalGet, journalWords, journalWritten } from "../assistant/notes";
 import Journal from "./Journal";
 import Ideas from "./Ideas";
 import Reminders from "./Reminders";
@@ -367,6 +368,8 @@ function Today({ stats, prev, offset, picker, go }: { stats: DayStats; prev: Day
         </div>
       </section>
 
+      {offset === 0 && <JournalStatus go={go} />}
+
       <Section title="Your day">
         <DayStrip stats={stats} />
       </Section>
@@ -397,6 +400,36 @@ function Today({ stats, prev, offset, picker, go }: { stats: DayStats; prev: Day
 
       <DaySummary stats={stats} />
     </>
+  );
+}
+
+/** Whether today's journal entry exists, read from the journal file itself. */
+function JournalStatus({ go }: { go: (p: Page) => void }) {
+  const [words, setWords] = useState<number | null>(null);
+  useEffect(() => {
+    const read = () =>
+      void journalGet(todayKey())
+        .then((t) => setWords(journalWritten(t) ? journalWords(t) : 0))
+        .catch(() => setWords(null));
+    read();
+    const un = onTauriEvent<null>("notes-changed", read);
+    window.addEventListener("focus", read);
+    return () => {
+      un.then((u) => u());
+      window.removeEventListener("focus", read);
+    };
+  }, []);
+  if (words === null) return null;
+  const done = words > 0;
+  return (
+    <button className={`jstatus ${done ? "done" : ""}`} onClick={() => go("journal")}>
+      <i aria-hidden>{done ? "✓" : "✎"}</i>
+      <span>
+        <b>{done ? "Today's journal is written" : "Today's journal isn't written yet"}</b>
+        <small>{done ? `${words} word${words === 1 ? "" : "s"} · saved on this computer` : "A few lines about the day is enough."}</small>
+      </span>
+      <em>{done ? "Open" : "Write it"} →</em>
+    </button>
   );
 }
 

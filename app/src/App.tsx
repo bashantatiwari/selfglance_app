@@ -84,7 +84,7 @@ import {
   type Reminder,
 } from "./ai";
 import { saidStop, spokenAnswer, understand, unsavedAnswer, type ScreenMode } from "./assistant/intent";
-import { addIdea, dayKey, journalGet, logToJournal } from "./assistant/notes";
+import { addIdea, dayKey, journalGet, journalWritten, logToJournal } from "./assistant/notes";
 import {
   blockedBy,
   errorFallback,
@@ -226,6 +226,7 @@ export default function App() {
   /** The dashboard has the focus: Bond steps aside (unless he has something to say). */
   const [inDashboard, setInDashboard] = useState(false);
   const tuckedRef = useRef(false);
+  const inDashboardRef = useRef(false);
 
   const homeX = () => {
     const saved = Number(store.get("selfglance.homeX"));
@@ -462,11 +463,13 @@ export default function App() {
       if (!st.journalNudge || journalChecking || idleSec >= AWAY_AFTER_SEC || coach.inBreak) return;
       if (new Date().getHours() < st.journalAt || store.get("selfglance.journalNudged") === day) return;
       if (ctxRef.current === "meeting" || ctxRef.current === "game") return;
+      // You are in the dashboard right now (maybe writing it): he checks again after you leave.
+      if (inDashboardRef.current) return;
       journalChecking = true;
       try {
         const text = await journalGet(day);
         store.set("selfglance.journalNudged", day);
-        const written = text.split("\n").some((l) => l.trim() && !/^\d{1,2}:\d{2}(\s?[ap]m)? — /i.test(l.trim()));
+        const written = journalWritten(text);
         if (!written) await remind({ id: "journal", text: "Time to write today's journal. How did the day go?", at: Date.now(), open: "journal" });
       } catch {
         /* try again on the next tick */
@@ -814,7 +817,10 @@ export default function App() {
   };
 
   useEffect(() => {
-    const un = onTauriEvent<boolean>("dashboard-focus", (f) => setInDashboard(f));
+    const un = onTauriEvent<boolean>("dashboard-focus", (f) => {
+      inDashboardRef.current = f;
+      setInDashboard(f);
+    });
     return () => void un.then((f) => f());
   }, []);
 
