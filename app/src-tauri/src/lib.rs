@@ -392,6 +392,7 @@ pub fn run() {
             agent::agent_run,
             agent::agent_approve,
             agent::agent_deny,
+            agent::agent_cancel,
             system::clipboard_text,
             journal::journal_get,
             journal::journal_set,

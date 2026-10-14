@@ -88,6 +88,7 @@ export const runActions = (actions: Action[]) => invoke<Outcome>("agent_run", { 
 
 /** Yes to a pending approval: the next step (a second confirmation) or the result. */
 export const approveAction = (id: string, alt = false) => invoke<Outcome>("agent_approve", { id, alt });
+export const cancelAgent = () => (inTauri ? invoke<void>("agent_cancel").catch(() => {}) : Promise.resolve());
 export const denyAction = (id: string) => (inTauri ? invoke<void>("agent_deny", { id }).catch(() => {}) : Promise.resolve());
 
 /** Let the overlay take the keyboard (typing a confirmation). */

@@ -48,6 +48,7 @@ import {
   approveAction,
   aiPrime,
   clipboardText,
+  cancelAgent,
   denyAction,
   giveFeedback,
   guideMouse,
@@ -130,7 +131,7 @@ function chime() {
   }
 }
 
-const FOLLOW_UP_SEC = 6; // after he answers a spoken request, a follow-up needs no "Hey Bond"
+const FOLLOW_UP_SEC = 12; // after he answers a spoken request, a follow-up needs no "Hey Bond"
 const CHATTY = /\b(chatgpt|claude|gemini|perplexity|copilot|deepseek|grok|notion|obsidian|onenote|google keep)\b/i;
 const POKE_REACTIONS: ClipName[] = ["wave", "nod", "celebrate", "hang"];
 const CLIPBOARD_SYSTEM =
@@ -217,6 +218,8 @@ export default function App() {
   const [guide, setGuide] = useState<GuideView | null>(null);
   const [guideFrom, setGuideFrom] = useState<{ x: number; y: number } | null>(null);
   const guideRun = useRef(0);
+  /** Goes up on every new request and on "stop": an older request that comes back later is dropped. */
+  const askEpoch = useRef(0);
   const guideTipRef = useRef<HTMLDivElement>(null);
 
   const homeX = () => {
@@ -533,11 +536,7 @@ export default function App() {
           if (reply === "no") return void deny(cur.approval.id);
           if (reply === "yes") return void approve(cur.approval.id);
         }
-        if (saidStop(said)) {
-          stopSpeaking();
-          if (guideRun.current) return stopGuide("Okay, you've got it from here.");
-          return void closeAsk();
-        }
+        if (saidStop(said)) return cancelAll();
         void doAsk(said, false);
       }),
       // Turned away by a little: rather than silence, he asks (and learns if it was you).
@@ -797,7 +796,9 @@ export default function App() {
 
   const lookAtScreen = async (question: string, mode: ScreenMode) => {
     setAsk({ step: "thinking", question, looking: true });
+    const my = askEpoch.current;
     const res = await screenAsk(question, mode, heardRef.current);
+    if (askEpoch.current !== my) return;
     void aiPrime(); // looking replaced what his brain had read; read it again for the next request
     expRef.current = res.exp_id;
     const o = res.outcome ?? { done: [], info: [], pending: null };
@@ -810,6 +811,20 @@ export default function App() {
     const un = onTauriEvent("guide-looked", () => setGuide((g) => (g ? { ...g, hidden: false } : g)));
     return () => void un.then((f) => f());
   }, []);
+
+  /** "Stop": quiet at once, the plan in progress does no more steps, guiding ends, an answer still on its way is dropped. */
+  const cancelAll = () => {
+    askEpoch.current++;
+    stopSpeaking();
+    void cancelAgent();
+    if (guideRun.current) return stopGuide("Okay, you've got it from here.");
+    void closeAsk();
+  };
+
+  /** While he works (thinking, guiding), he keeps listening, so "stop" needs no "Hey Bond". */
+  const keepEars = () => {
+    if (settingsRef.current.wakeWord) void wakeFollowUp(15);
+  };
 
   /** End guide mode (no more looking, the cursor and note go away). */
   const stopGuide = (say?: string) => {
@@ -840,10 +855,12 @@ export default function App() {
       autoClose();
     };
     setAsk(null);
+    keepEars();
     setGuideFrom(await cursorPosition());
     let misses = 0;
     let quiet = 0;
     for (let n = 1; n <= 40 && alive(); ) {
+      keepEars();
       // Out of the screenshot (the note would be read as part of the page), back once it's taken.
       setGuide((g) => ({ say: "Looking at your screen…", step: "wait", target: null, n: 0, ...g, hidden: true }));
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -930,7 +947,9 @@ export default function App() {
 
   const doAsk = async (question: string, typed = true) => {
     guideRun.current = 0; // a new request ends the old guide
+    const my = ++askEpoch.current;
     setGuide(null);
+    keepEars();
     setAsk({ step: "thinking", question, looking: false });
     expRef.current = "";
     if (typed) {
@@ -972,6 +991,7 @@ export default function App() {
 
       // 2. Not sure: the AI classifies it (text only), and runs simple tasks right away.
       const r = await routeCommand(question, heardRef.current);
+      if (askEpoch.current !== my) return; // you said stop (or asked something else) meanwhile
       expRef.current = r.exp_id;
       switch (r.intent) {
         case "log":

@@ -538,6 +538,9 @@ impl Event {
 
 /// A pause this long ends a stretch of speech, which is then transcribed.
 const STRETCH_PAUSE: Duration = Duration::from_millis(600);
+/// When what he has heard so far ends mid-sentence ("…as well as", "…using"), he waits this
+/// long in all before taking it as finished, the way a person waits for you to go on.
+const LONG_PAUSE: Duration = Duration::from_millis(2200);
 /// Longest stretch transcribed at once.
 const MAX_STRETCH: usize = ASR_RATE as usize * 10;
 /// Shorter than this isn't a word (a knock, a click).
@@ -549,6 +552,27 @@ struct Stretch {
     audio: Vec<f32>,
     talk: Endpoint,
     started: Duration,
+    /// What the speech so far says, read at the first pause (kept while he waits to see if
+    /// you go on, dropped if you do).
+    draft: Option<String>,
+}
+
+/// Whether a request sounds unfinished: it ends on a word nobody ends a sentence with, or on a comma.
+pub(crate) fn unfinished(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    if t.is_empty() || t.ends_with(['.', '!', '?']) {
+        return false;
+    }
+    if t.ends_with([',', ';', ':', '-', '…']) {
+        return true;
+    }
+    let last = t.trim_end_matches(|c: char| !c.is_alphanumeric()).rsplit(|c: char| c.is_whitespace()).next().unwrap_or("");
+    const OPEN: &[&str] = &[
+        "and", "or", "but", "so", "to", "the", "a", "an", "my", "your", "our", "with", "using", "in", "on", "at", "for", "of", "from", "into",
+        "that", "because", "then", "also", "as", "like", "about", "how", "what", "when", "where", "which", "who", "if", "i", "i'm", "me", "um", "uh",
+        "well", "is", "are", "was", "can", "could", "would", "should", "do", "does", "not", "by", "than", "this", "these", "those", "some", "any",
+    ];
+    OPEN.contains(&last)
 }
 
 /// Microphone audio in (16 kHz chunks), events out. Every stretch of speech goes through the
@@ -599,7 +623,7 @@ impl Listener {
             if probe.speaking() {
                 // Start a little early, so the first sound isn't cut.
                 let lead: Vec<f32> = self.ring.iter().skip(self.ring.len().saturating_sub(ASR_RATE as usize * 3 / 10)).copied().collect();
-                self.stretch = Some(Stretch { audio: lead, talk: probe, started: now });
+                self.stretch = Some(Stretch { audio: lead, talk: probe, started: now, draft: None });
                 if waiting || follow_up_open {
                     out.push(Event::Listening);
                 }
@@ -609,15 +633,32 @@ impl Listener {
         s.audio.extend_from_slice(chunk);
         let at = now - s.started;
         s.talk.feed(chunk, at);
-        if s.talk.quiet_for(at) < STRETCH_PAUSE && s.audio.len() < MAX_STRETCH {
-            return Ok(out);
+        let quiet = s.talk.quiet_for(at);
+        if quiet < STRETCH_PAUSE {
+            s.draft = None; // you went on
+            if s.audio.len() < MAX_STRETCH {
+                return Ok(out);
+            }
         }
+        // A pause. If it stops mid-sentence, give you a little longer before taking it as done.
+        if s.audio.len() < MAX_STRETCH && quiet < LONG_PAUSE && s.audio.len() >= MIN_STRETCH {
+            if s.draft.is_none() {
+                s.draft = Some(voice::transcribe(&s.audio, ASR_RATE)?);
+            }
+            if s.draft.as_deref().is_some_and(unfinished) {
+                return Ok(out);
+            }
+        }
+        let draft = s.draft.take();
         let audio = std::mem::take(&mut s.audio);
         self.stretch = None;
         if audio.len() < MIN_STRETCH {
             return Ok(out);
         }
-        let text = voice::transcribe(&audio, ASR_RATE)?;
+        let text = match draft {
+            Some(t) => t,
+            None => voice::transcribe(&audio, ASR_RATE)?,
+        };
         let wanted = waiting || follow_up_open;
         if wanted {
             // So "he said Yes? and then nothing happened" can be traced to what he heard.
@@ -828,6 +869,16 @@ pub fn strip_wake_word(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn knows_when_a_sentence_is_unfinished() {
+        for t in ["Help me to record my screen as well as", "open the", "I want to record my screen using", "Hey Bond, I want to,", "uh"] {
+            assert!(super::unfinished(t), "{t}");
+        }
+        for t in ["Help me to record my screen as well as my face.", "Open Notepad", "What time is it?", "Stop", ""] {
+            assert!(!super::unfinished(t), "{t}");
+        }
+    }
+
     use super::*;
 
     #[test]

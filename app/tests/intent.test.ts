@@ -90,3 +90,13 @@ test("jobs you want to do yourself start guide mode", () => {
   assert.notDeepEqual(understand("help me write an email to my landlord"), { kind: "screen", mode: "guide" });
   assert.notDeepEqual(understand("help me summarize this article please"), { kind: "screen", mode: "guide" });
 });
+
+test("stopping, in the ways people say it", () => {
+  for (const q of ["stop", "Stop that.", "okay stop", "Bond, stop", "wait", "hold on", "cancel that", "never mind", "that's enough", "please stop"]) {
+    assert.equal(saidStop(q), true, q);
+  }
+  // A request that merely contains the word is still a request.
+  for (const q of ["stop the music", "wait for the download to finish", "open notepad"]) {
+    assert.equal(saidStop(q), false, q);
+  }
+});

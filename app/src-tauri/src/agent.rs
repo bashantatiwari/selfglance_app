@@ -238,13 +238,26 @@ pub fn agent_deny(id: String) {
 
 /// Run actions one after another. Stops at the first failure, so later steps never act on
 /// the wrong window, and at the first one that needs approval.
+/// "Stop": the plan in progress does no further steps.
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[tauri::command]
+pub fn agent_cancel() {
+    CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 pub async fn run(app: &AppHandle, actions: Vec<Action>, shot: Option<ShotGeometry>) -> Result<Outcome, String> {
+    CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
     proceed(app, Outcome::default(), actions.into_iter().take(MAX_ACTIONS).collect(), shot).await
 }
 
 async fn proceed(app: &AppHandle, mut out: Outcome, actions: Vec<Action>, shot: Option<ShotGeometry>) -> Result<Outcome, String> {
     let mut queue: VecDeque<Action> = actions.into();
     while let Some(action) = queue.pop_front() {
+        if CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+            out.done.push("Stopped.".into());
+            break;
+        }
         let a = app.clone();
         let step = tauri::async_runtime::spawn_blocking(move || match gate(&a, &action) {
             Ok(Some(g)) => Ok(Err(g)),

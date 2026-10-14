@@ -190,7 +190,7 @@ const SAID_YES_ANYWHERE = /\b(run (it|this|that|the command|this command|that co
 const SAID_NO = /^(no|nope|cancel|don'?t|do not|stop|never ?mind|wait)\b/i;
 /** The last check before deleting needs the word itself, as typing it does. */
 const SAID_CONFIRM = /\b(delete( (it|them|those|these))?|confirm|yes,? (delete|do it))\b/i;
-const SAID_STOP = /^(stop|be quiet|quiet|shut up|enough|never ?mind|cancel|that'?s all|thanks?,? bond|thank you)[.!]?$/i;
+const SAID_STOP = /^(?:(?:ok(?:ay)?,?\s+|hey,?\s+|please,?\s+|bond,?\s+)*(?:stop(?: (?:it|that|this|talking|doing that|please))?|please stop|be quiet|quiet|shut up|enough|never ?mind|cancel(?: (?:it|that|this))?|that'?s all|that'?s enough|thanks?,? bond|thank you|wait|hold on|hold up|forget it|not now|abort))[.!,]?$/i;
 
 /** Answering "Notepad has unsaved changes": don't save / save / cancel. */
 export function unsavedAnswer(said: string): "discard" | "save" | "cancel" | null {
