@@ -73,6 +73,10 @@ test("jobs you want to do yourself start guide mode", () => {
     "I'm about to buy a domain, help me out",
     "help me buy a domain name",
     "point me to the checkout button",
+    "I want to record my screen as well as my face, help me how to do that",
+    "help me how to do that",
+    "help me figure out how to share my screen",
+    "how do I record my screen in OBS",
   ]) {
     assert.deepEqual(understand(q), { kind: "screen", mode: "guide" }, q);
   }

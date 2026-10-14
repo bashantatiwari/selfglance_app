@@ -984,6 +984,8 @@ export default function App() {
           return await lookAtScreen(question, "explain");
         case "help":
           return await lookAtScreen(question, "help");
+        case "guide":
+          return await runGuide(question);
         case "task":
           if (r.needs_screen) return await lookAtScreen(question, "task");
           return showOutcome(question, r.outcome ?? { done: [], info: [], pending: null }, r.reply);
@@ -991,6 +993,7 @@ export default function App() {
           return answer(question, r.reply, [], true);
       }
     } catch (e) {
+      diag(`request failed: ${String(e)}`);
       setAsk({ step: "error", question, error: String(e) });
       stageRef.current?.play("annoyed", true);
       autoClose();

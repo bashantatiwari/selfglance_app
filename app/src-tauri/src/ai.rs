@@ -389,6 +389,7 @@ Classify the user's message and reply with ONLY one JSON object, no prose, no co
 intent is one of (if you return any actions, intent is "task"):
 - "log": the user is telling you about their day or something they did/felt, to remember it. text = the entry, cleaned up, first person.
 - "idea": a project or app idea to save. text = the idea: a short title, then " — " and the details.
+- "guide": the user wants to DO something themselves on the computer and asks for help or how ("how do I record my screen and my face in OBS", "help me set up a new email account", "I want to buy a domain, help me", "teach me to ..."). Bond walks them through it by pointing at each next click. Never answer these with commands or actions. reply = one short line such as "Sure, let's do it together." needs_screen false, actions empty.
 - "task": the user wants something done on the computer. If the actions below can do it without seeing the screen, list them in actions. If it needs clicking or typing on something on screen, set needs_screen true and leave actions empty.
 - "screen": a question about what is currently on the screen. needs_screen true.
 - "help": the user is stuck, confused or has an error with what they are doing. needs_screen true.
@@ -555,7 +556,7 @@ fn router_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "intent": {"enum": ["log", "idea", "task", "screen", "help", "chat"]},
+            "intent": {"enum": ["log", "idea", "task", "screen", "help", "guide", "chat"]},
             "text": {"type": "string"},
             "reply": {"type": "string"},
             "actions": actions_schema(false),

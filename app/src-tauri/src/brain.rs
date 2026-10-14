@@ -220,6 +220,8 @@ struct Server {
     child: Child,
     port: u16,
     last_used: Instant,
+    /// The model has finished loading (until then the engine answers "Loading model").
+    ready: bool,
 }
 
 static SERVER: Mutex<Option<Server>> = Mutex::new(None);
@@ -253,40 +255,103 @@ pub fn brain_stop() {
     }
 }
 
-/// The port of a running, healthy engine; starts it if needed.
+/// The port of a running, healthy engine; starts it if needed. Every caller gets a port
+/// only once the model is loaded: a request that arrives while it loads waits for it.
 async fn port() -> Result<u16, String> {
-    if let Some(p) = alive() {
+    if let Some(p) = ready_port() {
         return Ok(p);
     }
     let _guard = STARTING.lock().await;
-    if let Some(p) = alive() {
+    if let Some(p) = ready_port() {
         return Ok(p);
     }
     if !installed() {
         return Err("Bond's brain isn't set up yet — download it in Dashboard → Settings.".into());
     }
-    let port = free_port()?;
-    let child = spawn(port)?;
-    *SERVER.lock().unwrap() = Some(Server { child, port, last_used: Instant::now() });
+    brain_stop(); // an engine that is running but never got ready is no use
+    // Second try with less GPU memory (a game, OBS or a browser may be sharing the card).
+    let mut why = String::new();
+    for (attempt, (ctx, offload)) in [(CONTEXT, true), (8192, false)].into_iter().enumerate() {
+        let port = free_port()?;
+        let child = spawn(port, ctx, offload)?;
+        *SERVER.lock().unwrap() = Some(Server { child, port, last_used: Instant::now(), ready: false });
+        match wait_until_ready(port).await {
+            Ok(()) => {
+                if let Some(s) = SERVER.lock().unwrap().as_mut() {
+                    s.ready = true;
+                    s.last_used = Instant::now();
+                }
+                if attempt > 0 {
+                    crate::diag::log("brain: started on the smaller setting");
+                }
+                return Ok(port);
+            }
+            Err(e) => {
+                why = e;
+                crate::diag::log(&format!("brain: start failed ({why}){}", if attempt == 0 { "; trying again with less GPU memory" } else { "" }));
+                brain_stop();
+            }
+        }
+    }
+    Err(why)
+}
 
-    // Wait for the model to load (/health answers 503 until it's ready).
+/// Wait for the model to load (/health answers 503 until it's ready).
+async fn wait_until_ready(port: u16) -> Result<(), String> {
     let http = reqwest::Client::new();
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         tokio::time::sleep(Duration::from_millis(300)).await;
         if alive().is_none() {
-            return Err("Bond's brain stopped while starting. Your GPU may be out of memory — close a game or heavy app and try again.".into());
+            return Err(format!("Bond's brain stopped while starting{}. Your GPU may be out of memory: close a game or heavy app (OBS, a browser with video) and try again.", engine_failure()));
         }
         if let Ok(r) = http.get(format!("http://127.0.0.1:{port}/health")).send().await {
             if r.status().is_success() {
-                return Ok(port);
+                return Ok(());
             }
         }
         if Instant::now() > deadline {
-            brain_stop();
             return Err("Bond's brain took too long to start.".into());
         }
     }
+}
+
+/// The engine's own reason for stopping, from the end of its log (": out of memory…"), or "".
+fn engine_failure() -> String {
+    let Ok(dir) = dir() else { return String::new() };
+    let Ok(log) = std::fs::read_to_string(dir.join("engine.log")) else { return String::new() };
+    let plain: String = {
+        // Drop the colour codes the engine writes.
+        let mut out = String::new();
+        let mut chars = log.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                for d in chars.by_ref() {
+                    if d.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    };
+    plain
+        .lines()
+        .rev()
+        .find(|l| {
+            let l = l.to_lowercase();
+            l.contains("out of memory") || l.contains("failed to") || l.contains("error") || l.contains("unable to")
+        })
+        .map(|l| format!(": {}", l.trim().chars().take(160).collect::<String>()))
+        .unwrap_or_default()
+}
+
+/// The port of an engine whose model has finished loading. Marks it as used.
+fn ready_port() -> Option<u16> {
+    let p = alive()?;
+    SERVER.lock().unwrap().as_ref().filter(|s| s.ready).map(|_| p)
 }
 
 /// The running server's port, if its process is still alive. Marks it as used.
@@ -306,7 +371,7 @@ fn free_port() -> Result<u16, String> {
     l.local_addr().map(|a| a.port()).map_err(|e| e.to_string())
 }
 
-fn spawn(port: u16) -> Result<Child, String> {
+fn spawn(port: u16, ctx: u32, mmproj_on_gpu: bool) -> Result<Child, String> {
     let log = std::fs::File::create(dir()?.join("engine.log")).ok();
     let mut cmd = Command::new(server_exe()?);
     cmd.current_dir(engine_dir()?)
@@ -315,10 +380,11 @@ fn spawn(port: u16) -> Result<Child, String> {
         .arg("--mmproj")
         .arg(model_path(MMPROJ_FILE)?)
         .args(["--host", "127.0.0.1", "--port", &port.to_string()])
-        .args(["--ctx-size", &CONTEXT.to_string()])
+        .args(["--ctx-size", &ctx.to_string()])
         .args(["--n-gpu-layers", "99", "--parallel", "1", "--jinja", "--no-webui"])
         // Answers come straight away: Bond's requests are short, thinking only slows them.
         .args(["--reasoning", "off"])
+        .args(if mmproj_on_gpu { &[][..] } else { &["--no-mmproj-offload"][..] })
         .stdin(Stdio::null())
         .stdout(Stdio::null());
     match log {

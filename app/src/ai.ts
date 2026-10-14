@@ -35,7 +35,7 @@ export interface Outcome {
 }
 
 export interface Route {
-  intent: "log" | "idea" | "task" | "screen" | "help" | "chat" | string;
+  intent: "log" | "idea" | "task" | "screen" | "help" | "guide" | "chat" | string;
   text: string;
   reply: string;
   needs_screen: boolean;
