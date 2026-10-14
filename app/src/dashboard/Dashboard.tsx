@@ -193,7 +193,7 @@ export default function Dashboard() {
           ))}
         </nav>
         <div className="side-bottom">
-          <BondChip onOpen={() => open("settings")} />
+          <ThemeButton />
           <NowMini segs={today} />
         </div>
       </aside>
@@ -220,35 +220,36 @@ export default function Dashboard() {
   );
 }
 
-/** Bond's state, from your own settings: which brain answers, and whether the microphone is listening. */
-function BondChip({ onOpen }: { onOpen: () => void }) {
-  const [s, setS] = useState(loadSettings);
+/** One click between light and dark (Settings → Appearance also offers "follow Windows"). */
+function ThemeButton() {
+  const [theme, setTheme] = useState(() => loadSettings().theme);
+  const [os, setOs] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
   useEffect(() => {
-    const read = () => setS(loadSettings());
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const read = () => {
+      setOs(mq.matches);
+      setTheme(loadSettings().theme);
+    };
+    mq.addEventListener("change", read);
     window.addEventListener("focus", read);
-    window.addEventListener("storage", read);
-    const t = window.setInterval(read, 4000);
     return () => {
+      mq.removeEventListener("change", read);
       window.removeEventListener("focus", read);
-      window.removeEventListener("storage", read);
-      clearInterval(t);
     };
   }, []);
-  const brain = s.aiProvider === "local" ? "Brain on this laptop" : s.aiProvider === "gemini" ? "Brain: Google Gemini" : "Brain: Claude";
+  const dark = theme === "dark" || (theme === "system" && os);
+  const flip = () => {
+    const next: Settings["theme"] = dark ? "light" : "dark";
+    setTheme(next);
+    applyTheme(next);
+    void saveSettings({ ...loadSettings(), theme: next });
+  };
   return (
-    <button className="bondchip" onClick={onOpen} title="Open Bond's settings">
+    <button className="themebtn" onClick={flip} aria-label={dark ? "Switch to light theme" : "Switch to dark theme"} title={dark ? "Switch to light theme" : "Switch to dark theme"}>
       <svg viewBox="0 0 24 24" aria-hidden>
-        <rect x="4" y="6" width="16" height="13" rx="4" />
-        <circle cx="9.2" cy="12.2" r="1.3" />
-        <circle cx="14.8" cy="12.2" r="1.3" />
-        <path d="M12 6V3.5M10.5 16.2h3" />
+        {dark ? <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4" /> : <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />}
       </svg>
-      <span>
-        <b>Bond</b>
-        <small>{s.wakeWord ? "Listening for “Hey Bond”" : "“Hey Bond” is off"}</small>
-        <small>{brain}</small>
-      </span>
-      <i className={s.wakeWord ? "live" : ""} aria-hidden />
+      {dark ? "Light theme" : "Dark theme"}
     </button>
   );
 }

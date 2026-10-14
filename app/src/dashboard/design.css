@@ -181,35 +181,27 @@ nav button.on::before {
   margin-top: 0;
 }
 
-/* Bond, in the sidebar: where he's listening and which brain answers. */
-.bondchip {
-  position: relative;
+/* One-click light / dark, above the "Now" card. */
+.themebtn {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
   width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  font-weight: 550;
   text-align: left;
-  border: 1px solid var(--border);
-  border-radius: var(--r-m);
-  background: var(--surface);
   cursor: pointer;
-  transition: border-color 120ms var(--ease), box-shadow 120ms var(--ease);
+  transition: background 120ms var(--ease), color 120ms var(--ease);
 }
 
-.bondchip:hover {
-  border-color: var(--accent-line);
-  box-shadow: var(--shadow-1);
-}
-
-.bondchip > svg {
-  flex: none;
-  width: 26px;
-  height: 26px;
-  padding: 3px;
-  border-radius: 8px;
-  background: var(--accent-soft);
-  color: var(--accent);
+.themebtn svg {
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.7;
@@ -217,43 +209,9 @@ nav button.on::before {
   stroke-linejoin: round;
 }
 
-.bondchip > svg circle {
-  fill: currentColor;
-  stroke: none;
-}
-
-.bondchip span {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  line-height: 1.3;
-}
-
-.bondchip b {
-  font-size: 13px;
-}
-
-.bondchip small {
-  font-size: 11.5px;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.bondchip > i {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--axis);
-}
-
-.bondchip > i.live {
-  background: var(--cat-learning);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cat-learning) 25%, transparent);
+.themebtn:hover {
+  background: var(--hover);
+  color: var(--ink);
 }
 
 .now {
@@ -1579,7 +1537,7 @@ li:focus-within > .row-actions {
   .toast {
     animation: none;
   }
-  .bondchip,
+  .themebtn,
   .btn,
   nav button,
   .switch,
