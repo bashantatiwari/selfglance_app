@@ -389,6 +389,7 @@ pub fn run() {
             ai::ai_screen,
             ai::ai_guide,
             ai::guide_mouse,
+            ai::guide_outcome,
             agent::agent_run,
             agent::agent_approve,
             agent::agent_deny,

@@ -52,6 +52,7 @@ import {
   denyAction,
   giveFeedback,
   guideMouse,
+  guideOutcome,
   guidePrepare,
   recordOwn,
   releaseFocus,
@@ -908,6 +909,7 @@ export default function App() {
       let clickedAt = 0;
       let typedAfter = false;
       let outcome: "clicked" | "elsewhere" | "timeout" = "timeout";
+      let clickAt: { x: number; y: number } | null = null;
       while (alive() && Date.now() - started < 60_000) {
         await pause(70);
         const m = await guideMouse().catch(() => null);
@@ -915,6 +917,7 @@ export default function App() {
         if (m.down) pressed = true;
         else if (pressed) {
           pressed = false;
+          clickAt = { x: m.x, y: m.y };
           if (inside(m.x, m.y)) {
             if (!typing) {
               outcome = "clicked";
@@ -935,6 +938,8 @@ export default function App() {
         }
       }
       if (!alive()) return;
+      // What came of his pick, for his log: followed, clicked elsewhere (and where), or nothing.
+      void guideOutcome(goal, s.say, s.debug.picked, s.debug.candidates.length, outcome === "clicked" ? "followed" : outcome, clickAt);
       if (outcome === "timeout") {
         // Nobody touched anything for a minute: look again once or twice, then stop.
         const m = await guideMouse().catch(() => null);

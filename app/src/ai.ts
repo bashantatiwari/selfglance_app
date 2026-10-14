@@ -372,5 +372,9 @@ export interface GuideStep {
 /** The next step towards `goal` from a fresh look at the screen. Nothing is clicked. `done`: steps already shown. */
 export const aiGuide = (goal: string, done: string[]) => invoke<GuideStep>("ai_guide", { ...opts(), goal, done });
 
+/** Tell his log how a step went (what you clicked after he pointed), so he can learn from it. */
+export const guideOutcome = (goal: string, say: string, picked: string, shown: number, outcome: "followed" | "elsewhere" | "timeout", at: { x: number; y: number } | null) =>
+  inTauri ? invoke<void>("guide_outcome", { ...opts(), goal, say, picked, shown, outcome, x: at?.x ?? null, y: at?.y ?? null }).catch(() => {}) : Promise.resolve();
+
 /** The real mouse, in physical screen pixels, and how long the user has been idle. */
 export const guideMouse = () => invoke<{ x: number; y: number; down: boolean; idle_ms: number }>("guide_mouse");

@@ -961,6 +961,78 @@ pub async fn ai_guide(app: AppHandle, provider: Provider, gemini_model: Option<S
     Ok(GuideStep { say, step, target, debug })
 }
 
+/// The control under a screen position: (kind, name). Text boxes and documents give their kind
+/// only: what is typed in them is never read.
+#[cfg(target_os = "windows")]
+fn control_at(x: i32, y: i32) -> Option<(String, String)> {
+    use uiautomation::types::Point;
+    use uiautomation::UIAutomation;
+    let ua = UIAutomation::new().ok()?;
+    let el = ua.element_from_point(Point::new(x, y)).ok()?;
+    let kind = format!("{:?}", el.get_control_type().ok()?).to_lowercase();
+    let name = if matches!(kind.as_str(), "edit" | "document" | "text") {
+        String::new()
+    } else {
+        el.get_name().unwrap_or_default().chars().take(60).collect()
+    };
+    Some((kind, name))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn control_at(_x: i32, _y: i32) -> Option<(String, String)> {
+    None
+}
+
+/// How a guide step went, kept so he can learn from it: what he pointed at, and whether you
+/// clicked it ("followed"), clicked something else ("elsewhere", with what), or did neither
+/// ("timeout"). Stored only in the local experience log (Settings → Learn from me).
+#[tauri::command]
+pub async fn guide_outcome(goal: String, say: String, picked: String, shown: usize, outcome: String, x: Option<i32>, y: Option<i32>, provider: Provider) -> Result<(), String> {
+    let clicked = match (x, y) {
+        (Some(x), Some(y)) if outcome != "timeout" => tauri::async_runtime::spawn_blocking(move || control_at(x, y)).await.ok().flatten(),
+        _ => None,
+    };
+    let provider = effective(provider);
+    let ok = outcome == "followed";
+    crate::experience::record(
+        "guide",
+        goal.trim(),
+        json!({
+            "step": say,
+            "picked": picked,
+            "controls_shown": shown,
+            "outcome": outcome,
+            "clicked": clicked.as_ref().map(|(k, n)| json!({"kind": k, "name": n})),
+        }),
+        provider.name(),
+        if ok { Ok(()) } else { Err(outcome.clone()) },
+    );
+    // A running score in the log: how often you went where he pointed.
+    let all: Vec<_> = crate::experience::snapshot().into_iter().filter(|e| e.kind == "guide").collect();
+    let followed = all.iter().filter(|e| e.ok).count();
+    crate::diag::log(&format!(
+        "guide: {outcome}{} — {followed} of {} steps followed his pick",
+        clicked.map(|(k, n)| format!(" (you clicked {k} “{n}”)")).unwrap_or_default(),
+        all.len()
+    ));
+    Ok(())
+}
+
+/// The mouse position in physical pixels (for tests and the click log).
+#[cfg(target_os = "windows")]
+fn guide_mouse_at_cursor() -> (i32, i32) {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut p = POINT { x: 0, y: 0 };
+    unsafe { GetCursorPos(&mut p) };
+    (p.x, p.y)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn guide_mouse_at_cursor() -> (i32, i32) {
+    (0, 0)
+}
+
 #[derive(Serialize)]
 pub struct MouseState {
     /// Physical screen pixels.
@@ -1265,5 +1337,16 @@ mod eval {
             m.retain(|k, x| k != "intent" && !(x.is_string() && x.as_str() == Some("")) && x != &json!([]) && x != &json!(false));
         }
         o.to_string().chars().take(160).collect()
+    }
+}
+
+#[cfg(test)]
+mod guide_click_tests {
+    /// By hand on a real desktop: cargo test --lib control_under_the_mouse -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn control_under_the_mouse() {
+        let m = super::guide_mouse_at_cursor();
+        println!("mouse at ({}, {}): {:?}", m.0, m.1, super::control_at(m.0, m.1));
     }
 }
