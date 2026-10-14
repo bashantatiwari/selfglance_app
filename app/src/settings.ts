@@ -32,6 +32,8 @@ export interface Settings {
   voiceMatch: boolean;
   /** After answering out loud, listen a few seconds for a follow-up without "Hey Bond". */
   followUp: boolean;
+  /** The dashboard's look: follow Windows, or always light or dark. */
+  theme: "system" | "light" | "dark";
   /** Guide mode shows what he picked and what he could have picked (for finding out why he pointed wrong). */
   guideDebug: boolean;
   /** Seconds an answer stays on screen before it closes by itself. */
@@ -75,6 +77,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceMatch: true,
   followUp: true,
   guideDebug: false,
+  theme: "system",
   answerSeconds: 12,
   brainstormAlert: true,
   batteryAlert: true,

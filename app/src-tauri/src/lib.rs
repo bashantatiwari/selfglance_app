@@ -367,10 +367,17 @@ pub fn run() {
         .manage(regions.clone())
         // Closing the dashboard just hides it; the app keeps running in the tray.
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "dashboard" {
-                    api.prevent_close();
-                    let _ = window.hide();
+            if window.label() == "dashboard" {
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    // Bond steps aside while you're reading the dashboard, so he never covers it.
+                    tauri::WindowEvent::Focused(focused) => {
+                        let _ = window.app_handle().emit("dashboard-focus", *focused);
+                    }
+                    _ => {}
                 }
             }
         })

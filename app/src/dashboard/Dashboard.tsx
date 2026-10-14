@@ -11,7 +11,7 @@
 // "Now" lives in the sidebar so it's always visible without taking page space.
 // Everything is computed locally from the diary the overlay records.
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { onTauriEvent } from "../platform";
 import {
@@ -48,18 +48,33 @@ import { loadSettings, saveSettings, type Settings } from "../settings";
 import Journal from "./Journal";
 import Ideas from "./Ideas";
 import Reminders from "./Reminders";
+import { Avatar, KindBadge, Toasts } from "./ui";
 import "./dashboard.css";
+import "./design.css";
 
 type Page = "today" | "activity" | "week" | "journal" | "ideas" | "reminders" | "settings";
-const PAGES: { id: Page; name: string; icon: ReactNode }[] = [
-  { id: "today", name: "Today", icon: <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" /> },
-  { id: "activity", name: "Activity", icon: <path d="M4 6h16M4 12h10M4 18h13" /> },
-  { id: "week", name: "Week", icon: <path d="M5 20V10M10 20V4M15 20v-7M20 20V8" /> },
-  { id: "journal", name: "Journal", icon: <path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6zM6 3v18M9.5 8h5M9.5 12h5" /> },
-  { id: "ideas", name: "Ideas", icon: <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" /> },
-  { id: "reminders", name: "Reminders", icon: <path d="M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM12 9v4l2.5 2M5 3 2 6M19 3l3 3" /> },
-  { id: "settings", name: "Settings", icon: <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z" /> },
+type NavGroup = "analyse" | "personal" | "prefs";
+const NAV_GROUPS: { id: NavGroup; name: string }[] = [
+  { id: "analyse", name: "Analyse" },
+  { id: "personal", name: "Personal" },
+  { id: "prefs", name: "Preferences" },
 ];
+const PAGES: { id: Page; name: string; group: NavGroup; icon: ReactNode }[] = [
+  { id: "today", name: "Today", group: "analyse", icon: <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" /> },
+  { id: "activity", name: "Activity", group: "analyse", icon: <path d="M4 6h16M4 12h10M4 18h13" /> },
+  { id: "week", name: "Week", group: "analyse", icon: <path d="M5 20V10M10 20V4M15 20v-7M20 20V8" /> },
+  { id: "journal", name: "Journal", group: "personal", icon: <path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6zM6 3v18M9.5 8h5M9.5 12h5" /> },
+  { id: "ideas", name: "Ideas", group: "personal", icon: <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" /> },
+  { id: "reminders", name: "Reminders", group: "personal", icon: <path d="M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM12 9v4l2.5 2M5 3 2 6M19 3l3 3" /> },
+  { id: "settings", name: "Settings", group: "prefs", icon: <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z" /> },
+];
+
+/** Follow Windows (no attribute), or force light or dark. */
+export function applyTheme(t: Settings["theme"]) {
+  const el = document.documentElement;
+  if (t === "light" || t === "dark") el.setAttribute("data-theme", t);
+  else el.removeAttribute("data-theme");
+}
 
 const catVar = (c: Cat) => `var(--cat-${c})`;
 const dayDate = (offset: number) => {
@@ -126,6 +141,7 @@ export default function Dashboard() {
     return () => void un.then((u) => u());
   }, []);
   const [offset, setOffset] = useState(0);
+  const mainRef = useRef<HTMLElement>(null);
   const today = useSegments(0);
   const viewed = useSegments(offset);
   const stats = useMemo(() => analyzeDay(viewed), [viewed]);
@@ -146,6 +162,14 @@ export default function Dashboard() {
     </div>
   );
 
+  useEffect(() => {
+    applyTheme(loadSettings().theme);
+  }, []);
+  const open = (p: Page) => {
+    setPage(p);
+    mainRef.current?.scrollTo({ top: 0 });
+  };
+
   return (
     <div className="app">
       <aside className="side">
@@ -153,30 +177,79 @@ export default function Dashboard() {
           <span className="logo" aria-hidden />
           SelfGlance
         </div>
-        <nav>
-          {PAGES.map((p) => (
-            <button key={p.id} className={page === p.id ? "on" : ""} onClick={() => setPage(p.id)} aria-current={page === p.id ? "page" : undefined}>
-              <svg viewBox="0 0 24 24" aria-hidden>
-                {p.icon}
-              </svg>
-              {p.name}
-            </button>
+        <nav aria-label="Main">
+          {NAV_GROUPS.map((g) => (
+            <div className="nav-group" key={g.id}>
+              <span className="nav-label">{g.name}</span>
+              {PAGES.filter((p) => p.group === g.id).map((p) => (
+                <button key={p.id} className={page === p.id ? "on" : ""} onClick={() => open(p.id)} aria-current={page === p.id ? "page" : undefined}>
+                  <svg viewBox="0 0 24 24" aria-hidden>
+                    {p.icon}
+                  </svg>
+                  {p.name}
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
-        <NowMini segs={today} />
+        <div className="side-bottom">
+          <BondChip onOpen={() => open("settings")} />
+          <NowMini segs={today} />
+        </div>
       </aside>
 
-      <main>
-        {page === "today" && <Today stats={stats} prev={prev} offset={offset} picker={dayPicker} />}
+      <main ref={mainRef} key={page} className="page">
+        {page === "today" && <Today stats={stats} prev={prev} offset={offset} picker={dayPicker} go={open} />}
         {page === "activity" && <Activity stats={stats} offset={offset} picker={dayPicker} />}
-        {page === "week" && <Week />}
+        {page === "week" && (
+          <Week
+            onOpenDay={(o) => {
+              setOffset(o);
+              open("today");
+            }}
+          />
+        )}
         {page === "journal" && <Journal />}
         {page === "ideas" && <Ideas />}
         {page === "reminders" && <Reminders />}
         {page === "settings" && <SettingsPage />}
       </main>
       <Tooltip />
+      <Toasts />
     </div>
+  );
+}
+
+/** Bond's state, from your own settings: which brain answers, and whether the microphone is listening. */
+function BondChip({ onOpen }: { onOpen: () => void }) {
+  const [s, setS] = useState(loadSettings);
+  useEffect(() => {
+    const read = () => setS(loadSettings());
+    window.addEventListener("focus", read);
+    window.addEventListener("storage", read);
+    const t = window.setInterval(read, 4000);
+    return () => {
+      window.removeEventListener("focus", read);
+      window.removeEventListener("storage", read);
+      clearInterval(t);
+    };
+  }, []);
+  const brain = s.aiProvider === "local" ? "Brain on this laptop" : s.aiProvider === "gemini" ? "Brain: Google Gemini" : "Brain: Claude";
+  return (
+    <button className="bondchip" onClick={onOpen} title="Open Bond's settings">
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <rect x="4" y="6" width="16" height="13" rx="4" />
+        <circle cx="9.2" cy="12.2" r="1.3" />
+        <circle cx="14.8" cy="12.2" r="1.3" />
+        <path d="M12 6V3.5M10.5 16.2h3" />
+      </svg>
+      <span>
+        <b>Bond</b>
+        <small>{s.wakeWord ? "Listening for “Hey Bond”" : "“Hey Bond” is off"}</small>
+        <small>{brain}</small>
+      </span>
+      <i className={s.wakeWord ? "live" : ""} aria-hidden />
+    </button>
   );
 }
 
@@ -238,7 +311,7 @@ function NowMini({ segs }: { segs: Segment[] }) {
 }
 
 // --- Today -----------------------------------------------------------------------------
-function Today({ stats, prev, offset, picker }: { stats: DayStats; prev: DayStats | null; offset: number; picker: ReactNode }) {
+function Today({ stats, prev, offset, picker, go }: { stats: DayStats; prev: DayStats | null; offset: number; picker: ReactNode; go: (p: Page) => void }) {
   const goal = loadSettings().waterGoal;
   const notes = insights(stats, prev).slice(0, 3);
   const sub = dayDate(offset).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
@@ -298,7 +371,14 @@ function Today({ stats, prev, offset, picker }: { stats: DayStats; prev: DayStat
       </Section>
 
       <div className="cols2">
-        <Section title="Top of the day">
+        <Section
+          title="Top of the day"
+          right={
+            <button className="linkish" onClick={() => go("activity")}>
+              All activity →
+            </button>
+          }
+        >
           <TopItems items={stats.items.slice(0, 6)} />
         </Section>
         <Section title="Worth knowing">
@@ -329,14 +409,14 @@ function Stat(props: { label: string; value: string; delta: ReactNode }) {
   );
 }
 
-function Delta({ now, before, goodWhenUp }: { now: number; before: number | null | undefined; goodWhenUp: boolean }) {
-  if (before === null || before === undefined) return <span className="muted">no data yesterday</span>;
+function Delta({ now, before, goodWhenUp, vs = "yesterday", neutral }: { now: number; before: number | null | undefined; goodWhenUp: boolean; vs?: string; neutral?: boolean }) {
+  if (before === null || before === undefined) return <span className="muted">no data {vs}</span>;
   const diff = now - before;
-  if (Math.abs(diff) < 60_000) return <span className="muted">same as yesterday</span>;
+  if (Math.abs(diff) < 60_000) return <span className="muted">same as {vs}</span>;
   const up = diff > 0;
   return (
-    <span className={up === goodWhenUp ? "good" : "bad"}>
-      {up ? "▲" : "▼"} {fmt(Math.abs(diff))} <span className="muted">vs yesterday</span>
+    <span className={neutral ? "muted" : up === goodWhenUp ? "good" : "bad"}>
+      {up ? "▲" : "▼"} {fmt(Math.abs(diff))} <span className="muted">vs {vs}</span>
     </span>
   );
 }
@@ -397,9 +477,10 @@ function TopItems({ items }: { items: Item[] }) {
       {items.map((it) => (
         <li key={it.key}>
           <span className="tl-name" title={`${it.label} — ${it.app}`}>
-            {it.label}
+            <Avatar label={it.label} color={catVar(it.cat)} size={24} />
+            <span>{it.label}</span>
           </span>
-          <span className="pill">{it.kind}</span>
+          <KindBadge kind={it.kind} />
           <span className="tl-val">{fmt(it.ms)}</span>
           <span className="tl-bar">
             <i style={{ width: `${(it.ms / max) * 100}%`, background: catVar(it.cat) }} />
@@ -495,9 +576,18 @@ const ACT_TABS: { id: ActTab; name: string }[] = [
   { id: "sessions", name: "Sessions" },
 ];
 
+type SortKey = "time" | "name" | "category" | "recent" | "sessions";
+
 function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; picker: ReactNode }) {
   const [tab, setTab] = useState<ActTab>("all");
   const [q, setQ] = useState("");
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "time", dir: -1 });
+  const [picked, setPicked] = useState<string | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPicked(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const match = (s: string) => s.toLowerCase().includes(q.toLowerCase());
   const head = <PageHead title="Activity" sub={`${dayName(offset)} · everything you spent time on`} right={picker} />;
   if (stats.total === 0)
@@ -507,9 +597,32 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
         <Empty />
       </>
     );
-  const items = stats.items.filter((i) => (tab === "all" || i.kind === tab) && match(`${i.label} ${i.app}`));
-  const max = items[0]?.ms ?? 1;
+
+  const by: Record<SortKey, (a: Item, b: Item) => number> = {
+    time: (a, b) => a.ms - b.ms,
+    name: (a, b) => a.label.localeCompare(b.label),
+    category: (a, b) => catName(a.cat).localeCompare(catName(b.cat)),
+    recent: (a, b) => a.last - b.last,
+    sessions: (a, b) => a.sessions - b.sessions,
+  };
+  const items = stats.items
+    .filter((i) => (tab === "all" || i.kind === tab) && match(`${i.label} ${i.app} ${i.kind}`))
+    .sort((a, b) => by[sort.key](a, b) * sort.dir);
+  const max = items.reduce((m, i) => Math.max(m, i.ms), 1);
   const sessions = stats.sessions.filter((x) => x.ms >= 30_000 && match(`${x.label} ${x.app}`)).slice().reverse();
+  const sel = tab !== "sessions" ? items.find((i) => i.key === picked) ?? null : null;
+  const twin = sel ? stats.items.find((i) => i.label === sel.label && i.kind !== sel.kind) : undefined;
+
+  const th = (key: SortKey, label: string, cls = "", tipText?: string) => (
+    <th className={cls} aria-sort={sort.key === key ? (sort.dir === 1 ? "ascending" : "descending") : "none"} title={tipText}>
+      <button className="th-sort" onClick={() => setSort((p) => (p.key === key ? { key, dir: (-p.dir) as 1 | -1 } : { key, dir: key === "name" || key === "category" ? 1 : -1 }))}>
+        {label}
+        <span className="arrow" aria-hidden>
+          {sort.key === key ? (sort.dir === 1 ? "↑" : "↓") : ""}
+        </span>
+      </button>
+    </th>
+  );
 
   return (
     <>
@@ -522,92 +635,179 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
             </button>
           ))}
         </div>
-        <input className="search" placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="search" placeholder="Search apps, sites, projects…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search activity" />
       </div>
 
       {tab !== "sessions" ? (
-        <div className="table-wrap">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>What</th>
-              <th>Category</th>
-              <th className="num">Time</th>
-              <th className="share">Share of day</th>
-              <th className="num">Sessions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((i) => (
-              <tr key={i.key}>
-                <td className="what">
-                  <span title={i.label}>{i.label}</span>
-                  <small className="muted">
-                    {i.kind} · {i.app} · {clock(i.first)}–{clock(i.last)}
-                  </small>
-                </td>
-                <td>
-                  <span className="catcell">
-                    <i style={{ background: catVar(i.cat) }} />
-                    {catName(i.cat)}
-                  </span>
-                </td>
-                <td className="num strong">{fmt(i.ms)}</td>
-                <td className="share">
-                  <div className="share-in">
-                    <span className="sharebar">
-                      <i style={{ width: `${(i.ms / max) * 100}%`, background: catVar(i.cat) }} />
-                    </span>
-                    <span className="muted">{Math.round((i.ms / stats.total) * 100)}%</span>
+        <div className={`explorer ${sel ? "with-detail" : ""}`}>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  {th("name", "What")}
+                  {th("category", "Category")}
+                  {th("time", "Time", "num")}
+                  <th className="share">Share of day</th>
+                  {th("sessions", "Sessions", "num", "A session is a stretch on the same thing without a 2-minute gap")}
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((i) => (
+                  <tr
+                    key={i.key}
+                    className={`pickable ${sel?.key === i.key ? "picked" : ""}`}
+                    tabIndex={0}
+                    onClick={() => setPicked(sel?.key === i.key ? null : i.key)}
+                    onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setPicked(sel?.key === i.key ? null : i.key))}
+                    aria-selected={sel?.key === i.key}
+                  >
+                    <td className="what">
+                      <div className="what-row">
+                        <Avatar label={i.label} color={catVar(i.cat)} />
+                        <div className="what-text">
+                          <span title={i.label}>{i.label}</span>
+                          <small className="muted">
+                            <KindBadge kind={i.kind} /> {i.app} · {clock(i.first)}–{clock(i.last)}
+                          </small>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="catcell">
+                        <i style={{ background: catVar(i.cat) }} />
+                        {catName(i.cat)}
+                      </span>
+                    </td>
+                    <td className="num strong">{fmt(i.ms)}</td>
+                    <td className="share">
+                      <div className="share-in">
+                        <span className="sharebar">
+                          <i style={{ width: `${(i.ms / max) * 100}%`, background: catVar(i.cat) }} />
+                        </span>
+                        <span className="muted">{Math.round((i.ms / stats.total) * 100)}%</span>
+                      </div>
+                    </td>
+                    <td className="num">{i.sessions}</td>
+                  </tr>
+                ))}
+                {items.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="muted empty-row">
+                      Nothing matches{q ? ` “${q}”` : ""}. Try another tab or clear the search.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {sel && (
+            <aside className="detail" aria-label={`Details for ${sel.label}`}>
+              <div className="detail-head">
+                <Avatar label={sel.label} color={catVar(sel.cat)} size={36} />
+                <div>
+                  <h3 title={sel.label}>{sel.label}</h3>
+                  <div className="detail-sub">
+                    <KindBadge kind={sel.kind} /> <span className="muted">{sel.app}</span>
                   </div>
-                </td>
-                <td className="num">{i.sessions}</td>
-              </tr>
-            ))}
-            {items.length === 0 && (
-              <tr>
-                <td colSpan={5} className="muted">
-                  Nothing matches.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                </div>
+                <button className="icon-btn" onClick={() => setPicked(null)} aria-label="Close details" title="Close (Esc)">
+                  <svg viewBox="0 0 24 24" aria-hidden>
+                    <path d="M6 6l12 12M18 6 6 18" />
+                  </svg>
+                </button>
+              </div>
+              <dl className="detail-stats">
+                <div>
+                  <dt>Time</dt>
+                  <dd>{fmt(sel.ms)}</dd>
+                </div>
+                <div>
+                  <dt>Share of day</dt>
+                  <dd>{Math.round((sel.ms / stats.total) * 100)}%</dd>
+                </div>
+                <div>
+                  <dt>Sessions</dt>
+                  <dd>{sel.sessions}</dd>
+                </div>
+                <div>
+                  <dt>Category</dt>
+                  <dd>
+                    <span className="catcell">
+                      <i style={{ background: catVar(sel.cat) }} />
+                      {catName(sel.cat)}
+                    </span>
+                  </dd>
+                </div>
+              </dl>
+              {twin && (
+                <p className="detail-note">
+                  “{sel.label}” also shows up as a <b>{twin.kind}</b> ({twin.app}, {fmt(twin.ms)}). The {sel.kind.toLowerCase()} and the {twin.kind.toLowerCase()} are tracked separately.
+                </p>
+              )}
+              <h4>Sessions</h4>
+              <ul className="detail-sessions">
+                {stats.sessions
+                  .filter((x) => x.kind === sel.kind && x.label === sel.label)
+                  .slice(0, 60)
+                  .map((x, k) => (
+                    <li key={k}>
+                      <span>
+                        {clock(x.start)} – {clock(x.end)}
+                      </span>
+                      <b>{fmt(x.ms)}</b>
+                    </li>
+                  ))}
+              </ul>
+            </aside>
+          )}
         </div>
       ) : (
         <div className="table-wrap">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>When</th>
-              <th className="num">Length</th>
-              <th>What</th>
-              <th>Category</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sessions.map((x, i) => (
-              <tr key={i}>
-                <td className="muted nowrap">
-                  {clock(x.start)} – {clock(x.end)}
-                </td>
-                <td className="num strong">{fmt(x.ms)}</td>
-                <td className="what">
-                  <span title={x.label}>{x.label}</span>
-                  <small className="muted">
-                    {x.kind} · {x.app}
-                  </small>
-                </td>
-                <td>
-                  <span className="catcell">
-                    <i style={{ background: catVar(x.cat) }} />
-                    {catName(x.cat)}
-                  </span>
-                </td>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th className="num">Length</th>
+                <th>What</th>
+                <th>Category</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {sessions.map((x, i) => (
+                <tr key={i}>
+                  <td className="muted nowrap">
+                    {clock(x.start)} – {clock(x.end)}
+                  </td>
+                  <td className="num strong">{fmt(x.ms)}</td>
+                  <td className="what">
+                    <div className="what-row">
+                      <Avatar label={x.label} color={catVar(x.cat)} />
+                      <div className="what-text">
+                        <span title={x.label}>{x.label}</span>
+                        <small className="muted">
+                          <KindBadge kind={x.kind} /> {x.app}
+                        </small>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <span className="catcell">
+                      <i style={{ background: catVar(x.cat) }} />
+                      {catName(x.cat)}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {sessions.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="muted empty-row">
+                    No sessions of 30 seconds or more{q ? ` match “${q}”` : ""}.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
     </>
@@ -615,70 +815,147 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
 }
 
 // --- Week ------------------------------------------------------------------------------
-function Week() {
+function Week({ onOpenDay }: { onOpenDay: (offset: number) => void }) {
   const days = useMemo(
     () =>
       Array.from({ length: 7 }, (_, i) => 6 - i).map((off) => ({
         off,
         st: analyzeDay(loadDay(dayDate(off))),
         label: off === 0 ? "Today" : dayDate(off).toLocaleDateString([], { weekday: "short" }),
+        full: dayName(off),
       })),
     [],
   );
+  // The 7 days before those, only to compare with (nothing is shown if there is no history).
+  const before = useMemo(() => {
+    const st = Array.from({ length: 7 }, (_, i) => analyzeDay(loadDay(dayDate(7 + i))));
+    const total = st.reduce((a, d) => a + d.total, 0);
+    return total > 0
+      ? { total, productive: st.reduce((a, d) => a + d.productive, 0), ent: st.reduce((a, d) => a + d.distracting, 0), active: st.filter((d) => d.total > 0).length }
+      : null;
+  }, []);
   const total = days.reduce((a, d) => a + d.st.total, 0);
   const productive = days.reduce((a, d) => a + d.st.productive, 0);
   const ent = days.reduce((a, d) => a + d.st.distracting, 0);
   const active = days.filter((d) => d.st.total > 0).length;
   const max = Math.max(...days.map((d) => d.st.total), 1);
+  const cats = CATS.map((c) => ({ ...c, ms: days.reduce((a, d) => a + d.st.byCat[c.id], 0) })).filter((c) => c.ms > 0);
+  const withFocus = days.filter((d) => d.st.focusScore !== null);
+  const bestFocus = withFocus.reduce<(typeof days)[number] | null>((b, d) => (!b || d.st.focusScore! > b.st.focusScore! ? d : b), null);
+  const longest = days.reduce<(typeof days)[number] | null>((b, d) => (d.st.total > (b?.st.total ?? 0) ? d : b), null);
+
+  if (total === 0) {
+    return (
+      <>
+        <PageHead title="Week" sub="The last 7 days" />
+        <Empty />
+      </>
+    );
+  }
   return (
     <>
       <PageHead title="Week" sub="The last 7 days" />
       <section className="hero">
         <div className="stats4">
-          <Stat label="Screen time" value={fmt(total)} delta={<span className="muted">{active} active day{active === 1 ? "" : "s"}</span>} />
-          <Stat label="Productive" value={fmt(productive)} delta={<span className="muted">{total ? Math.round((productive / total) * 100) : 0}% of it</span>} />
-          <Stat label="Entertainment" value={fmt(ent)} delta={<span className="muted">{total ? Math.round((ent / total) * 100) : 0}% of it</span>} />
-          <Stat label="Daily average" value={active ? fmt(total / active) : "–"} delta={<span className="muted">on active days</span>} />
+          <Stat label="Screen time" value={fmt(total)} delta={before ? <Delta now={total} before={before.total} goodWhenUp={true} neutral vs="last week" /> : <span className="muted">{active} active day{active === 1 ? "" : "s"}</span>} />
+          <Stat label="Productive" value={fmt(productive)} delta={<span className="muted">{total ? Math.round((productive / total) * 100) : 0}% of it{before ? <> · <Delta now={productive} before={before.productive} goodWhenUp={true} vs="last week" /></> : null}</span>} />
+          <Stat label="Entertainment" value={fmt(ent)} delta={<span className="muted">{total ? Math.round((ent / total) * 100) : 0}% of it{before ? <> · <Delta now={ent} before={before.ent} goodWhenUp={false} vs="last week" /></> : null}</span>} />
+          <Stat label="Daily average" value={active ? fmt(total / active) : "–"} delta={<span className="muted">on {active} active day{active === 1 ? "" : "s"}</span>} />
         </div>
       </section>
 
-      <Section title="Day by day">
-        <ul className="weekbars">
-          {days.map((d) => (
-            <li key={d.off}>
-              <span className="wb-day">{d.label}</span>
-              <span className="wb-track">
-                {CATS.filter((c) => d.st.byCat[c.id] > 0).map((c) => (
-                  <i
-                    key={c.id}
-                    style={{ width: `${(d.st.byCat[c.id] / max) * 100}%`, background: catVar(c.id) }}
-                    onPointerMove={(e) => tip.show(e, `${d.label} · ${c.name}`, [{ color: catVar(c.id), label: "", value: fmt(d.st.byCat[c.id]) }])}
-                    onPointerLeave={tip.hide}
-                  />
-                ))}
-              </span>
-              <span className="wb-val">{d.st.total ? fmt(d.st.total) : "–"}</span>
-              <span className="wb-focus muted">{d.st.focusScore !== null ? `focus ${d.st.focusScore}` : ""}</span>
-            </li>
-          ))}
-        </ul>
-        <ul className="catlegend">
-          {CATS.map((c) => (
-            <li key={c.id}>
-              <i style={{ background: catVar(c.id) }} />
-              {c.name}
-            </li>
-          ))}
-        </ul>
-      </Section>
+      <div className="cols2 week-cols">
+        <Section title="Day by day" right={<span className="muted small">Click a day to open it</span>}>
+          <ul className="weekbars">
+            {days.map((d) => (
+              <li key={d.off}>
+                <button className="wb-row" onClick={() => onOpenDay(d.off)} disabled={d.st.total === 0} aria-label={`Open ${d.full}`}>
+                  <span className="wb-day">{d.label}</span>
+                  <span className="wb-track">
+                    {CATS.filter((c) => d.st.byCat[c.id] > 0).map((c) => (
+                      <i
+                        key={c.id}
+                        style={{ width: `${(d.st.byCat[c.id] / max) * 100}%`, background: catVar(c.id) }}
+                        onPointerMove={(e) => tip.show(e, `${d.full} · ${c.name}`, [{ color: catVar(c.id), label: `${Math.round((d.st.byCat[c.id] / d.st.total) * 100)}% of that day`, value: fmt(d.st.byCat[c.id]) }])}
+                        onPointerLeave={tip.hide}
+                      />
+                    ))}
+                  </span>
+                  <span className="wb-val">{d.st.total ? fmt(d.st.total) : "–"}</span>
+                  <span
+                    className={`wb-focus ${d.st.focusScore === null ? "none" : ""}`}
+                    title="Focus score: the share of your productive plus entertainment time that was productive"
+                  >
+                    {d.st.focusScore !== null ? `Focus ${d.st.focusScore}` : ""}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <ul className="catlegend">
+            {CATS.map((c) => (
+              <li key={c.id}>
+                <i style={{ background: catVar(c.id) }} />
+                {c.name}
+              </li>
+            ))}
+          </ul>
+        </Section>
+
+        <div className="week-side">
+          <Section title="Where the week went">
+            <ul className="toplist">
+              {cats.map((c) => (
+                <li key={c.id}>
+                  <span className="tl-name">
+                    <i className="dot" style={{ background: catVar(c.id) }} />
+                    <span>{c.name}</span>
+                  </span>
+                  <span className="muted small">{Math.round((c.ms / total) * 100)}%</span>
+                  <span className="tl-val">{fmt(c.ms)}</span>
+                  <span className="tl-bar">
+                    <i style={{ width: `${(c.ms / total) * 100}%`, background: catVar(c.id) }} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+          <Section title="Highlights">
+            <ul className="notes">
+              {bestFocus && (
+                <li>
+                  Highest focus: <b>{bestFocus.full}</b> (focus {bestFocus.st.focusScore}).
+                </li>
+              )}
+              {longest && (
+                <li>
+                  Longest day on the laptop: <b>{longest.full}</b>, {fmt(longest.st.total)}.
+                </li>
+              )}
+              <li className="muted">Focus score = productive time ÷ (productive + entertainment). Browsing &amp; other isn't counted either way.</li>
+            </ul>
+          </Section>
+        </div>
+      </div>
     </>
   );
 }
 
 // --- Settings --------------------------------------------------------------------------
+const SECTIONS = [
+  { id: "general", name: "General", hint: "Appearance and wellness" },
+  { id: "assistant", name: "Bond assistant", hint: "How he behaves" },
+  { id: "ai", name: "AI & models", hint: "Where answers come from" },
+  { id: "voice", name: "Voice & listening", hint: "Speaking and “Hey Bond”" },
+  { id: "suggest", name: "Suggestions", hint: "When he speaks up" },
+  { id: "learning", name: "Learning & memory", hint: "What stays on this laptop" },
+] as const;
+type SecId = (typeof SECTIONS)[number]["id"];
+
 function SettingsPage() {
   const [s, setS] = useState<Settings>(loadSettings);
   const [saved, setSaved] = useState(false);
+  const [sec, setSec] = useState<SecId>("general");
   const update = (patch: Partial<Settings>) => {
     const next = { ...s, ...patch };
     setS(next);
@@ -689,16 +966,54 @@ function SettingsPage() {
   };
   return (
     <>
-      <PageHead title="Settings" right={<span className={`saved ${saved ? "on" : ""}`}>✓ Saved</span>} />
+      <PageHead title="Settings" sub="Everything Bond does, and where it runs" right={<span className={`saved ${saved ? "on" : ""}`}>✓ Saved</span>} />
 
-      <Group title="Water breaks" desc="Bond brings water after a stretch of active laptop use. Stepping away on your own counts as a break.">
+      <div className="settings">
+        <div className="subnav" role="tablist" aria-label="Settings sections">
+          {SECTIONS.map((x) => (
+            <button key={x.id} role="tab" aria-selected={sec === x.id} className={sec === x.id ? "on" : ""} onClick={() => setSec(x.id)}>
+              {x.name}
+              <small>{x.hint}</small>
+            </button>
+          ))}
+        </div>
+        <div className="settings-body">
+                {sec === "general" && (
+          <Group title="Appearance" desc="How the dashboard looks. “System” follows Windows.">
+            <div className="tabs" role="radiogroup" aria-label="Theme">
+              {(
+                [
+                  ["system", "System"],
+                  ["light", "Light"],
+                  ["dark", "Dark"],
+                ] as const
+              ).map(([v, label]) => (
+                <button
+                  key={v}
+                  role="radio"
+                  aria-checked={s.theme === v}
+                  className={s.theme === v ? "on" : ""}
+                  onClick={() => {
+                    applyTheme(v);
+                    update({ theme: v });
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </Group>
+        )}
+        {sec === "general" && (
+          <Group title="Water breaks" desc="Bond brings water after a stretch of active laptop use. Stepping away on your own counts as a break.">
         <Toggle label="Bring me water breaks" checked={s.breaksOn} onChange={(v) => update({ breaksOn: v })} />
         <Slider label="Break every" unit="min of use" min={10} max={120} step={5} value={s.breakEveryMin} disabled={!s.breaksOn} onChange={(v) => update({ breakEveryMin: v })} />
         <Slider label="“Later” waits" unit="min" min={5} max={30} step={5} value={s.snoozeMin} disabled={!s.breaksOn} onChange={(v) => update({ snoozeMin: v })} />
         <Slider label="Daily water goal" unit="glasses" min={4} max={15} step={1} value={s.waterGoal} onChange={(v) => update({ waterGoal: v })} />
       </Group>
-
-      <Group title="Bond" desc="How he behaves around you.">
+        )}
+        {sec === "assistant" && (
+          <Group title="Bond" desc="How he behaves around you.">
         <Toggle
           label="Nudge me when I'm brainstorming too long"
           hint="About 20 minutes with ChatGPT, Claude or notes and no editor time → “Time to build!”"
@@ -713,8 +1028,9 @@ function SettingsPage() {
         <Slider label="Answers close after" unit="seconds" min={4} max={60} step={2} value={s.answerSeconds} onChange={(v) => update({ answerSeconds: v })} />
         <Autostart />
       </Group>
-
-      <Group
+        )}
+        {sec === "ai" && (
+          <Group
         title="Bond's brain"
         desc="What powers “Ask Bond” and “Your day in words”. On this laptop, nothing you ask or show him leaves your computer. A cloud AI uses your own key, kept in your system keychain."
       >
@@ -731,8 +1047,17 @@ function SettingsPage() {
         </div>
         {s.aiProvider === "local" ? <LocalBrain /> : <AiKey provider={s.aiProvider} geminiModel={s.geminiModel} onChange={update} />}
       </Group>
-
-      <Group
+        )}
+        {sec === "voice" && (
+          <div className={`mic-banner ${s.wakeWord ? "live" : ""}`} role="status">
+            <i aria-hidden />
+            {s.wakeWord
+              ? "The microphone is open right now, listening for “Hey Bond”. What isn't for him is dropped as it's heard; nothing is recorded or sent."
+              : "The microphone is closed. It opens only while you hold Ctrl+Alt+V and talk."}
+          </div>
+        )}
+        {sec === "voice" && (
+          <Group
         title="Voice"
         desc="Bond's own voice and ears run on this laptop: hold Ctrl+Alt+V and talk to him (or click the mic in the Ask box), and he answers out loud. The microphone is only open while you talk."
       >
@@ -751,15 +1076,17 @@ function SettingsPage() {
         </div>
         <LocalVoice voiceId={s.voiceId} speed={s.voiceSpeed} onChange={update} />
       </Group>
-
-      <Group
+        )}
+        {sec === "voice" && (
+          <Group
         title="“Hey Bond”"
         desc="Talk to him without a hotkey, like Siri. His ears, on this laptop, listen for “Hey Bond”; what isn't for him is dropped as soon as it's heard, and nothing is recorded or sent anywhere. With voice match he answers only you, not other people, videos or calls."
       >
         <HeyBond s={s} onChange={update} />
       </Group>
-
-      <Group
+        )}
+        {sec === "suggest" && (
+          <Group
         title="Suggestions"
         desc="Bond speaks up on his own at a natural pause: things you usually do in an app, a tip when you copy an error or keep searching while working. Tips come from the brain on this laptop only — nothing is sent anywhere. 👎 on a suggestion stops it."
       >
@@ -793,21 +1120,26 @@ function SettingsPage() {
           <span className="s-value muted">apps or window titles, comma-separated</span>
         </label>
       </Group>
-
-      <Group
+        )}
+        {sec === "learning" && (
+          <Group
         title="Learning"
         desc="Bond keeps what you ask, what he did and your 👍 / 👎, and reuses what worked for similar requests. It stays on this computer, and can later train his own brain on your habits."
       >
         <Toggle label="Learn from me" checked={s.learnFromMe} onChange={(v) => update({ learnFromMe: v })} />
         <Learned />
       </Group>
-
-      <Group
+        )}
+        {sec === "learning" && (
+          <Group
         title="What Bond remembers about you"
         desc="Things you've told him about yourself (“call me Alex”), used in every conversation. He also keeps the last few minutes of what you talked about, so “close it” or “yes, run it” make sense. All on this computer."
       >
         <Memories />
       </Group>
+        )}
+        </div>
+      </div>
     </>
   );
 }

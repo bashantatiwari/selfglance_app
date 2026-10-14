@@ -2,7 +2,7 @@
 // you type, one file per day (journal.rs). Past entries are listed below, newest first.
 // "log …" to Bond appends a timestamped line; an open Journal picks it up right away.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { dayKey, journalGet, journalList, journalSet } from "../assistant/notes";
 import { onTauriEvent } from "../platform";
 
@@ -11,6 +11,11 @@ const SAVE_AFTER_MS = 700;
 
 const pretty = (day: string) =>
   new Date(`${day}T12:00:00`).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+const month = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString([], { month: "long", year: "numeric" });
+const words = (t: string) => (t.trim() ? t.trim().split(/\s+/).length : 0);
+
+/** Gentle starting points; clicking one adds it to the entry as a heading to write under. */
+const PROMPTS = ["What went well today?", "What drained my energy?", "Something I'm grateful for", "What I'll do first tomorrow"];
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -20,8 +25,11 @@ export default function Journal() {
   const [loaded, setLoaded] = useState(false);
   const [past, setPast] = useState<{ day: string; text: string }[]>([]);
   const [state, setState] = useState<SaveState>("idle");
+  const [find, setFind] = useState("");
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   const savedRef = useRef("");
   const textRef = useRef("");
+  const areaRef = useRef<HTMLTextAreaElement>(null);
   textRef.current = text;
 
   const refreshPast = () => void journalList().then((all) => setPast(all.filter((e) => e.day !== today))).catch(() => {});
@@ -79,7 +87,32 @@ export default function Journal() {
     return () => void un.then((u) => u());
   }, [today]);
 
-  const status = { idle: "", saving: "Saving…", saved: "✓ Saved", error: "Couldn't save — your text is still here" }[state];
+  const status = { idle: "", saving: "Saving…", saved: "Saved", error: "Couldn't save — your text is still here" }[state];
+
+  const addPrompt = (p: string) => {
+    const base = text.trimEnd();
+    setText(`${base}${base ? "\n\n" : ""}${p}\n`);
+    requestAnimationFrame(() => {
+      const el = areaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
+
+  // Earlier entries, filtered by the search box, grouped by month.
+  const groups = useMemo(() => {
+    const q = find.trim().toLowerCase();
+    const shown = past.filter((e) => !q || e.text.toLowerCase().includes(q) || pretty(e.day).toLowerCase().includes(q));
+    const out: { month: string; entries: typeof shown }[] = [];
+    for (const e of shown) {
+      const m = month(e.day);
+      const last = out[out.length - 1];
+      if (last && last.month === m) last.entries.push(e);
+      else out.push({ month: m, entries: [e] });
+    }
+    return out;
+  }, [past, find]);
 
   return (
     <>
@@ -88,10 +121,22 @@ export default function Journal() {
           <h1>Journal</h1>
           <p className="muted">{pretty(today)}</p>
         </div>
+        <span className={`save-pill ${state}`} role="status">
+          {status && <i aria-hidden />}
+          {status}
+        </span>
       </header>
 
       <section className="journal-today">
+        <div className="prompt-row" aria-label="Writing prompts">
+          {PROMPTS.map((p) => (
+            <button key={p} className="chip" onClick={() => addPrompt(p)} disabled={!loaded}>
+              {p}
+            </button>
+          ))}
+        </div>
         <textarea
+          ref={areaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           disabled={!loaded}
@@ -99,20 +144,36 @@ export default function Journal() {
           aria-label="Today's journal entry"
         />
         <div className="journal-actions">
-          <span className="muted small" role="status">
-            {status || "Saves as you type"}
-          </span>
+          <span className="muted small">{words(text)} {words(text) === 1 ? "word" : "words"} · saves as you type · stays on this computer</span>
         </div>
       </section>
 
       {past.length > 0 && (
         <section className="journal-past">
-          <h2>Earlier</h2>
-          {past.map((e) => (
-            <article key={e.day}>
-              <h3>{pretty(e.day)}</h3>
-              <p>{e.text}</p>
-            </article>
+          <div className="section-head">
+            <h2>Earlier</h2>
+            <input className="search" placeholder="Search your entries…" value={find} onChange={(e) => setFind(e.target.value)} aria-label="Search entries" />
+          </div>
+          {groups.length === 0 && <p className="muted">No entry matches “{find}”.</p>}
+          {groups.map((g) => (
+            <div key={g.month} className="month">
+              <h3 className="month-name">{g.month}</h3>
+              {g.entries.map((e) => {
+                const long = e.text.length > 280 || e.text.split("\n").length > 4;
+                const expanded = open[e.day];
+                return (
+                  <article key={e.day}>
+                    <h4>{pretty(e.day)}</h4>
+                    <p className={long && !expanded ? "clamp" : ""}>{e.text}</p>
+                    {long && (
+                      <button className="linkish" onClick={() => setOpen((o) => ({ ...o, [e.day]: !expanded }))}>
+                        {expanded ? "Show less" : "Read more"}
+                      </button>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
           ))}
         </section>
       )}

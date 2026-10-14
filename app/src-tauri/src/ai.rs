@@ -1018,8 +1018,8 @@ pub async fn guide_outcome(goal: String, say: String, picked: String, shown: usi
     Ok(())
 }
 
-/// The mouse position in physical pixels (for tests and the click log).
-#[cfg(target_os = "windows")]
+/// The mouse position in physical pixels (for the hand-run test below).
+#[cfg(all(test, target_os = "windows"))]
 fn guide_mouse_at_cursor() -> (i32, i32) {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
@@ -1028,7 +1028,7 @@ fn guide_mouse_at_cursor() -> (i32, i32) {
     (p.x, p.y)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(test, not(target_os = "windows")))]
 fn guide_mouse_at_cursor() -> (i32, i32) {
     (0, 0)
 }

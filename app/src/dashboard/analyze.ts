@@ -11,7 +11,7 @@ export const CATS: { id: Cat; name: string; productive: boolean | null }[] = [
   { id: "working", name: "Working", productive: true },
   { id: "entertainment", name: "Entertainment", productive: false },
   { id: "learning", name: "Learning", productive: true },
-  { id: "browsing", name: "Browsing", productive: null },
+  { id: "browsing", name: "Browsing & other", productive: null },
   { id: "meetings", name: "Meetings", productive: true },
 ];
 export const catName = (c: Cat) => CATS.find((x) => x.id === c)!.name;
@@ -130,7 +130,8 @@ export function analyzeDay(segs: Segment[]): DayStats {
     apps.set(s.app, ap);
 
     const prev = sessions[sessions.length - 1];
-    if (prev && prev.label === s.label && prev.cat === cat && s.start - prev.end < SESSION_GAP) {
+    // An app and a website with the same name are different things: they never merge into one session.
+    if (prev && prev.label === s.label && prev.kind === kind && prev.cat === cat && s.start - prev.end < SESSION_GAP) {
       prev.end = end;
       prev.ms += ms;
     } else sessions.push({ start: s.start, end, ms, cat, kind, label: s.label, app: s.app });

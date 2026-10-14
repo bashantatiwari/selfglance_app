@@ -40,6 +40,11 @@ body,
   opacity: 0.7;
 }
 
+/* The dashboard is in front: he steps out of the way (a break or a request brings him back). */
+.stage.tucked {
+  opacity: 0;
+}
+
 /* Hit targets that follow the character and the bottle. */
 .hit,
 .bottle-hit {

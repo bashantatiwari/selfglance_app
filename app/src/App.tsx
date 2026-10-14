@@ -223,6 +223,9 @@ export default function App() {
   /** Goes up on every new request and on "stop": an older request that comes back later is dropped. */
   const askEpoch = useRef(0);
   const guideTipRef = useRef<HTMLDivElement>(null);
+  /** The dashboard has the focus: Bond steps aside (unless he has something to say). */
+  const [inDashboard, setInDashboard] = useState(false);
+  const tuckedRef = useRef(false);
 
   const homeX = () => {
     const saved = Number(store.get("selfglance.homeX"));
@@ -263,12 +266,14 @@ export default function App() {
         el.style.display = r ? "block" : "none";
         if (r) Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
       };
-      place(hitRef.current, rect);
+      // Tucked away behind the dashboard: no click area either, so he never blocks the page.
+      const tucked = tuckedRef.current;
+      place(hitRef.current, tucked ? null : rect);
       const bottle = stage.bottleRect();
-      place(bottleHitRef.current, bottle);
+      place(bottleHitRef.current, tucked ? null : bottle);
 
       if (drag.current?.active) regions.push({ x: 0, y: 0, w: window.innerWidth, h: window.innerHeight });
-      else {
+      else if (!tucked) {
         if (rect) regions.push(rect);
         if (bottle) regions.push(bottle);
       }
@@ -808,6 +813,11 @@ export default function App() {
     answer(question, res.answer, o.done, mode !== "task", o.info);
   };
 
+  useEffect(() => {
+    const un = onTauriEvent<boolean>("dashboard-focus", (f) => setInDashboard(f));
+    return () => void un.then((f) => f());
+  }, []);
+
   // The screen has been read: bring the note back while his brain works out the step.
   useEffect(() => {
     const un = onTauriEvent("guide-looked", () => setGuide((g) => (g ? { ...g, hidden: false } : g)));
@@ -1313,13 +1323,14 @@ export default function App() {
 
   // --- Render -----------------------------------------------------------------------------
   const inBreak = phase !== "idle";
+  tuckedRef.current = inDashboard && !inBreak && !ask && !menu && !guide && !following;
   const awake = hover || busy || touched || menu || following || !!ask || !!guide || phase === "arriving" || phase === "offering";
   const dim = !awake && inBreak; // waiting / away: half visible, bottle still in view
   const look = awake ? "" : dim ? "dim" : ctx === "watching" ? "watch" : ctx === "focus" ? "faint" : "ghost";
 
   return (
     <>
-      <canvas ref={canvasRef} className={`stage ${look}`} />
+      <canvas ref={canvasRef} className={`stage ${look}${tuckedRef.current ? " tucked" : ""}`} />
       <div
         ref={hitRef}
         className="hit"
