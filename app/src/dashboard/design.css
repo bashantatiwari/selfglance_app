@@ -1741,3 +1741,26 @@ th.num,
   font: inherit;
   font-size: 13.5px;
 }
+
+/* --- Journal first ----------------------------------------------------------------------- */
+.journal-actions {
+  flex-wrap: wrap;
+}
+
+.goal-pill {
+  padding: 3px 11px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cat-browsing) 18%, transparent);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.goal-pill.done {
+  background: color-mix(in srgb, var(--good) 16%, transparent);
+  color: var(--good);
+}
+
+.dictate {
+  margin: 0;
+}

@@ -58,6 +58,8 @@ export interface Reminder {
   at: number;
   /** A dashboard page the card offers to open ("journal"). */
   open?: "journal";
+  /** "Journal first": the card also offers "Not tonight". */
+  skipToday?: boolean;
 }
 
 const opts = () => {

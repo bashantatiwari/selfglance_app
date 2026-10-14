@@ -106,6 +106,32 @@ export const journalWords = (text: string) =>
     .split(/\s+/)
     .filter(Boolean).length;
 
+/** Words in the whole entry, including lines you dictated to Bond ("log: …"): "Journal first" counts them. */
+export const journalWordsAll = (text: string) => text.split(/\s+/).filter(Boolean).length;
+
+/** Words a "Journal first" evening needs before Bond stops asking. */
+export const JOURNAL_FIRST_WORDS = 20;
+
+const SKIPS_KEY = "selfglance.journalSkips";
+
+/** Days you chose "Not tonight" on (kept on this computer, last 90). */
+export function journalSkips(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(SKIPS_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+export function recordJournalSkip(day = dayKey()) {
+  try {
+    const all = journalSkips().filter((d) => d !== day);
+    localStorage.setItem(SKIPS_KEY, JSON.stringify([...all, day].slice(-90)));
+  } catch {
+    /* not kept */
+  }
+}
+
 /** Add a timestamped line to today's journal entry. */
 export async function logToJournal(text: string): Promise<void> {
   const line = `${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} — ${text.trim()}`;

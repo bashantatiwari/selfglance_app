@@ -74,6 +74,8 @@ export interface CardActions {
   onWantFocus: () => void;
   onSnooze: (r: Reminder, minutes: number) => void;
   onOpen: (page: "journal") => void;
+  /** "Journal first": skip tonight's journal. */
+  onSkipJournal: () => void;
   /** 👍 / 👎 on an answer, or null when there's nothing to rate. */
   onRate: ((value: Feedback) => void) | null;
   /** A suggestion he made: take it, not now, or never again. */
@@ -107,6 +109,11 @@ export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskStat
             <button className="btn-ghost" onClick={() => props.onSnooze(s.reminder, 10)}>
               Snooze 10 min
             </button>
+            {s.reminder.skipToday && (
+              <button className="btn-ghost" onClick={props.onSkipJournal}>
+                Not tonight
+              </button>
+            )}
             {s.reminder.open ? (
               <button className="btn-primary" onClick={() => props.onOpen(s.reminder.open!)}>
                 Write it now

@@ -44,6 +44,8 @@ export interface Settings {
   batteryAlert: boolean;
   /** In the evening, if today's journal is still empty, Bond asks you to write it. */
   journalNudge: boolean;
+  /** "Journal first": from the evening hour, until 20 words are written, he asks again when you start something entertaining. "Not tonight" skips the day. */
+  journalFirst: boolean;
   /** From this hour (local time, 0-23). */
   journalAt: number;
   /** Keep what you ask and how it went, so Bond adapts to you (stays on this computer). */
@@ -82,6 +84,7 @@ export const DEFAULT_SETTINGS: Settings = {
   brainstormAlert: true,
   batteryAlert: true,
   journalNudge: true,
+  journalFirst: false,
   journalAt: 21,
   learnFromMe: true,
   notice: "helpful",

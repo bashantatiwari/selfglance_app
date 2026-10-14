@@ -84,7 +84,8 @@ import {
   type Reminder,
 } from "./ai";
 import { saidStop, spokenAnswer, understand, unsavedAnswer, type ScreenMode } from "./assistant/intent";
-import { addIdea, dayKey, journalGet, journalWritten, logToJournal } from "./assistant/notes";
+import { journalFirstDue } from "./assistant/journalfirst";
+import { addIdea, dayKey, JOURNAL_FIRST_WORDS, journalGet, journalWordsAll, journalWritten, logToJournal, recordJournalSkip } from "./assistant/notes";
 import {
   blockedBy,
   errorFallback,
@@ -457,9 +458,54 @@ export default function App() {
     // Evening: today's journal is still empty (Bond's own "log" lines don't count) and you're
     // here, so he asks once. Snoozing brings it back like any reminder.
     let journalChecking = false;
+    let lastJournalRead = 0;
+    // "Journal first": from the evening hour, until 20 words are written (dictated ones count),
+    // he asks once, then again when you start something entertaining (at most every 15 min).
+    // He never closes or blocks anything; "Not tonight" skips the day.
+    const checkJournalFirst = async (st: Settings, day: string) => {
+      const now = Date.now();
+      const due = journalFirstDue({
+        now,
+        hour: new Date().getHours(),
+        at: st.journalAt,
+        day,
+        skippedDay: store.get("selfglance.journalSkipped"),
+        askedDay: store.get("selfglance.journalAskedDay"),
+        lastAsked: Number(store.get("selfglance.journalAsked") ?? 0),
+        entertaining: ctxRef.current === "watching",
+      });
+      if (!due || now - lastJournalRead < 20_000) return;
+      const firstTime = due === "first";
+      lastJournalRead = now;
+      journalChecking = true;
+      try {
+        const text = await journalGet(day);
+        if (journalWordsAll(text) >= JOURNAL_FIRST_WORDS) return;
+        store.set("selfglance.journalAsked", String(now));
+        store.set("selfglance.journalAskedDay", day);
+        await remind({
+          id: "journal",
+          text: firstTime
+            ? `Journal first? A few lines about today (${JOURNAL_FIRST_WORDS} words), then the evening is yours.`
+            : `Before you settle in: today's journal is still short. ${JOURNAL_FIRST_WORDS} words is enough.`,
+          at: now,
+          open: "journal",
+          skipToday: true,
+        });
+      } catch {
+        /* try again on the next tick */
+      } finally {
+        journalChecking = false;
+      }
+    };
     const checkJournal = async (idleSec: number) => {
       const st = settingsRef.current;
       const day = dayKey();
+      if (st.journalFirst) {
+        if (journalChecking || idleSec >= AWAY_AFTER_SEC || coach.inBreak || inDashboardRef.current) return;
+        if (ctxRef.current === "meeting" || ctxRef.current === "game") return;
+        return checkJournalFirst(st, day);
+      }
       if (!st.journalNudge || journalChecking || idleSec >= AWAY_AFTER_SEC || coach.inBreak) return;
       if (new Date().getHours() < st.journalAt || store.get("selfglance.journalNudged") === day) return;
       if (ctxRef.current === "meeting" || ctxRef.current === "game") return;
@@ -1421,6 +1467,12 @@ export default function App() {
           onOpen={(page) => {
             if (inTauri) void invoke("open_dashboard", { page });
             closeAsk();
+          }}
+          onSkipJournal={() => {
+            store.set("selfglance.journalSkipped", dayKey());
+            recordJournalSkip();
+            void closeAsk();
+            showPop("Okay, not tonight.", 2200, true);
           }}
           onSnooze={async (r, min) => {
             try {

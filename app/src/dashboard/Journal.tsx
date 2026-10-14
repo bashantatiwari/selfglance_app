@@ -3,7 +3,8 @@
 // "log …" to Bond appends a timestamped line; an open Journal picks it up right away.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { dayKey, journalGet, journalList, journalSet } from "../assistant/notes";
+import { dayKey, JOURNAL_FIRST_WORDS, journalGet, journalList, journalSet, journalSkips, journalWordsAll, journalWritten } from "../assistant/notes";
+import { loadSettings } from "../settings";
 import { onTauriEvent } from "../platform";
 
 /** Save this long after the last keystroke. */
@@ -100,6 +101,28 @@ export default function Journal() {
     });
   };
 
+  // Your streak: consecutive days with something written, counting back from today (or from
+  // yesterday while today is still empty). Skips are the days you chose "Not tonight".
+  const { streak, skips } = useMemo(() => {
+    const p = (n: number) => String(n).padStart(2, "0");
+    const key = (d: Date) => `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    const written = new Set(past.filter((e) => journalWritten(e.text)).map((e) => e.day));
+    if (journalWritten(text)) written.add(today);
+    const d = new Date();
+    if (!written.has(key(d))) d.setDate(d.getDate() - 1);
+    let n = 0;
+    while (written.has(key(d))) {
+      n++;
+      d.setDate(d.getDate() - 1);
+    }
+    const since = new Date();
+    since.setDate(since.getDate() - 14);
+    return { streak: n, skips: journalSkips().filter((x) => x >= key(since)).length };
+  }, [past, text, today]);
+  const st = loadSettings();
+  const total = journalWordsAll(text);
+  const gateOn = st.journalFirst && new Date().getHours() >= st.journalAt;
+
   // Earlier entries, filtered by the search box, grouped by month.
   const groups = useMemo(() => {
     const q = find.trim().toLowerCase();
@@ -144,8 +167,22 @@ export default function Journal() {
           aria-label="Today's journal entry"
         />
         <div className="journal-actions">
-          <span className="muted small">{words(text)} {words(text) === 1 ? "word" : "words"} · saves as you type · stays on this computer</span>
+          {gateOn && (
+            <span className={`goal-pill ${total >= JOURNAL_FIRST_WORDS ? "done" : ""}`}>
+              {total >= JOURNAL_FIRST_WORDS ? "✓ Done for tonight" : `${total} / ${JOURNAL_FIRST_WORDS} words to finish tonight`}
+            </span>
+          )}
+          <span className="muted small">
+            {words(text)} {words(text) === 1 ? "word" : "words"} · saves as you type · stays on this computer
+          </span>
+          {(streak > 0 || skips > 0) && (
+            <span className="muted small grow">
+              {streak > 0 ? `${streak}-day streak` : "No streak yet"}
+              {skips > 0 ? ` · ${skips} skipped in the last 14 days` : ""}
+            </span>
+          )}
         </div>
+        <p className="muted small dictate">Prefer talking? Say “Hey Bond, log: …” and it's added here. Dictated lines count toward tonight's {JOURNAL_FIRST_WORDS} words.</p>
       </section>
 
       {past.length > 0 && (
