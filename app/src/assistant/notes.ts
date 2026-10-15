@@ -9,12 +9,8 @@ import { inTauri } from "../platform";
 export const JOURNAL_PREFIX = "selfglance.journal.";
 const IDEAS_KEY = "selfglance.ideas";
 
-export interface Idea {
-  id: string;
-  text: string;
-  at: number; // ms epoch
-  done: boolean;
-}
+import type { Idea } from "./ideacore";
+export type { Idea };
 
 export const dayKey = (d = new Date()) => {
   const p = (n: number) => String(n).padStart(2, "0");

@@ -53,6 +53,7 @@ import { Avatar, KindBadge, Toasts } from "./ui";
 import "./dashboard.css";
 import "./design.css";
 import "./neo.css";
+import "./ideas.css";
 
 type Page = "today" | "activity" | "week" | "journal" | "ideas" | "reminders" | "settings";
 type NavGroup = "analyse" | "personal" | "prefs";

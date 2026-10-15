@@ -30,6 +30,7 @@
   --accent: #2c58c9;
   --pop: #f4c63d;
   --pop-ink: #221f1b;
+  --btn-ink: #ffffff;
   --tone-blue: #d3e1ff;
   --tone-orange: #ffdcc4;
   --tone-green: #cfeedc;
@@ -72,6 +73,7 @@
     --accent: #7ba3ff;
     --pop: #eab935;
     --pop-ink: #1a1712;
+    --btn-ink: #0d1220;
     --tone-blue: #1f2b47;
     --tone-orange: #3a2718;
     --tone-green: #1b3326;
@@ -104,6 +106,7 @@
   --accent: #7ba3ff;
   --pop: #eab935;
   --pop-ink: #1a1712;
+  --btn-ink: #0d1220;
   --tone-blue: #1f2b47;
   --tone-orange: #3a2718;
   --tone-green: #1b3326;
@@ -626,15 +629,10 @@ nav button.on::before {
   border: var(--bw) solid var(--bd);
   border-radius: 10px;
   background: var(--accent);
-  color: #fff;
+  color: var(--btn-ink);
   font-weight: 750;
   box-shadow: 2px 2px 0 var(--shadow-c);
   transition: transform 90ms, box-shadow 90ms;
-}
-
-:root[data-theme="dark"] .btn,
-:root:where(:not([data-theme="light"])) .btn {
-  color: #0d1220;
 }
 
 .btn:hover:not(:disabled) {
@@ -1397,13 +1395,8 @@ input[type="range"]:disabled::-webkit-slider-thumb {
 
 .bubble.you {
   background: var(--accent);
-  color: #fff;
+  color: var(--btn-ink);
   box-shadow: 2px 2px 0 var(--shadow-c);
-}
-
-:root[data-theme="dark"] .bubble.you,
-:root:where(:not([data-theme="light"])) .bubble.you {
-  color: #0d1220;
 }
 
 .bubble.bond {
