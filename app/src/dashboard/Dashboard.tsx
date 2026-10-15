@@ -13,7 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { onTauriEvent } from "../platform";
+import { inTauri, onTauriEvent } from "../platform";
 import {
   aiText,
   brainInstall,
@@ -52,6 +52,7 @@ import Reminders from "./Reminders";
 import { Avatar, KindBadge, Toasts } from "./ui";
 import "./dashboard.css";
 import "./design.css";
+import "./neo.css";
 
 type Page = "today" | "activity" | "week" | "journal" | "ideas" | "reminders" | "settings";
 type NavGroup = "analyse" | "personal" | "prefs";
@@ -326,57 +327,86 @@ function Today({ stats, prev, offset, picker, go }: { stats: DayStats; prev: Day
     );
   }
   const present = CATS.filter((c) => stats.byCat[c.id] > 0);
+  const glasses = glassesToday();
+  const cups = Math.min(Math.max(goal, 1), 15);
   return (
     <>
       <PageHead title={dayName(offset)} sub={sub} right={picker} />
 
-      {/* Hero: the one number, where it went, four stats. */}
-      <section className="hero">
-        <div className="hero-figure">
-          <span className="big">{fmt(stats.total)}</span>
-          <span className="muted">
-            on the laptop · {clock(stats.first!)} – {clock(stats.last!)}
+      <div className="bento">
+        <section className="tile t-overview">
+          <h2 className="tile-label">On the laptop</h2>
+          <div className="hero-figure">
+            <span className="big">{fmt(stats.total)}</span>
+            <span className="muted">
+              {clock(stats.first!)} – {clock(stats.last!)}
+            </span>
+          </div>
+          <div className="catbar" role="img" aria-label="Where the time went">
+            {present.map((c) => (
+              <i
+                key={c.id}
+                style={{ flexGrow: stats.byCat[c.id], background: catVar(c.id) }}
+                onPointerMove={(e) => tip.show(e, c.name, [{ color: catVar(c.id), label: `${Math.round((stats.byCat[c.id] / stats.total) * 100)}% of the day`, value: fmt(stats.byCat[c.id]) }])}
+                onPointerLeave={tip.hide}
+              />
+            ))}
+          </div>
+          <ul className="catlegend">
+            {present.map((c) => (
+              <li key={c.id}>
+                <i style={{ background: catVar(c.id) }} />
+                {c.name} <b>{fmt(stats.byCat[c.id])}</b>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section className="tile t-water">
+          <h2 className="tile-label">Hydration</h2>
+          {offset === 0 ? (
+            <>
+              <div className="cups" role="img" aria-label={`${glasses} of ${goal} glasses of water`}>
+                {Array.from({ length: cups }, (_, n) => (
+                  <i key={n} className={n < glasses ? "full" : ""} />
+                ))}
+              </div>
+              <p className="tile-value">
+                <b>{glasses}</b> / {goal} <small>glasses</small>
+              </p>
+            </>
+          ) : (
+            <p className="muted">Water is only counted for today.</p>
+          )}
+        </section>
+
+        <section className="tile tone-blue">
+          <h2 className="tile-label">Productive</h2>
+          <span className="tile-num">{fmt(stats.productive)}</span>
+          <span className="stat-delta">
+            <Delta now={stats.productive} before={prev?.productive} goodWhenUp />
           </span>
-        </div>
-        <div className="catbar" role="img" aria-label="Where the time went">
-          {present.map((c) => (
-            <i
-              key={c.id}
-              style={{ flexGrow: stats.byCat[c.id], background: catVar(c.id) }}
-              onPointerMove={(e) => tip.show(e, c.name, [{ color: catVar(c.id), label: `${Math.round((stats.byCat[c.id] / stats.total) * 100)}% of the day`, value: fmt(stats.byCat[c.id]) }])}
-              onPointerLeave={tip.hide}
-            />
-          ))}
-        </div>
-        <ul className="catlegend">
-          {present.map((c) => (
-            <li key={c.id}>
-              <i style={{ background: catVar(c.id) }} />
-              {c.name} <b>{fmt(stats.byCat[c.id])}</b>
-            </li>
-          ))}
-        </ul>
-        <div className="stats4">
-          <Stat label="Productive" value={fmt(stats.productive)} delta={<Delta now={stats.productive} before={prev?.productive} goodWhenUp />} />
-          <Stat label="Entertainment" value={fmt(stats.distracting)} delta={<Delta now={stats.distracting} before={prev?.distracting} goodWhenUp={false} />} />
-          <Stat
-            label="Longest focus"
-            value={stats.longestFocus ? fmt(stats.longestFocus.ms) : "–"}
-            delta={<span className="muted">{stats.longestFocus ? `from ${clock(stats.longestFocus.start)}` : "no focus stretch yet"}</span>}
-          />
-          <Stat label="Water" value={offset === 0 ? `${glassesToday()} / ${goal}` : "–"} delta={<span className="muted">glasses</span>} />
-        </div>
-      </section>
+        </section>
+        <section className="tile tone-orange">
+          <h2 className="tile-label">Entertainment</h2>
+          <span className="tile-num">{fmt(stats.distracting)}</span>
+          <span className="stat-delta">
+            <Delta now={stats.distracting} before={prev?.distracting} goodWhenUp={false} />
+          </span>
+        </section>
+        <section className="tile tone-green">
+          <h2 className="tile-label">Longest focus</h2>
+          <span className="tile-num">{stats.longestFocus ? fmt(stats.longestFocus.ms) : "–"}</span>
+          <span className="stat-delta muted">{stats.longestFocus ? `from ${clock(stats.longestFocus.start)}` : "no focus stretch yet"}</span>
+        </section>
 
-      {offset === 0 && <JournalStatus go={go} />}
+        <Section title="Your day" className="t-wide">
+          <DayStrip stats={stats} />
+        </Section>
 
-      <Section title="Your day">
-        <DayStrip stats={stats} />
-      </Section>
-
-      <div className="cols2">
         <Section
           title="Top of the day"
+          className="t-top"
           right={
             <button className="linkish" onClick={() => go("activity")}>
               All activity →
@@ -385,7 +415,7 @@ function Today({ stats, prev, offset, picker, go }: { stats: DayStats; prev: Day
         >
           <TopItems items={stats.items.slice(0, 6)} />
         </Section>
-        <Section title="Worth knowing">
+        <Section title="Worth knowing" className="t-notes">
           {notes.length ? (
             <ul className="notes">
               {notes.map((n) => (
@@ -396,10 +426,57 @@ function Today({ stats, prev, offset, picker, go }: { stats: DayStats; prev: Day
             <p className="muted">A few observations appear once there's more of the day to look at.</p>
           )}
         </Section>
+
+        {offset === 0 && <JournalStatus go={go} />}
+        <BondTile full={offset !== 0} go={go} />
       </div>
 
       <DaySummary stats={stats} />
     </>
+  );
+}
+
+/** Bond, as a tile: whether he's listening, which brain answers, and a way to ask him now. */
+function BondTile({ full, go }: { full: boolean; go: (p: Page) => void }) {
+  const [s, setS] = useState(loadSettings);
+  useEffect(() => {
+    const read = () => setS(loadSettings());
+    window.addEventListener("focus", read);
+    const t = window.setInterval(read, 4000);
+    return () => {
+      window.removeEventListener("focus", read);
+      clearInterval(t);
+    };
+  }, []);
+  const brain = s.aiProvider === "local" ? "Brain on this laptop" : s.aiProvider === "gemini" ? "Brain: Google Gemini" : "Brain: Claude";
+  return (
+    <section className={`tile t-bond ${full ? "full" : ""}`}>
+      <div className="bond-head">
+        <svg viewBox="0 0 24 24" aria-hidden>
+          <rect x="4" y="6" width="16" height="13" rx="4" />
+          <circle cx="9.2" cy="12.2" r="1.3" />
+          <circle cx="14.8" cy="12.2" r="1.3" />
+          <path d="M12 6V3.5M10.5 16.2h3" />
+        </svg>
+        <div>
+          <h2 className="tile-label">Bond</h2>
+          <b className="bond-state">
+            <i className={s.wakeWord ? "live" : ""} aria-hidden />
+            {s.wakeWord ? "Listening for “Hey Bond”" : "“Hey Bond” is off"}
+          </b>
+          <small>{brain}</small>
+        </div>
+      </div>
+      <p className="muted small">Try: “Hey Bond, remind me in 20 minutes to stretch.”</p>
+      <div className="tile-actions">
+        <button className="btn" onClick={() => void invoke("ask_bond").catch(() => {})} disabled={!inTauri} title={inTauri ? "Open Bond's ask box" : "Only in the desktop app"}>
+          Ask Bond
+        </button>
+        <button className="btn ghost" onClick={() => go("settings")}>
+          Bond settings
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -422,7 +499,7 @@ function JournalStatus({ go }: { go: (p: Page) => void }) {
   if (words === null) return null;
   const done = words > 0;
   return (
-    <button className={`jstatus ${done ? "done" : ""}`} onClick={() => go("journal")}>
+    <button className={`jstatus tile t-journal ${done ? "done" : ""}`} onClick={() => go("journal")}>
       <i aria-hidden>{done ? "✓" : "✎"}</i>
       <span>
         <b>{done ? "Today's journal is written" : "Today's journal isn't written yet"}</b>
@@ -889,7 +966,7 @@ function Week({ onOpenDay }: { onOpenDay: (offset: number) => void }) {
   return (
     <>
       <PageHead title="Week" sub="The last 7 days" />
-      <section className="hero">
+      <section className="tiles">
         <div className="stats4">
           <Stat label="Screen time" value={fmt(total)} delta={before ? <Delta now={total} before={before.total} goodWhenUp={true} neutral vs="last week" /> : <span className="muted">{active} active day{active === 1 ? "" : "s"}</span>} />
           <Stat label="Productive" value={fmt(productive)} delta={<span className="muted">{total ? Math.round((productive / total) * 100) : 0}% of it{before ? <> · <Delta now={productive} before={before.productive} goodWhenUp={true} vs="last week" /></> : null}</span>} />
@@ -977,19 +1054,21 @@ function Week({ onOpenDay }: { onOpenDay: (offset: number) => void }) {
 
 // --- Settings --------------------------------------------------------------------------
 const SECTIONS = [
-  { id: "general", name: "General", hint: "Appearance and wellness" },
-  { id: "assistant", name: "Bond assistant", hint: "How he behaves" },
-  { id: "ai", name: "AI & models", hint: "Where answers come from" },
-  { id: "voice", name: "Voice & listening", hint: "Speaking and “Hey Bond”" },
+  { id: "appearance", name: "Appearance", hint: "Light, dark or Windows" },
+  { id: "wellness", name: "Wellness", hint: "Water breaks" },
+  { id: "assistant", name: "Bond", hint: "How he behaves" },
+  { id: "ai", name: "AI models", hint: "Where answers come from" },
+  { id: "voice", name: "Voice", hint: "Speaking and “Hey Bond”" },
   { id: "suggest", name: "Suggestions", hint: "When he speaks up" },
-  { id: "learning", name: "Learning & memory", hint: "What stays on this laptop" },
+  { id: "learning", name: "Learning & memory", hint: "What he keeps" },
+  { id: "privacy", name: "Privacy", hint: "What's stored, what's sent" },
 ] as const;
 type SecId = (typeof SECTIONS)[number]["id"];
 
 function SettingsPage() {
   const [s, setS] = useState<Settings>(loadSettings);
   const [saved, setSaved] = useState(false);
-  const [sec, setSec] = useState<SecId>("general");
+  const [sec, setSec] = useState<SecId>("appearance");
   const update = (patch: Partial<Settings>) => {
     const next = { ...s, ...patch };
     setS(next);
@@ -1012,7 +1091,7 @@ function SettingsPage() {
           ))}
         </div>
         <div className="settings-body">
-                {sec === "general" && (
+                {sec === "appearance" && (
           <Group title="Appearance" desc="How the dashboard looks. “System” follows Windows.">
             <div className="tabs" role="radiogroup" aria-label="Theme">
               {(
@@ -1038,7 +1117,7 @@ function SettingsPage() {
             </div>
           </Group>
         )}
-        {sec === "general" && (
+        {sec === "wellness" && (
           <Group title="Water breaks" desc="Bond brings water after a stretch of active laptop use. Stepping away on your own counts as a break.">
         <Toggle label="Bring me water breaks" checked={s.breaksOn} onChange={(v) => update({ breaksOn: v })} />
         <Slider label="Break every" unit="min of use" min={10} max={120} step={5} value={s.breakEveryMin} disabled={!s.breaksOn} onChange={(v) => update({ breakEveryMin: v })} />
@@ -1178,8 +1257,90 @@ function SettingsPage() {
         <Memories />
       </Group>
         )}
+        {sec === "privacy" && <PrivacyPanel s={s} go={setSec} />}
         </div>
       </div>
+    </>
+  );
+}
+
+/** What is stored where, and what leaves this computer, from your real settings (read-only). */
+function PrivacyPanel({ s, go }: { s: Settings; go: (id: SecId) => void }) {
+  const cloud = s.aiProvider !== "local";
+  const rows: { title: string; state: string; calm: boolean; text: string; to: SecId }[] = [
+    {
+      title: "Where answers come from",
+      state: cloud ? (s.aiProvider === "gemini" ? "Sent to Google" : "Sent to Anthropic") : "Stays on this laptop",
+      calm: !cloud,
+      text: cloud
+        ? "Your questions, and screens when he looks at them, go to the cloud AI you chose, using your own key."
+        : "What you ask Bond and show him is read by the brain on this laptop. Nothing leaves it.",
+      to: "ai",
+    },
+    {
+      title: "Microphone",
+      state: s.wakeWord ? "Open: listening for “Hey Bond”" : "Closed",
+      calm: !s.wakeWord,
+      text: s.wakeWord ? "What isn't for him is dropped as it's heard. Nothing is recorded or sent." : "It opens only while you hold Ctrl+Alt+V and talk.",
+      to: "voice",
+    },
+    {
+      title: "Reading your screen",
+      state: s.noticeLook ? "Also when you seem stuck" : "Only when you ask",
+      calm: !s.noticeLook,
+      text: "Never password managers, banking or private windows. With a cloud brain a screen you show him is sent to it.",
+      to: "suggest",
+    },
+    {
+      title: "Learning from you",
+      state: s.learnFromMe ? "On" : "Off",
+      calm: !s.learnFromMe,
+      text: s.learnFromMe ? "He keeps what you ask and what worked, on this computer, so he can adapt." : "Nothing new is kept.",
+      to: "learning",
+    },
+  ];
+  return (
+    <>
+      <section className="group">
+        <div className="group-info">
+          <h2>Right now</h2>
+          <p className="muted">The privacy-relevant switches, as they are set. Click one to change it.</p>
+        </div>
+        <div className="group-body privacy-rows">
+          {rows.map((r) => (
+            <button key={r.title} className="privacy-row" onClick={() => go(r.to)}>
+              <span className="privacy-text">
+                <b>{r.title}</b>
+                <small>{r.text}</small>
+              </span>
+              <em className={r.calm ? "calm" : "heads-up"}>{r.state}</em>
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className="group">
+        <div className="group-info">
+          <h2>Where things are kept</h2>
+          <p className="muted">All on this computer unless you picked a cloud brain.</p>
+        </div>
+        <ul className="group-body kept">
+          <li>
+            <b>Journal</b> One text file per day in Bond's data folder.
+          </li>
+          <li>
+            <b>Activity, ideas, settings</b> In this app's local storage.
+          </li>
+          <li>
+            <b>Learning log and memories</b> In Bond's data folder; Forget deletes them.
+          </li>
+          <li>
+            <b>API keys</b> In the Windows Credential Manager, never shown here.
+          </li>
+          <li>
+            <b>Models (brain, voice)</b> In your local app data folder.
+          </li>
+        </ul>
+      </section>
     </>
   );
 }

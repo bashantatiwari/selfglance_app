@@ -40,24 +40,6 @@
   --shadow-2: 0 10px 28px rgba(0, 0, 0, 0.5);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
-    --muted: #98968f;
-    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-2: 0 10px 28px rgba(0, 0, 0, 0.5);
-  }
-}
-
-/* Light muted text needs a little more contrast to pass on the page color. */
-:root:not([data-theme="dark"]) {
-  --muted: #76746d;
-}
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
-    --muted: #98968f;
-  }
-}
-
 html,
 body {
   font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Ubuntu", sans-serif;
@@ -434,48 +416,6 @@ main {
   border: 1px solid transparent;
 }
 
-.kind-app {
-  color: #6a4cc4;
-  background: color-mix(in srgb, #7b5cd6 13%, transparent);
-}
-.kind-site {
-  color: #1a7a85;
-  background: color-mix(in srgb, #1b9aa6 14%, transparent);
-}
-.kind-video {
-  color: #b5481e;
-  background: color-mix(in srgb, #eb6834 14%, transparent);
-}
-.kind-project {
-  color: #1f64b8;
-  background: color-mix(in srgb, #2a78d6 14%, transparent);
-}
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) .kind-app {
-    color: #b7a3f2;
-  }
-  :root:where(:not([data-theme="light"])) .kind-site {
-    color: #62d0da;
-  }
-  :root:where(:not([data-theme="light"])) .kind-video {
-    color: #f2a07f;
-  }
-  :root:where(:not([data-theme="light"])) .kind-project {
-    color: #8dbcf5;
-  }
-}
-:root[data-theme="dark"] .kind-app {
-  color: #b7a3f2;
-}
-:root[data-theme="dark"] .kind-site {
-  color: #62d0da;
-}
-:root[data-theme="dark"] .kind-video {
-  color: #f2a07f;
-}
-:root[data-theme="dark"] .kind-project {
-  color: #8dbcf5;
-}
 
 .count {
   display: inline-block;
