@@ -55,7 +55,8 @@ Bond becomes a real operator, not a list of fixed commands.
 
 ### Phase 6b: Runs on an ordinary laptop (next)
 The local brain wants a GPU with about 6 GB. To reach other laptops:
-- Detect the hardware on first run and pick a tier: **Full** (today's model), **Lite** (a much smaller text-only model with shorter instructions, since Bond already reads the screen through OCR and UI Automation), or **Cloud** (your own Gemini key, with a clear note about what is sent).
+- No cloud, no keys, ever: **nothing leaves your laptop** is the promise, and a test enforces it. Cloud providers were removed in v0.1.
+- Detect the hardware on first run and pick a tier: **Full** (today's model), **Standard** or **Lite** (a much smaller text-only model with shorter instructions, since Bond already reads the screen through OCR and UI Automation). Below the Lite floor, Bond says honestly that it needs better hardware.
 - Measure first: run the router test on CPU only and on candidate small models, then choose the smallest that scores about the same.
 - Keep the platform-specific parts (screen reading, window control) behind clear adapters so a Mac port stays possible.
 - Learn from how guide steps went (already logged): rank controls using what you actually click, and offer to replay steps you have done before.

@@ -287,7 +287,7 @@ function Body({ idea, onBack }: { idea: Idea; onBack: () => void }) {
                 {{ idle: "", saving: "Saving…", saved: "Saved", error: "Couldn't save — your text is still here" }[notesState]}
               </span>
             </div>
-            <textarea className="wb-notes" value={notes} onChange={(e) => setNotes(e.target.value)} onBlur={flushNotes} placeholder="Your own research, links, thoughts. Only you see this; it isn't sent to a cloud brain." aria-label="My notes" />
+            <textarea className="wb-notes" value={notes} onChange={(e) => setNotes(e.target.value)} onBlur={flushNotes} placeholder="Your own research, links, thoughts. Only you see this; it stays on this laptop." aria-label="My notes" />
           </section>
         </div>
 

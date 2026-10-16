@@ -20,9 +20,7 @@ import {
   brainStatus,
   exportLearned,
   forgetLearned,
-  hasKey,
   learnStats,
-  setKey,
   speak,
   voiceInstall,
   memoryForget,
@@ -39,7 +37,6 @@ import {
   type VoiceStatus,
   type BrainStatus,
   type LearnStats,
-  type Provider,
 } from "../ai";
 import { analyzeDay, CATS, catName, catOf, clock, durOf, fmt, insights, kindOf, type Cat, type DayStats, type Item, type Kind } from "./analyze";
 import { loadDay, type Segment } from "../companion/tracker";
@@ -449,7 +446,7 @@ function BondTile({ full, go }: { full: boolean; go: (p: Page) => void }) {
       clearInterval(t);
     };
   }, []);
-  const brain = s.aiProvider === "local" ? "Brain on this laptop" : s.aiProvider === "gemini" ? "Brain: Google Gemini" : "Brain: Claude";
+  const brain = "Brain on this laptop";
   return (
     <section className={`tile t-bond ${full ? "full" : ""}`}>
       <div className="bond-head">
@@ -1058,7 +1055,7 @@ const SECTIONS = [
   { id: "appearance", name: "Appearance", hint: "Light, dark or Windows" },
   { id: "wellness", name: "Wellness", hint: "Water breaks" },
   { id: "assistant", name: "Bond", hint: "How he behaves" },
-  { id: "ai", name: "AI models", hint: "Where answers come from" },
+  { id: "ai", name: "Bond's brain", hint: "Runs on this laptop" },
   { id: "voice", name: "Voice", hint: "Speaking and “Hey Bond”" },
   { id: "suggest", name: "Suggestions", hint: "When he speaks up" },
   { id: "learning", name: "Learning & memory", hint: "What he keeps" },
@@ -1135,6 +1132,12 @@ function SettingsPage() {
           onChange={(v) => update({ brainstormAlert: v })}
         />
         <Toggle label="Guide mode: show what he picked" hint="Outlines every control he could point at and says which one he chose and why. For finding out why he pointed wrong." checked={s.guideDebug} onChange={(v) => update({ guideDebug: v })} />
+        <Toggle
+          label="Keep Bond out of screenshots and recordings"
+          hint="You still see him; Snipping Tool, Print Screen and screen recorders don't. For a picture with him in it, say “include yourself in the screenshot” or use his tray menu: he appears for 5 minutes."
+          checked={s.hideFromCaptures}
+          onChange={(v) => update({ hideFromCaptures: v })}
+        />
         <Toggle label="Read his answers aloud" checked={s.speakAnswers} onChange={(v) => update({ speakAnswers: v })} />
         <Toggle label="Warn me when the battery is low" hint="At 15% and again at 7%, while unplugged." checked={s.batteryAlert} onChange={(v) => update({ batteryAlert: v })} />
         <Toggle label="Remind me to write my journal" hint="Once each evening, if today's entry is still empty and you're at the laptop." checked={s.journalNudge} onChange={(v) => update({ journalNudge: v })} />
@@ -1152,20 +1155,9 @@ function SettingsPage() {
         {sec === "ai" && (
           <Group
         title="Bond's brain"
-        desc="What powers “Ask Bond” and “Your day in words”. On this laptop, nothing you ask or show him leaves your computer. A cloud AI uses your own key, kept in your system keychain."
+        desc="What powers “Ask Bond”, the screen, guide mode and “Your day in words”. It runs on this laptop: nothing you ask or show him leaves your computer, and there is no account or key to set up."
       >
-        <div className="tabs" role="radiogroup" aria-label="Brain">
-          <button className={s.aiProvider === "local" ? "on" : ""} onClick={() => update({ aiProvider: "local" })}>
-            On this laptop · private
-          </button>
-          <button className={s.aiProvider === "gemini" ? "on" : ""} onClick={() => update({ aiProvider: "gemini" })}>
-            Google Gemini · free
-          </button>
-          <button className={s.aiProvider === "claude" ? "on" : ""} onClick={() => update({ aiProvider: "claude" })}>
-            Claude · paid
-          </button>
-        </div>
-        {s.aiProvider === "local" ? <LocalBrain /> : <AiKey provider={s.aiProvider} geminiModel={s.geminiModel} onChange={update} />}
+        <LocalBrain />
       </Group>
         )}
         {sec === "voice" && (
@@ -1185,8 +1177,7 @@ function SettingsPage() {
           {(
             [
               ["bond", "Bond's own · private"],
-              ["google", "Google · needs Gemini key"],
-              ["system", "Windows voice"],
+              ["system", "Windows voice (installed on this laptop)"],
             ] as const
           ).map(([v, label]) => (
             <button key={v} className={s.voice === v ? "on" : ""} onClick={() => update({ voice: v })}>
@@ -1227,7 +1218,7 @@ function SettingsPage() {
         <Slider label="At most" unit="an hour" min={1} max={6} step={1} value={s.noticeMaxPerHour} disabled={s.notice === "off"} onChange={(v) => update({ noticeMaxPerHour: v })} />
         <Toggle
           label="Let him look at my screen when I seem stuck"
-          hint="Only with the brain on this laptop. Never password managers, banking or private windows."
+          hint="Read on this laptop and not kept. Never password managers, banking or private windows."
           checked={s.noticeLook}
           onChange={(v) => update({ noticeLook: v })}
         />
@@ -1267,15 +1258,12 @@ function SettingsPage() {
 
 /** What is stored where, and what leaves this computer, from your real settings (read-only). */
 function PrivacyPanel({ s, go }: { s: Settings; go: (id: SecId) => void }) {
-  const cloud = s.aiProvider !== "local";
   const rows: { title: string; state: string; calm: boolean; text: string; to: SecId }[] = [
     {
       title: "Where answers come from",
-      state: cloud ? (s.aiProvider === "gemini" ? "Sent to Google" : "Sent to Anthropic") : "Stays on this laptop",
-      calm: !cloud,
-      text: cloud
-        ? "Your questions, and screens when he looks at them, go to the cloud AI you chose, using your own key."
-        : "What you ask Bond and show him is read by the brain on this laptop. Nothing leaves it.",
+      state: "Stays on this laptop",
+      calm: true,
+      text: "What you ask Bond and show him is read by the brain on this laptop. There are no cloud services and no API keys. Nothing leaves it.",
       to: "ai",
     },
     {
@@ -1289,7 +1277,7 @@ function PrivacyPanel({ s, go }: { s: Settings; go: (id: SecId) => void }) {
       title: "Reading your screen",
       state: s.noticeLook ? "Also when you seem stuck" : "Only when you ask",
       calm: !s.noticeLook,
-      text: "Never password managers, banking or private windows. With a cloud brain a screen you show him is sent to it.",
+      text: "Never password managers, banking or private windows. A screen he looks at is read on this laptop and not kept.",
       to: "suggest",
     },
     {
@@ -1322,7 +1310,7 @@ function PrivacyPanel({ s, go }: { s: Settings; go: (id: SecId) => void }) {
       <section className="group">
         <div className="group-info">
           <h2>Where things are kept</h2>
-          <p className="muted">All on this computer unless you picked a cloud brain.</p>
+          <p className="muted">All on this computer. The only things Bond downloads are his own brain and voice files, once, and the websites you ask him to open.</p>
         </div>
         <ul className="group-body kept">
           <li>
@@ -1333,9 +1321,6 @@ function PrivacyPanel({ s, go }: { s: Settings; go: (id: SecId) => void }) {
           </li>
           <li>
             <b>Learning log and memories</b> In Bond's data folder; Forget deletes them.
-          </li>
-          <li>
-            <b>API keys</b> In the Windows Credential Manager, never shown here.
           </li>
           <li>
             <b>Models (brain, voice)</b> In your local app data folder.
@@ -1433,7 +1418,7 @@ function LocalBrain() {
     void refresh();
   };
   if (!st) return null;
-  if (!st.supported) return <p className="small muted">Bond's own brain runs on Windows for now. Choose a cloud AI instead.</p>;
+  if (!st.supported) return <p className="small muted">Bond's own brain runs on Windows for now.</p>;
   if (st.installed)
     return (
       <p className="small good">
@@ -1759,59 +1744,6 @@ function Learned() {
         </button>
       </div>
       {msg && <p className="small muted">{msg}</p>}
-    </>
-  );
-}
-
-function AiKey(props: { provider: Provider; geminiModel: string; onChange: (p: Partial<Settings>) => void }) {
-  const [key, setKeyInput] = useState("");
-  const [saved, setSaved] = useState<boolean | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  useEffect(() => {
-    setSaved(null);
-    setMsg(null);
-    hasKey(props.provider).then(setSaved).catch(() => setSaved(false));
-  }, [props.provider]);
-  const save = async (value: string) => {
-    try {
-      await setKey(props.provider, value);
-      setSaved(!!value.trim());
-      setKeyInput("");
-      setMsg(value.trim() ? "Key saved to your system keychain." : "Key removed.");
-    } catch (e) {
-      setMsg(String(e));
-    }
-  };
-  return (
-    <>
-      <div className="key-row">
-        <input
-          className="search"
-          type="password"
-          placeholder={saved ? "Key saved — paste a new one to replace it" : "Paste your API key"}
-          value={key}
-          onChange={(e) => setKeyInput(e.target.value)}
-        />
-        <button className="btn" disabled={!key.trim()} onClick={() => save(key)}>
-          Save
-        </button>
-        {saved && (
-          <button className="btn ghost" onClick={() => save("")}>
-            Remove
-          </button>
-        )}
-      </div>
-      <p className={`small ${saved ? "good" : "muted"}`}>
-        {msg ?? (saved === null ? "" : saved ? "✓ Key saved" : "No key yet.")}{" "}
-        {!saved && (props.provider === "gemini" ? "Get a free one at aistudio.google.com → Get API key." : "Get one at console.anthropic.com → API keys.")}
-      </p>
-      {props.provider === "gemini" && (
-        <label className="slider">
-          <span className="s-label">Model</span>
-          <input className="search" value={props.geminiModel} onChange={(e) => props.onChange({ geminiModel: e.target.value })} />
-          <span className="s-value muted">“auto” tries free models in turn, skipping busy ones</span>
-        </label>
-      )}
     </>
   );
 }

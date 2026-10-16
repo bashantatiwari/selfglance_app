@@ -11,22 +11,25 @@
 //      of the way in meetings and games. Read locally, never stored or sent anywhere.
 //   5. Hotkeys (Ctrl+Alt+G summon, Ctrl+Alt+Space ask Bond, hold Ctrl+Alt+V to talk to
 //      him) and the tray menu. His own voice and ears (voice.rs) run on this laptop.
-//   6. AI (ai.rs): Bond's own brain on this laptop (brain.rs, no key) or your own cloud
-//      key in the OS keychain; daily summary and "ask Bond". What he learns from you
+//   6. AI (ai.rs): Bond's own brain on this laptop (brain.rs). No cloud, no account, no API
+//      key: nothing you say or show leaves it. Daily summary and "ask Bond". What he learns from you
 //      (experience.rs): past requests and your feedback, reused as examples. What he
 //      notices on his own (notice.rs): your habits, a copied error, when you seem stuck.
 //      Doing things on the computer for you (agent.rs): a known set of actions; running
 //      commands, ending programs and deleting files wait for your approval first.
 //   7. The laptop itself (system.rs): status, busy programs, clipboard, low-battery warning.
 //      Reminders (reminders.rs) that fire whenever the app is running.
+//      Bond is left out of screenshots and recordings unless you ask (capture.rs).
 //   8. Start with the computer (autostart plugin; on by default in the installed app)
 //      and only ever one running copy (single-instance plugin).
 // Everything visual lives in the React + Three.js frontend.
 
 mod agent;
 mod diag;
+mod egress;
 mod ai;
 mod brain;
+mod capture;
 mod experience;
 mod journal;
 mod memory;
@@ -299,9 +302,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let ask = MenuItem::with_id(app, "ask", "Ask Bond  (Ctrl+Alt+Space)", true, None::<&str>)?;
     let brk = MenuItem::with_id(app, "test-break", "Take a break now", true, None::<&str>)?;
     let snooze = MenuItem::with_id(app, "snooze", "Quiet for 1 hour", true, None::<&str>)?;
+    let shots = MenuItem::with_id(app, "capture", "Show Bond in screenshots (5 min)", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit SelfGlance", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&dash, &ask, &demo, &play, &brk, &sep, &snooze, &quit])?;
+    let menu = Menu::with_items(app, &[&dash, &ask, &demo, &play, &brk, &sep, &shots, &snooze, &quit])?;
+    capture::init(app, shots);
 
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().unwrap().clone())
@@ -320,6 +325,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "snooze" => {
                 let _ = app.emit("snooze", 60);
             }
+            "capture" => capture::toggle(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -388,8 +394,6 @@ pub fn run() {
             ask_bond,
             set_autostart,
             get_autostart,
-            ai::ai_set_key,
-            ai::ai_has_key,
             ai::ai_text,
             ai::ai_route,
             ai::ai_prime,
@@ -412,8 +416,9 @@ pub fn run() {
             reminders::reminder_remove,
             reminders::reminder_snooze,
             take_focus,
+            capture::capture_hide_by_default,
+            capture::capture_show,
             agent::release_focus,
-            ai::ai_speak,
             brain::brain_status,
             brain::brain_install,
             brain::brain_warm,
@@ -452,6 +457,8 @@ pub fn run() {
         .setup(move |app| {
             let win = overlay(app.handle()).expect("overlay window is defined in tauri.conf.json");
             fit_to_work_area(&win)?;
+            // Left out of screenshots from his very first frame (the tray item comes later).
+            capture::apply(app.handle());
             win.show()?;
             spawn_activity_watch(app.handle().clone(), &win);
             spawn_click_through(app.handle().clone(), win, regions.clone());
@@ -460,6 +467,7 @@ pub fn run() {
             enable_autostart_first_run(app.handle());
             agent::preload_apps();
             diag::init(app.handle());
+            ai::forget_old_keys();
             memory::init(app.handle());
             diag::log("SelfGlance started");
             brain::init(app.handle());

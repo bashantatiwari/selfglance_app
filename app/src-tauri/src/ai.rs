@@ -1,97 +1,35 @@
-// AI features: the user's own API key (kept in the OS keychain: Windows Credential
-// Manager / macOS Keychain / Linux Secret Service), and calls to the chosen provider.
+// AI features: every request goes to Bond's own brain on this laptop (brain.rs), so nothing
+// you say, type or show on screen leaves it. There are no cloud providers and no API keys.
 //
-//   Claude (Anthropic) — raw HTTP to the Messages API (Rust has no official SDK).
-//   Gemini (Google)    — raw HTTP to generateContent (has a free tier).
-//   Local              — Bond's own brain on this laptop (brain.rs): no key, nothing sent.
-//
-// The key never reaches the webview: the frontend only asks Rust to run a request.
+// The one thing kept from older versions: a Gemini or Claude key that an earlier version saved
+// in Windows Credential Manager is deleted at start-up (forget_old_keys).
 
 use base64::Engine;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
-use std::time::Duration;
 use tauri::AppHandle;
 
-const KEYCHAIN_SERVICE: &str = "SelfGlance";
-const CLAUDE_MODEL: &str = "claude-opus-5-5";
-/// Free Gemini models tried in order when one is overloaded (503), out of quota (429) or
-/// retired (404). Checked against a free-tier key on 2026-10-07; the chain keeps working as
-/// Google renames models because any failure just moves on to the next one.
-/// Fast "lite" models first: on a screenshot question they answer in ~2 s, while the big
-/// free models were often overloaded or 3-6x slower (measured 2026-10-07).
-const GEMINI_CHAIN: &[&str] = &[
-    "gemini-flash-lite-latest",
-    "gemini-3.5-flash-lite",
-    "gemini-3-flash-preview",
-    "gemini-3.1-flash-lite",
-    "gemini-3.7-flash",
-    "gemini-flash-latest",
-];
-
-/// The last Gemini model that answered; tried first next time so we don't wait on busy ones.
-static LAST_GOOD_GEMINI: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-#[derive(Deserialize, Clone, Copy, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum Provider {
-    Claude,
-    Gemini,
-    Local,
-}
-
-impl Provider {
-    fn account(self) -> &'static str {
-        match self {
-            Provider::Claude => "api-key-claude",
-            Provider::Gemini | Provider::Local => "api-key-gemini",
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Provider::Claude => "claude",
-            Provider::Gemini => "gemini",
-            Provider::Local => "local",
+/// Older versions could keep a Gemini or Claude key in Windows Credential Manager. Bond has no
+/// cloud brain any more, so a key left behind is deleted, once, at start-up.
+pub fn forget_old_keys() {
+    for target in ["api-key-gemini.SelfGlance", "api-key-claude.SelfGlance"] {
+        if delete_credential(target) {
+            crate::diag::log(&format!("deleted a saved API key ({target}): Bond no longer uses any cloud service"));
         }
     }
 }
 
-fn entry(p: Provider) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, p.account()).map_err(|e| e.to_string())
+/// Delete one generic Windows credential by its target name. True only if it existed.
+#[cfg(windows)]
+fn delete_credential(target: &str) -> bool {
+    use windows_sys::Win32::Security::Credentials::{CredDeleteW, CRED_TYPE_GENERIC};
+    let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe { CredDeleteW(wide.as_ptr(), CRED_TYPE_GENERIC, 0) != 0 }
 }
 
-/// The brain that will really answer: a cloud one chosen without a key saved means Bond's
-/// own (when it's downloaded), everywhere, rather than "add a key" errors.
-fn effective(p: Provider) -> Provider {
-    if p != Provider::Local && key(p).is_err() && crate::brain::ready() {
-        Provider::Local
-    } else {
-        p
-    }
-}
-
-fn key(p: Provider) -> Result<String, String> {
-    entry(p)?
-        .get_password()
-        .map_err(|_| "No API key saved yet — add one in Dashboard → Settings.".to_string())
-}
-
-#[tauri::command]
-pub fn ai_set_key(provider: Provider, key: String) -> Result<(), String> {
-    let key = key.trim();
-    if key.is_empty() {
-        return entry(provider)?.delete_credential().or(Ok(()));
-    }
-    entry(provider)?.set_password(key).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn ai_has_key(provider: Provider) -> bool {
-    if provider == Provider::Local {
-        return crate::brain::ready();
-    }
-    entry(provider).and_then(|e| e.get_password().map_err(|e| e.to_string())).is_ok()
+#[cfg(not(windows))]
+fn delete_credential(_target: &str) -> bool {
+    false
 }
 
 /// One image (base64 JPEG) to send along with the prompt.
@@ -100,206 +38,11 @@ struct Image {
     b64: String,
 }
 
-fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .map_err(|e| e.to_string())
-}
-
-/// A cloud brain without a key, or one that fails (offline, rate limit, a bad key), falls
-/// back to Bond's own brain when it's downloaded, so you get an answer instead of an error.
-async fn complete(
-    provider: Provider,
-    gemini_model: Option<String>,
-    system: &str,
-    prompt: &str,
-    image: Option<Image>,
-    effort: &str,
-    schema: Option<&Value>,
-) -> Result<String, String> {
-    if provider == Provider::Local || !crate::brain::ready() {
-        return complete_with(provider, gemini_model, system, prompt, image, effort, schema).await;
-    }
-    match complete_with(provider, gemini_model, system, prompt, image.clone(), effort, schema).await {
-        Ok(reply) => Ok(reply),
-        Err(e) => {
-            crate::diag::log(&format!("cloud brain failed ({e}); answering with the local brain"));
-            complete_with(Provider::Local, None, system, prompt, image, effort, schema).await
-        }
-    }
-}
-
-/// `schema` (JSON Schema) makes the local brain's reply match it exactly; the cloud models
-/// follow the format from the prompt alone.
-async fn complete_with(
-    provider: Provider,
-    gemini_model: Option<String>,
-    system: &str,
-    prompt: &str,
-    image: Option<Image>,
-    effort: &str,
-    schema: Option<&Value>,
-) -> Result<String, String> {
-    if provider == Provider::Local {
-        let max_tokens = if schema.is_some() { 1024 } else { 768 };
-        return crate::brain::chat(system, prompt, image.as_ref().map(|i| i.b64.as_str()), schema, max_tokens).await;
-    }
-    let key = key(provider)?;
-    match provider {
-        Provider::Local => unreachable!(),
-        Provider::Claude => {
-            let mut content = Vec::new();
-            if let Some(img) = &image {
-                content.push(json!({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img.b64}}));
-            }
-            content.push(json!({"type": "text", "text": prompt}));
-            let body = json!({
-                "model": CLAUDE_MODEL,
-                "max_tokens": 16000,
-                "system": system,
-                "output_config": {"effort": effort},
-                // If a safety classifier declines, re-run server-side on Anthropic's recommended fallback.
-                "fallbacks": "default",
-                "messages": [{"role": "user", "content": content}],
-            });
-            let res = client()?
-                .post("https://api.anthropic.com/v1/messages")
-                .header("x-api-key", key)
-                .header("anthropic-version", "2023-06-01")
-                .header("anthropic-beta", "server-side-fallback-2026-07-01")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| format!("Network error: {e}"))?;
-            let status = res.status();
-            let v: Value = res.json().await.map_err(|e| e.to_string())?;
-            if !status.is_success() {
-                let msg = v["error"]["message"].as_str().unwrap_or("request failed");
-                return Err(match status.as_u16() {
-                    401 => "Claude rejected the API key. Check it in Settings.".into(),
-                    429 => "Claude is rate-limiting this key. Try again in a minute.".into(),
-                    s if s >= 500 => format!("Claude is having trouble ({s}). Try again shortly."),
-                    s => format!("Claude error {s}: {msg}"),
-                });
-            }
-            if v["stop_reason"] == "refusal" {
-                return Err("Claude declined this request.".into());
-            }
-            let text: Vec<&str> = v["content"]
-                .as_array()
-                .map(|blocks| blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect())
-                .unwrap_or_default();
-            Ok(text.join("\n").trim().to_string())
-        }
-        Provider::Gemini => {
-            // Order: last model that worked, the user's choice, then the free chain.
-            let mut models: Vec<String> = Vec::new();
-            if let Some(m) = LAST_GOOD_GEMINI.lock().unwrap().clone() {
-                models.push(m);
-            }
-            if let Some(m) = gemini_model.filter(|m| !m.trim().is_empty() && m.trim() != "auto") {
-                models.push(m.trim().to_string());
-            }
-            models.extend(GEMINI_CHAIN.iter().map(|m| m.to_string()));
-            models.dedup();
-            let mut seen = std::collections::HashSet::new();
-            models.retain(|m| seen.insert(m.clone()));
-
-            let mut parts = vec![json!({"text": prompt})];
-            if let Some(img) = &image {
-                parts.push(json!({"inline_data": {"mime_type": "image/jpeg", "data": img.b64}}));
-            }
-            let body = json!({
-                "system_instruction": {"parts": [{"text": system}]},
-                "contents": [{"role": "user", "parts": parts}],
-            });
-            let http = client()?;
-            let mut last_err = String::from("No Gemini model answered.");
-            for model in &models {
-                let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
-                let res = match http.post(url).header("x-goog-api-key", &key).json(&body).send().await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        last_err = format!("Network error: {e}");
-                        continue;
-                    }
-                };
-                let status = res.status().as_u16();
-                let v: Value = res.json().await.unwrap_or(Value::Null);
-                match status {
-                    200 => {
-                        let text: Vec<&str> = v["candidates"][0]["content"]["parts"]
-                            .as_array()
-                            .map(|p| p.iter().filter_map(|x| x["text"].as_str()).collect())
-                            .unwrap_or_default();
-                        if text.is_empty() {
-                            last_err = "The model returned no answer.".into();
-                            continue;
-                        }
-                        *LAST_GOOD_GEMINI.lock().unwrap() = Some(model.clone());
-                        return Ok(text.join("
-").trim().to_string());
-                    }
-                    // Busy, out of quota, or retired: try the next free model.
-                    429 | 404 | 500 | 502 | 503 | 504 => {
-                        if LAST_GOOD_GEMINI.lock().unwrap().as_deref() == Some(model.as_str()) {
-                            *LAST_GOOD_GEMINI.lock().unwrap() = None;
-                        }
-                        last_err = match status {
-                            429 => "Gemini's free quota is used up for now. Try again in a few minutes.".into(),
-                            404 => "No available Gemini model found for this key.".into(),
-                            _ => "Gemini is overloaded right now. Try again in a minute.".into(),
-                        };
-                    }
-                    400 | 401 | 403 => {
-                        let msg = v["error"]["message"].as_str().unwrap_or("request rejected");
-                        return Err(format!("Gemini rejected the key or request: {msg}"));
-                    }
-                    s => last_err = format!("Gemini error {s}."),
-                }
-            }
-            Err(last_err)
-        }
-    }
-}
-
-/// Natural-sounding speech for Bond's answers (Gemini TTS; free tier). Returns a base64 WAV.
-/// Tries several TTS models in turn; the frontend falls back to the system voice on error.
-#[tauri::command]
-pub async fn ai_speak(text: String) -> Result<String, String> {
-    const TTS_CHAIN: &[&str] = &["gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"];
-    let key = key(Provider::Gemini)?;
-    let body = json!({
-        "contents": [{"parts": [{"text": format!("Say in a warm, friendly, upbeat voice: {}", text)}]}],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}}
-        }
-    });
-    let http = client()?;
-    for model in TTS_CHAIN {
-        let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
-        let Ok(res) = http.post(url).header("x-goog-api-key", &key).json(&body).send().await else { continue };
-        if !res.status().is_success() {
-            continue;
-        }
-        let v: Value = res.json().await.unwrap_or(Value::Null);
-        let part = &v["candidates"][0]["content"]["parts"][0]["inlineData"];
-        let (Some(mime), Some(data)) = (part["mimeType"].as_str(), part["data"].as_str()) else { continue };
-        if mime.contains("wav") {
-            return Ok(data.to_string());
-        }
-        // Raw 16-bit PCM ("audio/L16; rate=24000"): wrap it in a WAV header so <audio> can play it.
-        let rate: u32 = mime
-            .split(';')
-            .find_map(|p| p.trim().strip_prefix("rate="))
-            .and_then(|r| r.parse().ok())
-            .unwrap_or(24000);
-        let pcm = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
-        return Ok(base64::engine::general_purpose::STANDARD.encode(wav(&pcm, rate)));
-    }
-    Err("No voice available right now.".into())
+/// Ask Bond's brain. `schema` (JSON Schema) makes the reply match it exactly, so a small model
+/// can't produce a broken action.
+async fn complete(system: &str, prompt: &str, image: Option<Image>, schema: Option<&Value>) -> Result<String, String> {
+    let max_tokens = if schema.is_some() { 1024 } else { 768 };
+    crate::brain::chat(system, prompt, image.as_ref().map(|i| i.b64.as_str()), schema, max_tokens).await
 }
 
 /// Minimal WAV container for mono 16-bit little-endian PCM.
@@ -324,9 +67,8 @@ pub(crate) fn wav(pcm: &[u8], rate: u32) -> Vec<u8> {
 
 /// Plain text request (e.g. the daily summary).
 #[tauri::command]
-pub async fn ai_text(provider: Provider, gemini_model: Option<String>, system: String, prompt: String) -> Result<String, String> {
-    let provider = effective(provider);
-    complete(provider, gemini_model, &system, &prompt, None, "low", None).await
+pub async fn ai_text(system: String, prompt: String) -> Result<String, String> {
+    complete(&system, &prompt, None, None).await
 }
 
 
@@ -347,8 +89,8 @@ const OS_NAME: &str = if cfg!(target_os = "windows") {
     "Linux"
 };
 
-const COORDS_PIXELS: &str = "pixel coordinates in the screenshot (origin top-left)";
-const COORDS_NORMALIZED: &str = "coordinates normalized to 0-1000 (x from left, y from top)";
+/// Where the model says a spot is: on a 0-1000 grid, which the Qwen model reads accurately.
+const COORDS: &str = "coordinates normalized to 0-1000 (x from left, y from top)";
 
 const ACTIONS_DOC: &str = r#"Actions (JSON objects, run in order, at most 8):
 {"do":"open_app","name":"Spotify"}            start an installed app by its name
@@ -435,15 +177,15 @@ If the task can't be done from this screen, return no actions and explain in rep
 
 CONTEXT"#;
 
-fn screen_task_system(app: &AppHandle, normalized: bool) -> String {
-    screen_task_text(normalized, &context(app))
+fn screen_task_system(app: &AppHandle) -> String {
+    screen_task_text(&context(app))
 }
 
-fn screen_task_text(normalized: bool, context: &str) -> String {
+fn screen_task_text(context: &str) -> String {
     SCREEN_TASK
         .replace("OS_NAME", OS_NAME)
         .replace("ACTIONS_DOC", &actions_doc())
-        .replace("COORDS", if normalized { COORDS_NORMALIZED } else { COORDS_PIXELS })
+        .replace("COORDS", COORDS)
         .replace("CONTEXT", context)
 }
 
@@ -630,18 +372,13 @@ pub struct Route {
 /// Get the local brain ready for a request that's coming ("Hey Bond", the Ask box opening,
 /// after looking at the screen): loaded, with its instructions already read.
 #[tauri::command]
-pub async fn ai_prime(app: AppHandle, provider: Provider, gemini_model: Option<String>) -> Result<(), String> {
-    let _ = gemini_model;
-    if effective(provider) != Provider::Local {
-        return Ok(());
-    }
+pub async fn ai_prime(app: AppHandle) -> Result<(), String> {
     crate::brain::prime(&router_system(&app)).await
 }
 
 /// Classify a command Bond couldn't place on his own; run simple tasks straight away.
 #[tauri::command]
-pub async fn ai_route(app: AppHandle, provider: Provider, gemini_model: Option<String>, text: String, spoken: Option<bool>) -> Result<Route, String> {
-    let provider = effective(provider);
+pub async fn ai_route(app: AppHandle, text: String, spoken: Option<bool>) -> Result<Route, String> {
     let text = text.trim();
     let prompt = with_context(text, spoken.unwrap_or(false));
     let mut system = router_system(&app);
@@ -651,7 +388,7 @@ pub async fn ai_route(app: AppHandle, provider: Provider, gemini_model: Option<S
         system = format!("{system}\n\n{examples}");
     }
     let schema = router_schema_for(crate::memory::about_yourself(text));
-    let reply = complete(provider, gemini_model, &system, &prompt, None, "low", Some(&schema)).await?;
+    let reply = complete(&system, &prompt, None, Some(&schema)).await?;
     let v = json_in(&reply)?;
     let s = |k: &str| v[k].as_str().unwrap_or("").trim().to_string();
     // Only what you said about yourself, not what the model picked up from the screen or the
@@ -681,7 +418,7 @@ pub async fn ai_route(app: AppHandle, provider: Provider, gemini_model: Option<S
         }
     }
     crate::memory::turn(text, &what_bond_did(&route.reply, v["actions"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), route.outcome.as_ref(), result.as_ref().err()));
-    route.exp_id = crate::experience::record("route", text, v, provider.name(), result.clone());
+    route.exp_id = crate::experience::record("route", text, v, "local", result.clone());
     result.map(|_| route)
 }
 
@@ -732,48 +469,39 @@ pub struct ScreenAnswer {
 
 /// Look at the screen (only now, on request) to explain it, help when stuck, or do a task on it.
 #[tauri::command]
-pub async fn ai_screen(app: AppHandle, provider: Provider, gemini_model: Option<String>, question: String, mode: String, spoken: Option<bool>) -> Result<ScreenAnswer, String> {
-    let provider = effective(provider);
+pub async fn ai_screen(app: AppHandle, question: String, mode: String, spoken: Option<bool>) -> Result<ScreenAnswer, String> {
     let asked = with_context(question.trim(), spoken.unwrap_or(false));
     // Nothing to answer with → say so before taking a screenshot.
-    if provider == Provider::Local {
-        if !crate::brain::ready() {
-            return Err("Bond's brain isn't set up yet — download it in Dashboard → Settings.".into());
-        }
-    } else {
-        key(provider)?;
+    if !crate::brain::ready() {
+        return Err("Bond's brain isn't set up yet — download it in Dashboard → Settings.".into());
     }
     let shot = tauri::async_runtime::spawn_blocking(capture).await.map_err(|e| e.to_string())??;
-    // Gemini and Qwen read positions on a 0-1000 grid; Claude in screenshot pixels.
-    let normalized = provider != Provider::Claude;
     let geometry = crate::agent::ShotGeometry {
         mx: shot.mx,
         my: shot.my,
         width: shot.width as f64,
         height: shot.height as f64,
         scale: shot.scale,
-        normalized,
     };
     let prompt = format!("Screenshot size: {}x{} pixels.\n{}\n{asked}", shot.width, shot.height, shot.seen);
     let image = Some(Image { b64: shot.b64 });
 
     if mode == "task" {
         let schema = screen_task_schema();
-        // No fallback here: click positions are read in the answering brain's own coordinates.
-        let reply = complete_with(provider, gemini_model, &screen_task_system(&app, normalized), &prompt, image, "medium", Some(&schema)).await?;
+        let reply = complete(&screen_task_system(&app), &prompt, image, Some(&schema)).await?;
         let v = json_in(&reply)?;
         let answer = v["reply"].as_str().unwrap_or("").trim().to_string();
         let result = match actions_in(&v) {
             Ok(actions) => crate::agent::run(&app, actions, Some(geometry)).await,
             Err(e) => Err(e),
         };
-        let exp_id = crate::experience::record("screen", question.trim(), v.clone(), provider.name(), result.as_ref().map(|_| ()).map_err(|e| e.clone()));
+        let exp_id = crate::experience::record("screen", question.trim(), v.clone(), "local", result.as_ref().map(|_| ()).map_err(|e| e.clone()));
         crate::memory::turn(question.trim(), &what_bond_did(&answer, v["actions"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), result.as_ref().ok(), result.as_ref().err()));
         return Ok(ScreenAnswer { answer, outcome: Some(result?), exp_id });
     }
     let system = if mode == "help" { SCREEN_HELP } else { SCREEN_EXPLAIN };
-    let answer = complete(provider, gemini_model, system, &prompt, image, "medium", None).await?;
-    let exp_id = crate::experience::record("screen", question.trim(), json!({"intent": mode, "reply": answer}), provider.name(), Ok(()));
+    let answer = complete(system, &prompt, image, None).await?;
+    let exp_id = crate::experience::record("screen", question.trim(), json!({"intent": mode, "reply": answer}), "local", Ok(()));
     // What he saw and said, so "what else is on it?" can follow.
     crate::memory::turn(question.trim(), &format!("(looked at the screen) {answer}"));
     Ok(ScreenAnswer { answer, outcome: None, exp_id })
@@ -878,19 +606,13 @@ fn to_overlay(app: &AppHandle, rect: (i32, i32, i32, i32)) -> Option<GuideTarget
 /// The next step towards `goal`, from a fresh look at the screen. `done` is what was
 /// already shown, oldest first.
 #[tauri::command]
-pub async fn ai_guide(app: AppHandle, provider: Provider, gemini_model: Option<String>, goal: String, done: Vec<String>) -> Result<GuideStep, String> {
-    let provider = effective(provider);
-    if provider == Provider::Local {
-        if !crate::brain::ready() {
-            return Err("Bond's brain isn't set up yet — download it in Dashboard → Settings.".into());
-        }
-    } else {
-        key(provider)?;
+pub async fn ai_guide(app: AppHandle, goal: String, done: Vec<String>) -> Result<GuideStep, String> {
+    if !crate::brain::ready() {
+        return Err("Bond's brain isn't set up yet — download it in Dashboard → Settings.".into());
     }
     let shot = tauri::async_runtime::spawn_blocking(capture).await.map_err(|e| e.to_string())??;
     // The screen is read: the note can come back while the brain thinks.
     let _ = tauri::Emitter::emit(&app, "guide-looked", ());
-    let normalized = provider != Provider::Claude;
     let steps = if done.is_empty() {
         "none yet".to_string()
     } else {
@@ -905,11 +627,11 @@ pub async fn ai_guide(app: AppHandle, provider: Provider, gemini_model: Option<S
     );
     let system = SCREEN_GUIDE
         .replace("OS_NAME", OS_NAME)
-        .replace("COORDS", &format!("Positions are {}.", if normalized { COORDS_NORMALIZED } else { COORDS_PIXELS }))
+        .replace("COORDS", &format!("Positions are {COORDS}."))
         .replace("CONTEXT", &context(&app));
     let (mx, my, w, h, scale) = (shot.mx, shot.my, shot.width as f64, shot.height as f64, shot.scale);
     let asked_at = std::time::Instant::now();
-    let reply = complete_with(provider, gemini_model, &system, &prompt, Some(Image { b64: shot.b64 }), "medium", Some(&guide_schema())).await?;
+    let reply = complete(&system, &prompt, Some(Image { b64: shot.b64 }), Some(&guide_schema())).await?;
     let secs = asked_at.elapsed().as_secs_f64();
     let v = json_in(&reply)?;
     let step = match v["step"].as_str() {
@@ -940,7 +662,7 @@ pub async fn ai_guide(app: AppHandle, provider: Provider, gemini_model: Option<S
                 if x <= 0.0 && y <= 0.0 {
                     return None;
                 }
-                let (sx, sy) = if normalized { (x / 1000.0 * w, y / 1000.0 * h) } else { (x, y) };
+                let (sx, sy) = (x / 1000.0 * w, y / 1000.0 * h);
                 Some(((mx + sx / scale).round() as i32, (my + sy / scale).round() as i32))
             });
         if let Some((x, y)) = point {
@@ -957,7 +679,7 @@ pub async fn ai_guide(app: AppHandle, provider: Provider, gemini_model: Option<S
         .filter_map(|e| to_overlay(&app, e.rect).map(|b| DebugBox { id: e.id, kind: e.kind, name: e.name.clone(), x: b.x, y: b.y, w: b.w, h: b.h }))
         .collect::<Vec<_>>();
     crate::diag::log(&format!("guide: {step} “{say}” picked {picked}; {} controls shown; {secs:.1}s", candidates.len()));
-    let debug = GuideDebug { provider: provider.name().to_string(), secs, picked, raw: reply.chars().take(700).collect(), candidates };
+    let debug = GuideDebug { provider: "local".to_string(), secs, picked, raw: reply.chars().take(700).collect(), candidates };
     Ok(GuideStep { say, step, target, debug })
 }
 
@@ -987,12 +709,11 @@ fn control_at(_x: i32, _y: i32) -> Option<(String, String)> {
 /// clicked it ("followed"), clicked something else ("elsewhere", with what), or did neither
 /// ("timeout"). Stored only in the local experience log (Settings → Learn from me).
 #[tauri::command]
-pub async fn guide_outcome(goal: String, say: String, picked: String, shown: usize, outcome: String, x: Option<i32>, y: Option<i32>, provider: Provider) -> Result<(), String> {
+pub async fn guide_outcome(goal: String, say: String, picked: String, shown: usize, outcome: String, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
     let clicked = match (x, y) {
         (Some(x), Some(y)) if outcome != "timeout" => tauri::async_runtime::spawn_blocking(move || control_at(x, y)).await.ok().flatten(),
         _ => None,
     };
-    let provider = effective(provider);
     let ok = outcome == "followed";
     crate::experience::record(
         "guide",
@@ -1004,7 +725,7 @@ pub async fn guide_outcome(goal: String, say: String, picked: String, shown: usi
             "outcome": outcome,
             "clicked": clicked.as_ref().map(|(k, n)| json!({"kind": k, "name": n})),
         }),
-        provider.name(),
+        "local",
         if ok { Ok(()) } else { Err(outcome.clone()) },
     );
     // A running score in the log: how often you went where he pointed.
@@ -1117,7 +838,7 @@ pub(crate) fn capture() -> Result<Shot, String> {
 /// How well a brain understands commands: realistic requests (ones Bond's own rules don't
 /// catch) with the intent and an action a good answer has. Run it on a brain with
 ///   cargo test --lib eval -- --ignored --nocapture
-/// BOND_EVAL=local (default, uses the downloaded brain), gemini or claude (your saved key).
+/// It uses the downloaded brain.
 #[cfg(test)]
 mod eval {
     use super::*;
@@ -1213,7 +934,7 @@ mod eval {
                 crate::memory::set_activity_for_tests(*now);
                 let prompt = with_context(said, *spoken);
                 let t = std::time::Instant::now();
-                let reply = complete(Provider::Local, None, &sys, &prompt, None, "low", Some(&schema)).await;
+                let reply = complete(&sys, &prompt, None, Some(&schema)).await;
                 let secs = t.elapsed().as_secs_f64();
                 let v = reply.as_deref().map_err(|e| e.clone()).and_then(json_in).unwrap_or(Value::Null);
                 let good = ok(&v);
@@ -1227,27 +948,18 @@ mod eval {
     #[test]
     #[ignore]
     fn commands() {
-        let provider = match std::env::var("BOND_EVAL").as_deref() {
-            Ok("gemini") => Provider::Gemini,
-            Ok("claude") => Provider::Claude,
-            _ => {
-                let local = std::env::var("LOCALAPPDATA").expect("LOCALAPPDATA");
-                crate::brain::use_dir(std::path::Path::new(&local).join("com.selfglance.app").join("brain"));
-                Provider::Local
-            }
-        };
+        let local = std::env::var("LOCALAPPDATA").expect("LOCALAPPDATA");
+        crate::brain::use_dir(std::path::Path::new(&local).join("com.selfglance.app").join("brain"));
         let schema = router_schema();
         let sys = system();
         tauri::async_runtime::block_on(async {
-            if provider == Provider::Local {
-                let t = std::time::Instant::now();
-                crate::brain::brain_warm().await.expect("brain starts");
-                println!("brain loaded in {:.1}s", t.elapsed().as_secs_f64());
-            }
+            let t = std::time::Instant::now();
+            crate::brain::brain_warm().await.expect("brain starts");
+            println!("brain loaded in {:.1}s", t.elapsed().as_secs_f64());
             let (mut intents, mut actions, mut times) = (0, 0, Vec::new());
             for (input, want_intent, want_action) in CASES {
                 let t = std::time::Instant::now();
-                let reply = complete(provider, None, &sys, input, None, "low", Some(&schema)).await;
+                let reply = complete(&sys, input, None, Some(&schema)).await;
                 times.push(t.elapsed().as_secs_f64());
                 let v = reply.as_deref().map_err(|e| e.clone()).and_then(json_in).unwrap_or(Value::Null);
                 let intent = if v["actions"].as_array().is_some_and(|a| !a.is_empty()) { "task" } else { v["intent"].as_str().unwrap_or("?") };
@@ -1309,10 +1021,10 @@ mod eval {
                 println!("--- {} ---", if with_text { "screenshot + screen text" } else { "screenshot only" });
                 let prompt = |q: &str| format!("Screenshot size: 1280x720 pixels.\n{}\nUser: {q}", if with_text { seen.as_str() } else { "" });
                 let schema = screen_task_schema();
-                let sys = screen_task_text(true, "Now: Thursday 2026-10-08 21:00. OS: Windows.");
+                let sys = screen_task_text("Now: Thursday 2026-10-08 21:00. OS: Windows.");
                 for (target, (tx, ty)) in truth {
                     let t = std::time::Instant::now();
-                    let reply = complete(Provider::Local, None, &sys, &prompt(&format!("click the {target}")), Some(Image { b64: b64.clone() }), "medium", Some(&schema)).await.unwrap();
+                    let reply = complete(&sys, &prompt(&format!("click the {target}")), Some(Image { b64: b64.clone() }), Some(&schema)).await.unwrap();
                     let v = json_in(&reply).unwrap();
                     let a = &v["actions"][0];
                     let at = match a["do"].as_str() {
@@ -1325,7 +1037,7 @@ mod eval {
                 }
             }
             let t = std::time::Instant::now();
-            let help = complete(Provider::Local, None, SCREEN_HELP, &format!("Screenshot size: 1280x720 pixels.\n{seen}\nUser: why won't this let me sign up?"), Some(Image { b64: b64.clone() }), "medium", None).await;
+            let help = complete(SCREEN_HELP, &format!("Screenshot size: 1280x720 pixels.\n{seen}\nUser: why won't this let me sign up?"), Some(Image { b64: b64.clone() }), None).await;
             println!("help ({:.1}s): {help:?}", t.elapsed().as_secs_f64());
             crate::brain::brain_stop();
         });
@@ -1348,5 +1060,21 @@ mod guide_click_tests {
     fn control_under_the_mouse() {
         let m = super::guide_mouse_at_cursor();
         println!("mouse at ({}, {}): {:?}", m.0, m.1, super::control_at(m.0, m.1));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod credential_tests {
+    /// The clean-up deletes what keyring (older versions) saved. Tested on a made-up credential,
+    /// never on a real key.
+    #[test]
+    fn deletes_a_saved_credential_once() {
+        let target = "selfglance-test-delete-me.SelfGlance";
+        let list = || String::from_utf8_lossy(&std::process::Command::new("cmdkey").arg("/list").output().unwrap().stdout).to_string();
+        assert!(std::process::Command::new("cmdkey").args([&format!("/generic:{target}"), "/user:test", "/pass:test"]).output().unwrap().status.success());
+        assert!(list().contains(target));
+        assert!(super::delete_credential(target));
+        assert!(!list().contains(target));
+        assert!(!super::delete_credential(target), "nothing left to delete");
     }
 }

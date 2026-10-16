@@ -13,6 +13,7 @@
 //   "$ ipconfig", "cmd: git status"     → run a command (you approve first)
 //   "what's on my screen?"              → look at the screen and explain
 //   "help, I'm stuck"                   → look at the screen and help
+//   "include yourself in the screenshot" → he shows up in captures for 5 minutes
 
 export type Action =
   | { do: "open_app"; name: string }
@@ -44,7 +45,28 @@ export type Intent =
   | { kind: "do"; actions: Action[] }
   | { kind: "screen"; mode: ScreenMode }
   | { kind: "clipboard" }
+  /** Show him in screenshots for a few minutes (show), or hide him from them again. */
+  | { kind: "capture"; show: boolean }
   | null;
+
+/** "Screenshot", "recording"...: what a request about being in a picture is about. */
+const PICTURE = String.raw`(?:screen\s?shots?|screen\s?captures?|screen\s?recordings?|recordings?|captures?|pictures?|photos?|snips?)`;
+const BOND = String.raw`(?:yourself|you|bond)`;
+const SHOW_IN_PICTURE = new RegExp(
+  [
+    String.raw`\b(?:include|show|put|keep|leave|add)\s+${BOND}\s+(?:in|on)\b.*\b${PICTURE}`,
+    String.raw`\b(?:appear|show up|be (?:visible|seen))\s+in\b.*\b${PICTURE}`,
+    String.raw`\b(?:screen\s?shot|screen\s?capture|recording|picture|photo)\s+(?:with|of)\s+(?:you|bond)\b`,
+  ].join("|"),
+  "i",
+);
+const HIDE_FROM_PICTURE = new RegExp(
+  [
+    String.raw`\b(?:hide|remove|exclude|keep|leave)\s+(?:${BOND}\s+)?(?:from|out of|off)\b.*\b${PICTURE}`,
+    String.raw`\b(?:don'?t|do not|never|stop)\b.*\b(?:appear(?:ing)?|show(?:ing)?\s+up|be(?:ing)?\s+(?:visible|seen)|show(?:ing)?\s+${BOND}|include|put)\b.*\b${PICTURE}`,
+  ].join("|"),
+  "i",
+);
 
 const FOLDERS = /^(?:my\s+|the\s+)?(downloads?|documents?|docs|desktop|pictures|photos|screenshots?|music|videos?)(?:\s+folder)?$/i;
 const URLISH = /^(?:https?:\/\/)?[\w-]+(\.[\w-]+)+(\/\S*)?$/i;
@@ -122,6 +144,10 @@ export function understand(input: string): Intent {
   // Remember: day log and ideas (explicit prefixes only; the AI catches the rest).
   if ((m = t.match(/^(?:log|journal|diary|add to (?:my )?(?:journal|diary|log))\s*[:\-–]?\s+(.+)$/is))) return { kind: "log", text: m[1] };
   if ((m = t.match(/^(?:(?:new |project |app )?idea|save (?:this |an |my )?idea|add (?:an |this )?idea)\s*[:\-–]?\s+(.+)$/is))) return { kind: "idea", text: m[1] };
+
+  // Being in a screenshot or recording: hidden unless you ask (checked first: "don't show yourself in it").
+  if (HIDE_FROM_PICTURE.test(t)) return { kind: "capture", show: false };
+  if (SHOW_IN_PICTURE.test(t)) return { kind: "capture", show: true };
 
   // Reminders.
   const r = reminder(t);

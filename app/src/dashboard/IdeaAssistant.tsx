@@ -9,12 +9,9 @@ import { aiText } from "../ai";
 import { newId, parseTasks, SAVED_KINDS, statusOf, titleOf, type Idea, type SavedKind } from "../assistant/ideacore";
 import { dropChat, loadChat, patchIdea, saveChat, type Msg } from "../assistant/ideas";
 import { loadIdeas } from "../assistant/notes";
-import { loadSettings } from "../settings";
 import { toast } from "./ui";
 
 type Tab = "explore" | "plan" | "saved";
-
-const BRAIN: Record<string, string> = { local: "the brain on this laptop", gemini: "Google Gemini", claude: "Claude" };
 
 const SYSTEM =
   "You are Bond, a thoughtful thinking partner helping the user develop one idea. " +
@@ -46,21 +43,20 @@ const draftMemory = new Map<string, string>();
 
 const fresh = (idea: Idea) => loadIdeas().find((i) => i.id === idea.id) ?? idea;
 
-/** What Bond is told about the idea. Your personal notes are only included for the brain on this laptop. */
-function context(idea: Idea, provider: string): string {
+/** What Bond is told about the idea, including your own notes (it all stays on this laptop). */
+function context(idea: Idea): string {
   const i = fresh(idea);
   const out = [`The idea (as the user wrote it): ${i.text}`, `Title: ${titleOf(i)}`, `Stage: ${statusOf(i)}`];
   const tasks = (i.tasks ?? []).map((t) => `${t.done ? "[x]" : "[ ]"} ${t.text}`);
   if (tasks.length) out.push(`Current plan:\n${tasks.join("\n")}`);
   const decisions = (i.saved ?? []).filter((s) => s.kind === "decision").map((s) => `- ${s.text}`);
   if (decisions.length) out.push(`Decisions so far:\n${decisions.join("\n")}`);
-  if (provider === "local" && i.notes?.trim()) out.push(`The user's own notes:\n${i.notes.trim().slice(0, 1500)}`);
+  if (i.notes?.trim()) out.push(`The user's own notes:\n${i.notes.trim().slice(0, 1500)}`);
   return out.join("\n\n");
 }
 
 export default function IdeaAssistant({ idea }: { idea: Idea }) {
   const id = idea.id;
-  const provider = loadSettings().aiProvider;
   const [tab, setTab] = useState<Tab>(tabMemory.get(id) ?? "explore");
   const [msgs, setMsgs] = useState<Msg[]>(() => loadChat(id));
   const [draft, setDraft] = useState(draftMemory.get(id) ?? "");
@@ -106,7 +102,7 @@ export default function IdeaAssistant({ idea }: { idea: Idea }) {
       .map((m) => `${m.role === "you" ? "User" : "Bond"}: ${m.text}`)
       .join("\n");
     try {
-      const reply = await aiText(SYSTEM, `${context(idea, provider)}\n\n${history ? `Conversation so far:\n${history}\n\n` : ""}User: ${instruction}`);
+      const reply = await aiText(SYSTEM, `${context(idea)}\n\n${history ? `Conversation so far:\n${history}\n\n` : ""}User: ${instruction}`);
       // Written to storage first, so it is kept even if you have gone to another idea meanwhile.
       const done: Msg[] = [...loadChat(id), { role: "bond", text: reply.trim() || "I don't have anything useful to add to that." }];
       saveChat(id, done);
@@ -149,7 +145,7 @@ export default function IdeaAssistant({ idea }: { idea: Idea }) {
     setErr("");
     setRaw("");
     try {
-      const reply = await aiText(PLAN_SYSTEM, `${context(idea, provider)}\n\n${instruction}`);
+      const reply = await aiText(PLAN_SYSTEM, `${context(idea)}\n\n${instruction}`);
       const existing = (fresh(idea).tasks ?? []).map((t) => t.text);
       const items = parseTasks(reply, existing);
       if (!items.length) {
@@ -210,7 +206,7 @@ export default function IdeaAssistant({ idea }: { idea: Idea }) {
       <header className="assistant-head">
         <div>
           <h2>Bond</h2>
-          <small className="muted">With {BRAIN[provider] ?? "Bond's brain"}</small>
+          <small className="muted">With the brain on this laptop</small>
         </div>
         <div className="tabs" role="tablist" aria-label="Bond">
           {(
@@ -228,8 +224,7 @@ export default function IdeaAssistant({ idea }: { idea: Idea }) {
       </header>
 
       <p className="assistant-note">
-        {provider === "local" ? "Everything here stays on this laptop. " : `The idea, your tasks and decisions are sent to ${BRAIN[provider]}; your personal notes are not. `}
-        Bond can't browse the web, so verify facts yourself and keep what you check under Saved.
+        Everything here stays on this laptop. Bond can't browse the web, so verify facts yourself and keep what you check under Saved.
       </p>
 
       {tab === "explore" && (

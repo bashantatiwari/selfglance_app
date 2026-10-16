@@ -14,14 +14,10 @@ export interface Settings {
   snoozeMin: number;
   /** Glasses of water per day. */
   waterGoal: number;
-  /** Bond's own brain on this laptop ("local"), or the cloud AI the user's own key is for. */
-  aiProvider: "local" | "gemini" | "claude";
-  /** Preferred Gemini model, or "auto" (a chain of free models, busy ones skipped). */
-  geminiModel: string;
   /** Read Bond's answers aloud. */
   speakAnswers: boolean;
-  /** Whose voice: Bond's own on this laptop, Google's (needs the Gemini key), or Windows'. */
-  voice: "bond" | "google" | "system";
+  /** Whose voice: Bond's own on this laptop, or one of Windows' own voices. */
+  voice: "bond" | "system";
   /** Kokoro speaker id for Bond's own voice (18 = Puck). */
   voiceId: number;
   /** 1 = normal speed. */
@@ -36,6 +32,8 @@ export interface Settings {
   theme: "system" | "light" | "dark";
   /** Guide mode shows what he picked and what he could have picked (for finding out why he pointed wrong). */
   guideDebug: boolean;
+  /** Leave Bond out of screenshots and screen recordings (you still see him). "Include yourself" shows him for a few minutes. */
+  hideFromCaptures: boolean;
   /** Seconds an answer stays on screen before it closes by itself. */
   answerSeconds: number;
   /** Nudge when you've been brainstorming/chatting with AI a long time without building. */
@@ -54,7 +52,7 @@ export interface Settings {
   notice: NoticeLevel;
   /** At most this many suggestions an hour. */
   noticeMaxPerHour: number;
-  /** He may look at your screen (on-device brain only) when you seem stuck. */
+  /** He may look at your screen (read on this laptop) when you seem stuck. */
   noticeLook: boolean;
   /** No suggestions between these hours (local time, 0-23). */
   quietOn: boolean;
@@ -69,8 +67,6 @@ export const DEFAULT_SETTINGS: Settings = {
   breakEveryMin: 45,
   snoozeMin: 10,
   waterGoal: 8,
-  aiProvider: "local",
-  geminiModel: "auto",
   speakAnswers: true,
   voice: "bond",
   voiceId: 18,
@@ -80,6 +76,7 @@ export const DEFAULT_SETTINGS: Settings = {
   followUp: true,
   guideDebug: false,
   theme: "system",
+  hideFromCaptures: true,
   answerSeconds: 12,
   brainstormAlert: true,
   batteryAlert: true,
@@ -98,10 +95,21 @@ export const DEFAULT_SETTINGS: Settings = {
 
 const KEY = "selfglance.settings";
 
+/**
+ * Settings saved by older versions may still name a cloud brain or Google's voice. There is
+ * no cloud any more: drop those choices (Bond's own brain and voice answer instead).
+ */
+function withoutCloud(s: Settings & Record<string, unknown>): Settings {
+  delete s.aiProvider;
+  delete s.geminiModel;
+  if ((s.voice as string) === "google") s.voice = "bond";
+  return s;
+}
+
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : { ...DEFAULT_SETTINGS };
+    return raw ? withoutCloud({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) }) : { ...DEFAULT_SETTINGS };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }

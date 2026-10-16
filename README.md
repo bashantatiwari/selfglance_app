@@ -100,7 +100,7 @@ Open an idea to develop it. Your content sits on cream paper on the left (the id
 - **Plan**: ask for next steps, tasks, an MVP or experiments. Bond *suggests*; nothing joins your plan until you approve it.
 - **Saved**: findings, decisions, references and notes you chose to keep, filterable.
 
-Bond cannot browse the web, and the panel says so. It also says whether the conversation stays on your laptop or is sent to the cloud brain you picked, and your personal notes are never sent.
+Bond cannot browse the web, and the panel says so. The whole conversation, your notes included, is read by the brain on your laptop and goes nowhere else.
 
 ### Settings and privacy
 
@@ -148,7 +148,7 @@ flowchart LR
         A["Actions<br/>open · switch · close · type · files"]
         G["Guide mode<br/>cursor overlay"]
         S["Screen reader<br/>OCR + UI Automation"]
-        B[("Brain<br/>Qwen3.5-4B on your GPU,<br/>or your own Gemini / Claude key")]
+        B[("Brain<br/>Qwen3.5-4B on your GPU,<br/>no cloud, no keys")]
         M[("Memory + learning log<br/>this computer only")]
         D["Dashboard<br/>tracking and analysis"]
     end
@@ -173,7 +173,7 @@ flowchart LR
 |---|---|
 | App shell | [Tauri 2](https://tauri.app) (Rust) with a transparent always-on-top overlay for Bond and a normal window for the dashboard |
 | Interface | React 19, TypeScript, Vite, Three.js (Bond's 3D character), plain CSS design tokens (no UI library) |
-| Brain | [llama.cpp](https://github.com/ggml-org/llama.cpp) (Vulkan build) running Qwen3.5-4B (Q4_K_M) with its vision projector. Optional cloud: Google Gemini or Claude with your own key |
+| Brain | [llama.cpp](https://github.com/ggml-org/llama.cpp) (Vulkan build) running Qwen3.5-4B (Q4_K_M) with its vision projector. No cloud services and no API keys |
 | Voice | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx): Parakeet (speech to text), Kokoro (speech), TitaNet (voice match) |
 | Screen | Windows OCR (`Windows.Media.Ocr`) and UI Automation (`uiautomation` crate) |
 
@@ -183,7 +183,7 @@ flowchart LR
 |---|---|
 | `lib.rs` | Overlay window, hotkeys, tray menu, idle and active-app tracking |
 | `brain.rs` | Starts, feeds and stops the local model server; waits until it is really loaded |
-| `ai.rs` | Routes requests to the local brain or a cloud key; guide mode's step planner |
+| `ai.rs` | Routes requests to the local brain; guide mode's step planner |
 | `agent.rs` | The actions Bond can take, and the approval gate |
 | `screen.rs` | OCR and UI Automation: finds controls by name, with their exact rectangles |
 | `system.rs` | Windows (switch, minimize, close), battery, memory, clipboard |
@@ -202,10 +202,10 @@ About 8,500 lines of Rust and 8,200 of TypeScript, plus styles.
 
 ## Privacy
 
-- **The brain runs on your laptop.** What you ask Bond and show him is read by a model on your own GPU. A cloud brain is optional, uses a key you provide, and the panels say clearly when something would be sent.
+- **Nothing leaves your laptop.** There are no cloud services, no accounts and no API keys. What you ask Bond and show him is read by a model on your own machine. Bond uses the internet for two things only: downloading his own brain and voice files once, and opening websites you ask him to open. Two tests (`egress.rs`, `tests/nocloud.test.ts`) fail if code ever calls an AI service or loads anything from the web.
 - **The microphone is explicit.** It is open only while you hold `Ctrl+Alt+V`, or, if you switch on "Hey Bond", while the always-on listener is on (it drops what isn't for him as it hears it; nothing is recorded or sent). A banner in Settings says which.
 - **Screen reading is scoped.** Bond looks when you ask, or, if you allow it, when you seem stuck. Never password managers, banking or private windows. Password fields are never read.
-- **Everything he keeps is local.** Journal (one text file per day), activity, ideas, settings, the learning log and memories stay on your computer. Cloud keys go in the Windows Credential Manager. "Forget" deletes what he learned.
+- **Everything he keeps is local.** Journal (one text file per day), activity, ideas, settings, the learning log and memories stay on your computer. "Forget" deletes what he learned. Keys that an earlier version saved are deleted on start-up.
 
 ## Run it
 
@@ -256,7 +256,7 @@ SelfGlance is an **early, actively developed personal project (v0.1)**. Being st
 - **Windows only.** Screen reading, window control and the brain's runtime are Windows-specific for now.
 - **Tuned on one laptop and one voice.** It was built and measured on an RTX 3050 6 GB laptop with 16 GB of RAM. Laptops without a decent GPU would run the brain much more slowly, and lighter model tiers are on the roadmap but not built. The wake word and voice match were tuned on the author's voice and need more testing with others.
 - **Guide mode accuracy is not yet measured at scale.** It works well on standard Windows apps; apps that expose few UI Automation controls (some Qt and Electron apps) are harder. The debug view and the local click log exist to improve this.
-- **The AI is small.** The default 4B model is fast and private, but it makes mistakes a cloud model would not, which is why a cloud key is an option.
+- **The AI is small.** The 4B model is fast and private, but it makes mistakes a much larger cloud model would not. That is the price of nothing leaving your laptop; the plan is to make a smaller model that is tuned to Bond's own jobs.
 
 Where it is heading, in order, is in [ROADMAP.md](ROADMAP.md): lighter model tiers for ordinary laptops, replaying and learning from the steps you take, weekly reflections built from your journal, and an Android companion.
 

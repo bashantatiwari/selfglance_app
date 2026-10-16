@@ -14,6 +14,23 @@ test("the screenshots folder opens like the other folders", () => {
   assert.deepEqual(understand("open my screenshots folder"), { kind: "do", actions: [{ do: "open_folder", name: "screenshots" }] });
 });
 
+test("being in a screenshot: hidden unless he is asked", () => {
+  for (const q of ["include yourself in the screenshot", "Include yourself in the next screenshot.", "show yourself in the screenshot", "put yourself in my screenshot", "I want you to appear in the screenshot", "take a screenshot with you", "show up in the recording", "leave yourself in the screen recording"]) {
+    assert.deepEqual(understand(q), { kind: "capture", show: true }, q);
+  }
+  for (const q of ["hide yourself from the screenshot", "hide from screenshots", "keep yourself out of the screenshots", "don't show yourself in screenshots", "don't appear in the screenshot", "stop appearing in my screenshots", "remove yourself from the recording"]) {
+    assert.deepEqual(understand(q), { kind: "capture", show: false }, q);
+  }
+});
+
+test("other screenshot requests are not about being in one", () => {
+  assert.deepEqual(understand("delete my screenshots"), { kind: "do", actions: [{ do: "delete", paths: ["screenshots/*"] }] });
+  assert.deepEqual(understand("open my screenshots folder"), { kind: "do", actions: [{ do: "open_folder", name: "screenshots" }] });
+  for (const q of ["what's in this screenshot", "take a screenshot", "where do my screenshots go", "save a picture of my screen"]) {
+    assert.notEqual(understand(q)?.kind, "capture", q);
+  }
+});
+
 test("freeing up RAM", () => {
   for (const q of ["free up ram", "free up some memory", "clear my ram", "reduce ram usage", "save memory"]) {
     assert.deepEqual(understand(q), { kind: "do", actions: [{ do: "free_memory" }] }, q);

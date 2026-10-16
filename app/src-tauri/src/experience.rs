@@ -34,7 +34,7 @@ pub struct Exp {
     pub app: String,
     /// What Bond decided: {"intent","text","reply","actions","needs_screen"}.
     pub output: Value,
-    /// Which brain answered ("local", "gemini", "claude", "rules").
+    /// Which brain answered ("local", or "rules"; older logs may say "gemini" or "claude").
     #[serde(default)]
     pub brain: String,
     pub ok: bool,

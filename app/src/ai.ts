@@ -1,14 +1,12 @@
-// Frontend side of the AI features. Every request is made by Rust (src-tauri/src/ai.rs):
-// Bond's own brain on this laptop (brain.rs), or a cloud AI with the key from the OS
-// keychain. What he learns from you is kept by experience.rs.
+// Frontend side of the AI features. Every request is made by Rust (src-tauri/src/ai.rs) and
+// answered by Bond's own brain on this laptop (brain.rs): nothing is sent to any cloud service.
+// What he learns from you is kept by experience.rs.
 
 import { invoke } from "@tauri-apps/api/core";
 import { inTauri } from "./platform";
 import { loadSettings } from "./settings";
 import type { Action, ScreenMode } from "./assistant/intent";
 import { sentences, speakable } from "./assistant/speech";
-
-export type Provider = "local" | "gemini" | "claude";
 
 /** Something powerful Bond wants to do, shown in full before anything happens. */
 export interface Approval {
@@ -62,24 +60,16 @@ export interface Reminder {
   skipToday?: boolean;
 }
 
-const opts = () => {
-  const s = loadSettings();
-  return { provider: s.aiProvider, geminiModel: s.geminiModel };
-};
-
-export const hasKey = (provider: Provider) => (inTauri ? invoke<boolean>("ai_has_key", { provider }) : Promise.resolve(false));
-export const setKey = (provider: Provider, key: string) => invoke<void>("ai_set_key", { provider, key });
-
-export const aiText = (system: string, prompt: string) => invoke<string>("ai_text", { ...opts(), system, prompt });
+export const aiText = (system: string, prompt: string) => invoke<string>("ai_text", { system, prompt });
 
 /** Let the AI classify a command Bond couldn't place himself (text only, no screenshot). */
 /** `spoken`: it came from the microphone, so words may be misheard. */
 /** Get his brain ready for a request that's coming (loaded, instructions already read). */
-export const aiPrime = () => (inTauri ? invoke<void>("ai_prime", opts()).catch(() => {}) : Promise.resolve());
-export const routeCommand = (text: string, spoken = false) => invoke<Route>("ai_route", { ...opts(), text, spoken });
+export const aiPrime = () => (inTauri ? invoke<void>("ai_prime").catch(() => {}) : Promise.resolve());
+export const routeCommand = (text: string, spoken = false) => invoke<Route>("ai_route", { text, spoken });
 
 /** Look at the screen now: explain it, help when stuck, or do a task on it. */
-export const screenAsk = (question: string, mode: ScreenMode, spoken = false) => invoke<ScreenAnswer>("ai_screen", { ...opts(), question, mode, spoken });
+export const screenAsk = (question: string, mode: ScreenMode, spoken = false) => invoke<ScreenAnswer>("ai_screen", { question, mode, spoken });
 
 /** What Bond remembers about you (memory.json), and forgetting it. */
 export const memoryList = () => (inTauri ? invoke<string[]>("memory_list").catch(() => []) : Promise.resolve([]));
@@ -98,6 +88,11 @@ export const denyAction = (id: string) => (inTauri ? invoke<void>("agent_deny", 
 export const takeFocus = () => (inTauri ? invoke<void>("take_focus").catch(() => {}) : Promise.resolve());
 
 export const clipboardText = () => invoke<string>("clipboard_text");
+
+/** Settings: keep Bond out of screenshots and recordings (or not). */
+export const captureHideByDefault = (hide: boolean) => (inTauri ? invoke<boolean>("capture_hide_by_default", { hide }).catch(() => hide) : Promise.resolve(hide));
+/** "Include yourself in the screenshot" (show) or hide again. Resolves to whether he is hidden from captures now. */
+export const captureShow = (show: boolean) => (inTauri ? invoke<boolean>("capture_show", { show }).catch(() => true) : Promise.resolve(!show));
 
 export const listReminders = () => (inTauri ? invoke<Reminder[]>("reminders_list") : Promise.resolve([] as Reminder[]));
 export const addReminder = (text: string, at: number) => invoke<Reminder>("reminder_add", { text, at });
@@ -283,8 +278,8 @@ async function bondVoice(text: string, token: number) {
 }
 
 /**
- * Speak an answer, in the voice chosen in Settings: Bond's own (on this laptop), Google's
- * (needs the Gemini key; ~3-5 s to arrive), or Windows'. Falls back to Windows' voice.
+ * Speak an answer, in the voice chosen in Settings: Bond's own (on this laptop) or one of
+ * Windows' own voices. Falls back to Windows' voice.
  */
 export async function speak(text: string) {
   stopSpeaking();
@@ -309,27 +304,17 @@ async function speakWith(text: string, token: number) {
       if (token !== speakToken) return;
     }
   }
-  if (inTauri && (choice === "google" || choice === "bond")) {
-    try {
-      const b64 = await invoke<string>("ai_speak", { text });
-      if (token !== speakToken) return; // closed or replaced meanwhile
-      await play(b64, token);
-      return;
-    } catch {
-      if (token !== speakToken) return;
-    }
-  }
   await systemVoice(text);
 }
 
 function systemVoice(text: string): Promise<void> {
   return new Promise((resolve) => {
     try {
-      const voices = window.speechSynthesis.getVoices();
-      // Prefer neural "Natural"/"Online" voices, then any English voice.
+      // Only voices installed on this laptop: the "Online" ones stream the text to Microsoft.
+      const voices = window.speechSynthesis.getVoices().filter((v) => v.localService);
+      if (!voices.length) return resolve(); // none installed: stay silent rather than send text away
       const pick =
-        voices.find((v) => /natural|online/i.test(v.name) && v.lang.startsWith("en")) ??
-        voices.find((v) => /aria|jenny|guy|zira|samantha|daniel/i.test(v.name)) ??
+        voices.find((v) => /aria|jenny|guy|zira|samantha|daniel/i.test(v.name) && v.lang.startsWith("en")) ??
         voices.find((v) => v.lang.startsWith("en"));
       const u = new SpeechSynthesisUtterance(text);
       if (pick) u.voice = pick;
@@ -372,11 +357,11 @@ export interface GuideStep {
 }
 
 /** The next step towards `goal` from a fresh look at the screen. Nothing is clicked. `done`: steps already shown. */
-export const aiGuide = (goal: string, done: string[]) => invoke<GuideStep>("ai_guide", { ...opts(), goal, done });
+export const aiGuide = (goal: string, done: string[]) => invoke<GuideStep>("ai_guide", { goal, done });
 
 /** Tell his log how a step went (what you clicked after he pointed), so he can learn from it. */
 export const guideOutcome = (goal: string, say: string, picked: string, shown: number, outcome: "followed" | "elsewhere" | "timeout", at: { x: number; y: number } | null) =>
-  inTauri ? invoke<void>("guide_outcome", { ...opts(), goal, say, picked, shown, outcome, x: at?.x ?? null, y: at?.y ?? null }).catch(() => {}) : Promise.resolve();
+  inTauri ? invoke<void>("guide_outcome", { goal, say, picked, shown, outcome, x: at?.x ?? null, y: at?.y ?? null }).catch(() => {}) : Promise.resolve();
 
 /** The real mouse, in physical screen pixels, and how long the user has been idle. */
 export const guideMouse = () => invoke<{ x: number; y: number; down: boolean; idle_ms: number }>("guide_mouse");

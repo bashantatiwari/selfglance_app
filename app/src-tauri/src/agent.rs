@@ -121,8 +121,6 @@ pub struct ShotGeometry {
     pub height: f64,
     /// Screenshot pixels per physical pixel.
     pub scale: f64,
-    /// Click coordinates are on a 0-1000 grid (Gemini) rather than screenshot pixels (Claude).
-    pub normalized: bool,
 }
 
 /// What came of a plan: short lines for what was done, longer text to read (status,
@@ -925,7 +923,8 @@ fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Resul
         Action::FindFiles { query, folder } => Ok(Effect::info(find_files(app, &query, folder.as_deref())?)),
         Action::Click { x, y, double } => {
             let g = shot.ok_or("Clicking needs a look at the screen first.")?;
-            let (ix, iy) = if g.normalized { (x / 1000.0 * g.width, y / 1000.0 * g.height) } else { (x, y) };
+            // The model reads positions on a 0-1000 grid.
+            let (ix, iy) = (x / 1000.0 * g.width, y / 1000.0 * g.height);
             if !(0.0..=g.width).contains(&ix) || !(0.0..=g.height).contains(&iy) {
                 return Err("That spot is off the screen.".into());
             }

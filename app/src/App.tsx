@@ -47,6 +47,8 @@ import {
   aiText,
   approveAction,
   aiPrime,
+  captureHideByDefault,
+  captureShow,
   clipboardText,
   cancelAgent,
   denyAction,
@@ -529,6 +531,7 @@ export default function App() {
       void setLearning(st.learnFromMe);
       void noticeEnable(st.notice !== "off");
       void wakeSet(st.wakeWord, st.voiceMatch).catch(() => {}); // not downloaded yet: Settings says so
+      void captureHideByDefault(st.hideFromCaptures);
       if (st.notice === "off") pendingRef.current = null;
     };
     coachBreakRef.current = () => coach.inBreak;
@@ -1057,6 +1060,14 @@ export default function App() {
         } catch {
           /* e.g. no app by that name: let the AI work out what was meant */
         }
+      }
+      if (own?.kind === "capture") {
+        const hidden = await captureShow(own.show);
+        if (own.show) {
+          if (hidden) return confirm("I couldn't change that, sorry");
+          return confirm(settingsRef.current.hideFromCaptures ? "I'm in your screenshots for 5 minutes ✓" : "I'm always in your screenshots ✓");
+        }
+        return confirm(hidden ? "I'm out of your screenshots ✓" : "Settings keep me in screenshots");
       }
       if (own?.kind === "clipboard") {
         const copied = await clipboardText();

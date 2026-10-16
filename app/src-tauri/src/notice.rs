@@ -10,8 +10,8 @@
 //             you're working in (read on-device by OCR during a pause); the brain decides
 //             whether it can explain it.
 //
-// The brain judges with the local model only: what he notices on his own never goes to a
-// cloud AI. He never looks at password managers, banking or private browser windows, and
+// The brain judges on this laptop, like everything else Bond does: nothing is sent to any
+// cloud service. He never looks at password managers, banking or private browser windows, and
 // doesn't think on battery below 30% (unplugged).
 //
 // How each suggestion went (taken, 👎, or let pass) goes into the experience log, and
