@@ -1,4 +1,4 @@
-// Small shared pieces of the dashboard: toasts (with Undo), the letter avatar, the kind badge.
+// Small shared pieces of the dashboard: toasts (with Undo), the letter avatar, the kind badge, the switch.
 
 import { useEffect, useState } from "react";
 
@@ -58,4 +58,19 @@ export function Avatar({ label, color, size = 28 }: { label: string; color: stri
 /** App / Site / Video / Project, each its own tint so two rows with the same name read apart. */
 export function KindBadge({ kind }: { kind: string }) {
   return <span className={`kind kind-${kind.toLowerCase()}`}>{kind}</span>;
+}
+
+// --- Switch ----------------------------------------------------------------------------
+export function Toggle(props: { label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void; note?: string | null }) {
+  return (
+    <label className="toggle">
+      <input type="checkbox" role="switch" checked={props.checked} onChange={(e) => props.onChange(e.target.checked)} />
+      <span className="switch" aria-hidden />
+      <span>
+        {props.label}
+        {props.hint && <small className="muted">{props.hint}</small>}
+        {props.note && <small className="muted">{props.note}</small>}
+      </span>
+    </label>
+  );
 }

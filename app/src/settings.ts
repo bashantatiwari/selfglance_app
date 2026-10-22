@@ -32,6 +32,17 @@ export interface Settings {
   theme: "system" | "light" | "dark";
   /** Guide mode shows what he picked and what he could have picked (for finding out why he pointed wrong). */
   guideDebug: boolean;
+  /**
+   * Advanced actions: lets the AI run commands, end programs, type, click and write the clipboard
+   * for you. Off by default: without it Bond points (guide mode) and does only the safe things
+   * (see src-tauri/src/policy.rs).
+   */
+  advancedActions: boolean;
+  /**
+   * Labs: features that are still experimental ("Hey Bond", suggestions, learning from you, the
+   * brainstorm nudge). Off by default; see effective().
+   */
+  labs: boolean;
   /** Leave Bond out of screenshots and screen recordings (you still see him). "Include yourself" shows him for a few minutes. */
   hideFromCaptures: boolean;
   /** Seconds an answer stays on screen before it closes by itself. */
@@ -40,12 +51,6 @@ export interface Settings {
   brainstormAlert: boolean;
   /** Bond warns when the battery is low and the laptop isn't plugged in. */
   batteryAlert: boolean;
-  /** In the evening, if today's journal is still empty, Bond asks you to write it. */
-  journalNudge: boolean;
-  /** "Journal first": from the evening hour, until 20 words are written, he asks again when you start something entertaining. "Not tonight" skips the day. */
-  journalFirst: boolean;
-  /** From this hour (local time, 0-23). */
-  journalAt: number;
   /** Keep what you ask and how it went, so Bond adapts to you (stays on this computer). */
   learnFromMe: boolean;
   /** Suggestions he makes on his own: off, only when you seem stuck, helpful, chatty. */
@@ -60,6 +65,12 @@ export interface Settings {
   quietTo: number;
   /** Apps or window titles he never comments on (comma-separated words). */
   noticeBlock: string;
+  /** Goals: say so when about ten minutes in a row went off today's goal. */
+  goalNudge: boolean;
+  /** Goals: on Sunday morning, look back on the week. */
+  goalReview: boolean;
+  /** Keep what you ask Bond and his answers, so you can find them again (dashboard → Chats). */
+  keepChats: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -75,22 +86,24 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceMatch: true,
   followUp: true,
   guideDebug: false,
+  advancedActions: false,
+  labs: false,
   theme: "system",
   hideFromCaptures: true,
   answerSeconds: 12,
-  brainstormAlert: true,
+  brainstormAlert: false,
   batteryAlert: true,
-  journalNudge: true,
-  journalFirst: false,
-  journalAt: 21,
-  learnFromMe: true,
-  notice: "helpful",
+  learnFromMe: false,
+  notice: "off",
   noticeMaxPerHour: 3,
-  noticeLook: true,
+  noticeLook: false,
   quietOn: false,
   quietFrom: 22,
   quietTo: 8,
   noticeBlock: "",
+  goalNudge: true,
+  goalReview: true,
+  keepChats: true,
 };
 
 const KEY = "selfglance.settings";
@@ -104,6 +117,16 @@ function withoutCloud(s: Settings & Record<string, unknown>): Settings {
   delete s.geminiModel;
   if ((s.voice as string) === "google") s.voice = "bond";
   return s;
+}
+
+/**
+ * What Bond actually does: the experimental features count only while Labs is on, whatever an
+ * older version left saved (a copy updated from before Labs would otherwise keep listening for
+ * "Hey Bond" and making suggestions). The dashboard shows and edits the saved values.
+ */
+export function effective(s: Settings): Settings {
+  if (s.labs) return s;
+  return { ...s, wakeWord: false, notice: "off", noticeLook: false, learnFromMe: false, brainstormAlert: false };
 }
 
 export function loadSettings(): Settings {

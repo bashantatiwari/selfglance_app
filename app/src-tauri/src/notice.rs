@@ -247,12 +247,12 @@ const PRIVATE: &[&str] = &[
     "credential", "sign in", "log in", "login",
 ];
 
-fn is_private(text: &str, blocked: &[String]) -> bool {
+pub(crate) fn is_private(text: &str, blocked: &[String]) -> bool {
     let t = text.to_lowercase();
     PRIVATE.iter().any(|p| t.contains(p)) || blocked.iter().any(|b| !b.trim().is_empty() && t.contains(&b.trim().to_lowercase()))
 }
 
-fn low_battery() -> bool {
+pub(crate) fn low_battery() -> bool {
     crate::system::battery().is_some_and(|b| !b.charging && b.percent < 30)
 }
 
@@ -305,10 +305,10 @@ async fn judge(window: &str, details: &str, image: Option<&str>) -> Result<Judge
     let schema = json!({
         "type": "object",
         "properties": {
-            "problem": {"type": "string"},
+            "problem": {"type": "string", "maxLength": 200},
             "suggest": {"type": "boolean"},
             "confidence": {"type": "number"},
-            "text": {"type": "string"},
+            "text": {"type": "string", "maxLength": 300},
         },
         "required": ["problem", "suggest", "confidence", "text"],
         "additionalProperties": false,

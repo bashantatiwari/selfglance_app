@@ -1,12 +1,10 @@
 // Reading and changing ideas in storage. Every change reads the list fresh, changes one idea
-// and writes it back, so a slow AI answer or a second window can never overwrite something
-// you just edited, and an answer that arrives after you switched ideas still lands on the
-// right one.
+// and writes it back, so a second window can never overwrite something you just edited.
 
 import { useEffect, useState } from "react";
 import { onTauriEvent } from "../platform";
 import { loadIdeas, saveIdeas } from "./notes";
-import type { Idea, SavedKind } from "./ideacore";
+import type { Idea } from "./ideacore";
 
 export const IDEAS_EVENT = "selfglance:ideas";
 const announce = () => window.dispatchEvent(new Event(IDEAS_EVENT));
@@ -62,42 +60,4 @@ export function useIdeas(): Idea[] {
     };
   }, []);
   return ideas;
-}
-
-// --- The conversation with Bond, one per idea (the same place older versions kept it) -----
-
-export interface Msg {
-  role: "you" | "bond";
-  text: string;
-  /** You chose to keep this answer, as this kind of note. */
-  savedAs?: SavedKind;
-}
-
-export const chatKey = (id: string) => `selfglance.ideachat.${id}`;
-
-export function loadChat(id: string): Msg[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(chatKey(id)) ?? "[]");
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
-
-/** Keeps the last 80 messages. False if it could not be stored. */
-export function saveChat(id: string, msgs: Msg[]): boolean {
-  try {
-    localStorage.setItem(chatKey(id), JSON.stringify(msgs.slice(-80)));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function dropChat(id: string) {
-  try {
-    localStorage.removeItem(chatKey(id));
-  } catch {
-    /* nothing to drop */
-  }
 }

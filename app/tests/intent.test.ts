@@ -42,19 +42,46 @@ test("freeing up RAM", () => {
 test("answering his questions out loud", () => {
   assert.equal(spokenAnswer("Yes.", false), "yes");
   assert.equal(spokenAnswer("Yeah, go ahead", false), "yes");
+  assert.equal(spokenAnswer("Okay, do it.", false), "yes");
   assert.equal(spokenAnswer("No, don't.", false), "no");
   assert.equal(spokenAnswer("Never mind", true), "no");
-  // The last check before deleting needs the word, not just "yes".
-  assert.equal(spokenAnswer("Yes", true), null);
-  assert.equal(spokenAnswer("Delete them.", true), "yes");
-  assert.equal(spokenAnswer("Yes, delete.", true), "yes");
   // Anything else is a new request.
   assert.equal(spokenAnswer("open spotify", false), null);
   // Said in a sentence, as people do.
   assert.equal(spokenAnswer("I need you to run this command.", false), "yes");
   assert.equal(spokenAnswer("Go ahead and execute it", false), "yes");
   assert.equal(spokenAnswer("Please don't run it", false), "no");
-  assert.equal(spokenAnswer("I need you to run this command.", true), null); // deleting needs the word
+});
+
+test("a spoken yes is a clear whole answer, never a question or a hedge", () => {
+  for (const q of [
+    "Okay, what does it do?",
+    "Sure, but is it safe?",
+    "should I do it?",
+    "what happens if I do that",
+    "yes?? wait what",
+    "Ok so is this going to delete anything",
+    "Can you run it with admin?",
+    "I'm not sure, maybe go ahead",
+    "okay but only the first one",
+  ]) {
+    assert.equal(spokenAnswer(q, false), null, q);
+  }
+});
+
+test("the last check before deleting is typed: a voice can say no, never yes", () => {
+  for (const q of ["Yes", "Delete them.", "Yes, delete.", "I'm not going to delete anything", "why would it delete them?", "go ahead and delete"]) {
+    assert.equal(spokenAnswer(q, true), null, q);
+  }
+  assert.equal(spokenAnswer("No, cancel that", true), "no");
+});
+
+test("'save' by voice is a short plain answer, not a sentence that mentions saving", () => {
+  assert.equal(unsavedAnswer("Save it"), "save");
+  assert.equal(unsavedAnswer("yes, save"), "save");
+  assert.equal(unsavedAnswer("Don't save"), "discard");
+  assert.equal(unsavedAnswer("Can you save it first?"), null);
+  assert.equal(unsavedAnswer("I forgot whether I need to save this"), null);
 });
 
 test("\"run it\" is about something said before, not an app called it", () => {
@@ -104,7 +131,6 @@ test("jobs you want to do yourself start guide mode", () => {
   // Not these: Bond does them himself, or they're something else.
   assert.deepEqual(understand("open spotify"), { kind: "do", actions: [{ do: "open_app", name: "spotify" }] });
   assert.deepEqual(understand("help"), { kind: "screen", mode: "help" });
-  assert.equal(understand("show me my reminders")?.kind, "do");
   // Help with words is not a walkthrough.
   assert.notDeepEqual(understand("help me write an email to my landlord"), { kind: "screen", mode: "guide" });
   assert.notDeepEqual(understand("help me summarize this article please"), { kind: "screen", mode: "guide" });
@@ -118,4 +144,37 @@ test("stopping, in the ways people say it", () => {
   for (const q of ["stop the music", "wait for the download to finish", "open notepad"]) {
     assert.equal(saidStop(q), false, q);
   }
+});
+
+test("skipping a song is understood without the AI, with or without 'this'", () => {
+  for (const q of ["skip", "next song", "skip this song", "skip the track", "skip that video", "next"]) {
+    assert.deepEqual(understand(q), { kind: "do", actions: [{ do: "media", key: "next" }] }, q);
+  }
+});
+
+test("a goal for the day is understood without the AI", () => {
+  assert.deepEqual(understand("goal: finish micrograd"), { kind: "goal", text: "finish micrograd" });
+  assert.deepEqual(understand("my focus today is the resume"), { kind: "goal", text: "the resume" });
+  assert.equal(understand("what is a goal in football")?.kind ?? null, null);
+});
+
+test("a message to write is understood without the AI", () => {
+  const kind = (s: string) => understand(s)?.kind ?? null;
+  assert.equal(kind("write me a msg stating that the review is taking long"), "draft");
+  assert.equal(kind("Write a polite email to my manager asking for leave"), "draft");
+  assert.equal(kind("draft a quick slack message to the team"), "draft");
+  assert.equal(kind("can you help me write a follow-up email"), "draft");
+  assert.equal(kind("what should I reply to this?"), "draft");
+  assert.equal(kind("reply to her saying yes, thursday works"), "draft");
+  assert.deepEqual(understand("write me a message to Sam saying hi"), { kind: "draft", request: "write me a message to Sam saying hi" });
+  // text for a box that isn't a "message"
+  assert.equal(kind("Write a prompt in the chatgpt stating that I want logo for selfglance and write it in a professional way"), "draft");
+  assert.equal(kind("write a linkedin post about my new job"), "draft");
+  assert.equal(kind("write a short caption for my photo"), "draft");
+  assert.equal(kind("write this in the chatgpt box: make me a logo"), "draft");
+  // not messages
+  assert.notEqual(kind("write a function that sorts a list"), "draft");
+  assert.notEqual(kind("write a poem about rain"), "draft");
+  assert.notEqual(kind("open slack"), "draft");
+  assert.notEqual(kind("write a function in rust that reverses a string"), "draft");
 });

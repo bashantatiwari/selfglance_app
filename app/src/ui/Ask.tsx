@@ -3,10 +3,10 @@
 //
 // The card also asks for approval before anything powerful (a command, ending a program,
 // deleting files): it shows exactly what will happen. Deleting needs a second yes, where
-// you type "delete". And it carries reminders when they're due.
+// you type "delete".
 
 import { useEffect, useRef, useState, type Ref } from "react";
-import type { Approval, Feedback, Reminder } from "../ai";
+import type { Approval, Feedback } from "../ai";
 import type { Suggestion } from "../assistant/notice";
 import "./ask.css";
 
@@ -15,8 +15,13 @@ export type AskState =
   | { step: "thinking"; question: string; looking: boolean; note?: string }
   | { step: "answer"; question: string; answer: string; done: string[]; info?: string[]; rated?: Feedback }
   | { step: "approve"; question: string; approval: Approval; done: string[]; info: string[] }
-  | { step: "reminder"; reminder: Reminder }
   | { step: "suggest"; suggestion: Suggestion }
+  /** Goals: the morning question, a nudge about drifting, and the Sunday review. */
+  /** A message he wrote for you: read it, change it, copy it or put it in the box you were typing in. */
+  | { step: "draft"; question: string; subject: string; message: string; usedScreen: boolean; note?: string; busy?: boolean }
+  | { step: "goalask" }
+  | { step: "drift"; text: string }
+  | { step: "review"; text: string }
   | { step: "unsure" }
   | { step: "error"; question: string; error: string };
 
@@ -72,10 +77,6 @@ export interface CardActions {
   onDeny: (id: string) => void;
   /** The confirmation box wants the keyboard. */
   onWantFocus: () => void;
-  onSnooze: (r: Reminder, minutes: number) => void;
-  onOpen: (page: "journal") => void;
-  /** "Journal first": skip tonight's journal. */
-  onSkipJournal: () => void;
   /** 👍 / 👎 on an answer, or null when there's nothing to rate. */
   onRate: ((value: Feedback) => void) | null;
   /** A suggestion he made: take it, not now, or never again. */
@@ -85,11 +86,26 @@ export interface CardActions {
   /** "Was that you?": yes (he learns your voice and does it) or no. */
   onItsMe: () => void;
   onNotMe: () => void;
+  /** Today's focus: set it, or skip today. */
+  /** Copy text (an answer, a draft). */
+  onCopy: (text: string) => void;
+  /** Put the draft in the box you were typing in (never sends it). */
+  onDraftPut: (text: string) => void;
+  /** Write it again. */
+  onDraftRetry: () => void;
+  onGoalSet: (text: string) => void;
+  onGoalSkip: () => void;
+  /** Drifting: back to it, "this is on-goal", or leave me alone for a while. */
+  onDriftBack: () => void;
+  onDriftOk: () => void;
+  onDriftSnooze: () => void;
+  /** The Sunday review: open it, or later. */
+  onReviewOpen: () => void;
+  onReviewLater: () => void;
 }
 
 export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskState } & CardActions) {
   const s = props.state;
-  const when = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return (
     <div ref={props.cardRef} className={`ask-card ${s.step}`} role={s.step === "approve" ? "alertdialog" : "status"}>
       {s.step === "thinking" && (
@@ -101,31 +117,6 @@ export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskStat
         </div>
       )}
       {s.step === "approve" && <ApproveBody key={s.approval.id} approval={s.approval} done={s.done} {...props} />}
-      {s.step === "reminder" && (
-        <>
-          <p className="q">Reminder · {when(s.reminder.at)}</p>
-          <p className="a reminder-text">{s.reminder.text}</p>
-          <div className="choices">
-            <button className="btn-ghost" onClick={() => props.onSnooze(s.reminder, 10)}>
-              Snooze 10 min
-            </button>
-            {s.reminder.skipToday && (
-              <button className="btn-ghost" onClick={props.onSkipJournal}>
-                Not tonight
-              </button>
-            )}
-            {s.reminder.open ? (
-              <button className="btn-primary" onClick={() => props.onOpen(s.reminder.open!)}>
-                Write it now
-              </button>
-            ) : (
-              <button className="btn-primary" onClick={props.onClose}>
-                Done
-              </button>
-            )}
-          </div>
-        </>
-      )}
       {s.step === "unsure" && (
         <>
           <p className="q">Voice match</p>
@@ -137,6 +128,39 @@ export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskStat
             </button>
             <button className="btn-primary" onClick={props.onItsMe}>
               Yes, it was me
+            </button>
+          </div>
+        </>
+      )}
+      {s.step === "draft" && <DraftBody key={s.question + s.message} s={s} onCopy={props.onCopy} onPut={props.onDraftPut} onRetry={props.onDraftRetry} onWantFocus={props.onWantFocus} />}
+      {s.step === "goalask" && <GoalAsk onSet={props.onGoalSet} onSkip={props.onGoalSkip} onWantFocus={props.onWantFocus} />}
+      {s.step === "drift" && (
+        <>
+          <p className="q">Your focus</p>
+          <p className="a">{s.text}</p>
+          <div className="choices">
+            <button className="btn-ghost" onClick={props.onDriftSnooze}>
+              Not now · 30 min
+            </button>
+            <button className="btn-ghost" onClick={props.onDriftOk}>
+              This is on-goal
+            </button>
+            <button className="btn-primary" onClick={props.onDriftBack}>
+              Back to it
+            </button>
+          </div>
+        </>
+      )}
+      {s.step === "review" && (
+        <>
+          <p className="q">Your week</p>
+          <p className="a">{s.text}</p>
+          <div className="choices">
+            <button className="btn-ghost" onClick={props.onReviewLater}>
+              Later
+            </button>
+            <button className="btn-primary" onClick={props.onReviewOpen}>
+              See it
             </button>
           </div>
         </>
@@ -162,6 +186,11 @@ export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskStat
         <>
           <p className="q">{s.question}</p>
           {s.answer && <p className="a">{s.answer}</p>}
+          {s.answer && s.answer.length > 40 && (
+            <button className="link copy" onClick={() => props.onCopy(s.answer)}>
+              Copy
+            </button>
+          )}
           {s.info?.map((t, i) => (
             <pre key={i} className="out">
               {t}
@@ -208,6 +237,101 @@ export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskStat
         </button>
       )}
     </div>
+  );
+}
+
+/** A message he wrote: the text is yours to change before it goes in the box. */
+function DraftBody(props: { s: Extract<AskState, { step: "draft" }>; onCopy: (t: string) => void; onPut: (t: string) => void; onRetry: () => void; onWantFocus: () => void }) {
+  const [text, setText] = useState(props.s.message);
+  const area = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = area.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+    }
+  }, [text]);
+  const busy = !!props.s.busy;
+  return (
+    <>
+      <p className="q">{props.s.question}</p>
+      {props.s.subject && (
+        <p className="draft-subject">
+          <b>Subject:</b> {props.s.subject}{" "}
+          <button className="link copy" onClick={() => props.onCopy(props.s.subject)}>
+            Copy subject
+          </button>
+        </p>
+      )}
+      <textarea
+        ref={area}
+        className="draft-text"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onFocus={props.onWantFocus}
+        aria-label="The message. You can edit it."
+        spellCheck
+        rows={3}
+      />
+      <p className="why">
+        {props.s.note ?? (props.s.subject ? "Click inside the email's body first, then “Put in the box”." : "Read it, change it if you like. “Put in the box” never sends it.")}
+        {props.s.usedScreen && !props.s.note ? " I read the conversation on your screen to write it." : ""}
+      </p>
+      <div className="choices">
+        <button className="btn-ghost" onClick={props.onRetry} disabled={busy}>
+          Try again
+        </button>
+        <button className="btn-ghost" onClick={() => props.onCopy(text)} disabled={busy || !text.trim()}>
+          Copy
+        </button>
+        <button className="btn-primary" onClick={() => props.onPut(text)} disabled={busy || !text.trim()}>
+          Put in the box
+        </button>
+      </div>
+    </>
+  );
+}
+
+/** "What's your focus today?": one line, or not today. */
+function GoalAsk(props: { onSet: (text: string) => void; onSkip: () => void; onWantFocus: () => void }) {
+  const [text, setText] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    props.onWantFocus();
+    const t = window.setTimeout(() => input.current?.focus(), 60);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <>
+      <p className="q">Good to see you</p>
+      <p className="a">What's your focus today?</p>
+      <form
+        className="choices"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (text.trim()) props.onSet(text.trim());
+        }}
+      >
+        <input
+          ref={input}
+          className="confirm"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Escape" && props.onSkip()}
+          placeholder="e.g. finish the micrograd tutorial"
+          aria-label="Your focus for today"
+          maxLength={120}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button type="button" className="btn-ghost" onClick={props.onSkip}>
+          Not today
+        </button>
+        <button type="submit" className="btn-primary" disabled={!text.trim()}>
+          Set focus
+        </button>
+      </form>
+    </>
   );
 }
 

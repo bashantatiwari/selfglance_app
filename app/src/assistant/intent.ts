@@ -1,12 +1,11 @@
 // Bond's own understanding of a command: the clear-cut cases are handled right here,
 // instantly and without any API call. Anything else returns null and goes to the AI router.
 //
-//   "log: finished the login page"      → journal
 //   "idea: an app that tracks plants"   → ideas
+//   "goal: finish micrograd"            → today's focus
+//   "write me a message to my manager…" → a draft he can put in the box you're typing in
 //   "open spotify", "volume up", "set volume to 30", "search for rust tutorials",
 //   "lock my laptop", "change my wallpaper to black" → actions
-//   "remind me in 45 minutes to stretch", "remind me at 5pm to call mom", "timer 10 min",
-//   "what are my reminders"             → reminders
 //   "how's my battery", "why is my laptop slow", "close chrome" → the laptop itself
 //   "delete my screenshots"             → delete, after showing them and asking twice
 //   "what's on my clipboard", "copy hello to clipboard", "summarize my clipboard"
@@ -14,6 +13,8 @@
 //   "what's on my screen?"              → look at the screen and explain
 //   "help, I'm stuck"                   → look at the screen and help
 //   "include yourself in the screenshot" → he shows up in captures for 5 minutes
+
+import { goalFrom } from "./goals.ts";
 
 export type Action =
   | { do: "open_app"; name: string }
@@ -30,8 +31,6 @@ export type Action =
   | { do: "free_memory" }
   | { do: "clipboard_get" }
   | { do: "clipboard_set"; text: string }
-  | { do: "remind"; text: string; in_minutes?: number; at?: string }
-  | { do: "list_reminders" }
   | { do: "run_command"; command: string; why: string }
   | { do: "kill_process"; name: string }
   | { do: "close_app"; name: string }
@@ -40,8 +39,11 @@ export type Action =
 export type ScreenMode = "explain" | "help" | "task" | "guide";
 
 export type Intent =
-  | { kind: "log"; text: string }
   | { kind: "idea"; text: string }
+  /** A message to write for you: "write me a message to my manager…", "what should I reply". */
+  | { kind: "draft"; request: string }
+  /** Today's focus: "goal: finish micrograd". */
+  | { kind: "goal"; text: string }
   | { kind: "do"; actions: Action[] }
   | { kind: "screen"; mode: ScreenMode }
   | { kind: "clipboard" }
@@ -70,14 +72,13 @@ const HIDE_FROM_PICTURE = new RegExp(
 
 const FOLDERS = /^(?:my\s+|the\s+)?(downloads?|documents?|docs|desktop|pictures|photos|screenshots?|music|videos?)(?:\s+folder)?$/i;
 const URLISH = /^(?:https?:\/\/)?[\w-]+(\.[\w-]+)+(\/\S*)?$/i;
-const CLOCK = /^\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?$/i;
 
 const MEDIA: [RegExp, string][] = [
   [/^(turn (the )?)?volume up|^(make it )?louder|^increase (the )?volume/i, "volume_up"],
   [/^(turn (the )?)?volume down|^(make it )?(quieter|softer)|^(decrease|lower) (the )?volume/i, "volume_down"],
   [/^(mute|unmute)\b/i, "mute"],
   [/^(pause|resume|play|stop)( (the )?(music|song|video|it))?$/i, "play_pause"],
-  [/^(next|skip)( (the )?(song|track|video))?$/i, "next"],
+  [/^(next|skip)( (the |this |that |current )?(song|track|video))?$/i, "next"],
   [/^(previous|prev|last)( (song|track|video))?$/i, "previous"],
 ];
 
@@ -98,61 +99,42 @@ const GUIDE_ME = new RegExp(
   "i",
 );
 
+/**
+ * "Write me a polite email…", "draft a reply", "write a prompt in the chatgpt…", "what should I reply
+ * to this?": text to write for a box, which he drafts for you to put in it.
+ */
+const DRAFT = new RegExp(
+  [
+    String.raw`^(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:help me\s+)?(?:write|draft|compose|prepare)\s+(?:me\s+)?(?:a|an|the|my|one|some)?\s*(?:(?:short|quick|brief|polite|professional|formal|friendly|casual|careful|clear|official|detailed|good|better|follow[- ]?up|slack|email|e-?mail|teams|whatsapp|linkedin|chat|chat ?gpt|text)\s+)*(?:message|msg|mail|e-?mail|reply|response|dm|follow[- ]?up|apology|resignation|leave request|prompt|post|comment|caption|bio|cover letter|paragraph|announcement|status update|testimonial)\b`,
+    // "write … in the chatgpt box", "type … into slack": wherever it says where the text goes
+    String.raw`^(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:write|draft|compose|type)\s+(?:me\s+)?.{0,80}?\b(?:in|into|on)\s+(?:the\s+|my\s+)?(?:chat ?gpt|claude|gemini|copilot|slack|gmail|outlook|whatsapp|teams|linkedin|message box|text ?box|compose box|box|field)\b`,
+    String.raw`^(?:please\s+)?(?:what|how)\s+(?:should|do|can|could)\s+i\s+(?:reply|respond|say|write|answer)\b`,
+    String.raw`^(?:please\s+)?(?:help me\s+)?(?:reply|respond)\s+(?:to|with|saying)\b`,
+  ].join("|"),
+  "i",
+);
+
 /** Words after "close"/"end" that are not a program ("close this tab"). */
 const NOT_A_PROGRAM = /^(this|it|that|them|tab|window|all|everything|the call|call|meeting|this tab|this window|the tab|the window|everything else)$/i;
-
-/** "45 minutes", "an hour", "half an hour", "90 sec", "2h" → minutes. */
-export function minutesIn(s: string): number | null {
-  const t = s.trim().toLowerCase();
-  if (/^half an? hour$/.test(t)) return 30;
-  if (/^an? hour and a half$/.test(t)) return 90;
-  if (/^a (couple|few) (of )?minutes$/.test(t)) return 3;
-  const m = t.match(/^(\d+(?:\.\d+)?|an?|one)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)$/);
-  if (!m) return null;
-  const n = /^(an?|one)$/.test(m[1]) ? 1 : Number(m[1]);
-  const unit = m[2][0] === "s" ? 1 / 60 : m[2][0] === "m" ? 1 : m[2][0] === "h" ? 60 : 1440;
-  const mins = n * unit;
-  return mins > 0 ? mins : null;
-}
-
-function reminder(t: string): Action | null {
-  let m: RegExpMatchArray | null;
-  const about = (s: string) => s.replace(/^(to|that|about)\s+/i, "").trim();
-  if ((m = t.match(/^(?:set (?:a |an )?)?(?:timer|alarm) (?:for )?(.+)$/i))) {
-    const mins = minutesIn(m[1]);
-    if (mins) return { do: "remind", text: "Time's up!", in_minutes: mins };
-  }
-  if (!/^remind me\b/i.test(t)) return null;
-  if ((m = t.match(/^remind me (?:in|after) (.+?) (?:to|that|about) (.+)$/i))) {
-    const mins = minutesIn(m[1]);
-    if (mins) return { do: "remind", text: m[2], in_minutes: mins };
-  }
-  if ((m = t.match(/^remind me (.+?) (?:in|after) (.+)$/i))) {
-    const mins = minutesIn(m[2]);
-    if (mins) return { do: "remind", text: about(m[1]), in_minutes: mins };
-  }
-  if ((m = t.match(/^remind me (?:at|by) (.+?) (?:to|that|about) (.+)$/i)) && CLOCK.test(m[1])) return { do: "remind", text: m[2], at: m[1] };
-  if ((m = t.match(/^remind me (.+?) (?:at|by) (.+)$/i)) && CLOCK.test(m[2])) return { do: "remind", text: about(m[1]), at: m[2] };
-  return null; // "tomorrow morning", "on Friday": the AI knows today's date
-}
 
 export function understand(input: string): Intent {
   const raw = input.trim().replace(/[ \t]+/g, " ");
   const t = raw.replace(/[.!]+$/, "");
   let m: RegExpMatchArray | null;
 
-  // Remember: day log and ideas (explicit prefixes only; the AI catches the rest).
-  if ((m = t.match(/^(?:log|journal|diary|add to (?:my )?(?:journal|diary|log))\s*[:\-–]?\s+(.+)$/is))) return { kind: "log", text: m[1] };
+  // Remember an idea (an explicit prefix only; the AI catches the rest).
   if ((m = t.match(/^(?:(?:new |project |app )?idea|save (?:this |an |my )?idea|add (?:an |this )?idea)\s*[:\-–]?\s+(.+)$/is))) return { kind: "idea", text: m[1] };
+
+  // Today's focus.
+  const goal = goalFrom(t);
+  if (goal) return { kind: "goal", text: goal };
+
+  // A message to write (checked before the AI: it is a different kind of answer, a draft to use).
+  if (DRAFT.test(t)) return { kind: "draft", request: raw };
 
   // Being in a screenshot or recording: hidden unless you ask (checked first: "don't show yourself in it").
   if (HIDE_FROM_PICTURE.test(t)) return { kind: "capture", show: false };
   if (SHOW_IN_PICTURE.test(t)) return { kind: "capture", show: true };
-
-  // Reminders.
-  const r = reminder(t);
-  if (r) return { kind: "do", actions: [r] };
-  if (/^(?:what are |show(?: me)? |list |what'?s )?(?:my |all )?(?:upcoming )?reminders\??$|^what reminders do i have\??$/i.test(t)) return { kind: "do", actions: [{ do: "list_reminders" }] };
 
   // Clearing out screenshots: Bond shows them (with previews) and asks twice before anything goes.
   if (/^(?:delete|remove|clear|clean up|get rid of|empty)\s+(?:all\s+)?(?:of\s+)?(?:my\s+|the\s+)?screen\s?shots?(?:\s+folder)?(?:\s+(?:images?|pictures?|files?))?$/i.test(t))
@@ -210,29 +192,44 @@ export function understand(input: string): Intent {
 
 // --- Talking back to him (voice) -------------------------------------------------------
 
-const SAID_YES = /^(yes|yeah|yep|yup|sure|ok|okay|do it|go ahead|go for it|please do|confirm)\b/i;
-/** "I need you to run this command", "go ahead and execute it": yes, said in a sentence. */
-const SAID_YES_ANYWHERE = /\b(run (it|this|that|the command|this command|that command)|execute( it| this| that)?|go ahead|do it|do that|proceed|approve( it)?|yes,? please)\b/i;
+// A spoken "yes" lets something run, so it has to be a clear, whole answer. A sentence that only
+// STARTS with "okay" or merely contains "do it" is not one: "Okay, what does it do?" and
+// "should I do it?" are questions, and "I'm not going to delete anything" is a no.
+/** An opening yes word: "yes", "okay, …". */
+const YES_LEAD = /^(?:yes|yeah|yep|yup|sure|ok|okay|alright|fine)\b[,.!]?\s*/;
+/** What a yes may be followed by, and nothing else: "go ahead", "do it", "I need you to run this command". */
+const YES_PHRASE =
+  /^(?:(?:i (?:need|want) you to|you can|just|please)\s+)?(?:go ahead(?: and (?:run|execute|do) (?:it|that|this|the command))?|do it|do that|run (?:it|this|that|the command|this command|that command)|execute(?: (?:it|this|that|the command))?|proceed|confirm|approve(?: it)?|that'?s fine)$/;
+/** Anything that makes it a question or a hedge: never a yes. */
+const NOT_A_YES = /\?|\b(what|why|how|when|where|which|who|should|could|would|can|is|are|does|do you|will|wait|but|not|no|if|unless|however|maybe|actually)\b|n't/i;
 const SAID_NO = /^(no|nope|cancel|don'?t|do not|stop|never ?mind|wait)\b/i;
-/** The last check before deleting needs the word itself, as typing it does. */
-const SAID_CONFIRM = /\b(delete( (it|them|those|these))?|confirm|yes,? (delete|do it))\b/i;
 const SAID_STOP = /^(?:(?:ok(?:ay)?,?\s+|hey,?\s+|please,?\s+|bond,?\s+)*(?:stop(?: (?:it|that|this|talking|doing that|please))?|please stop|be quiet|quiet|shut up|enough|never ?mind|cancel(?: (?:it|that|this))?|that'?s all|that'?s enough|thanks?,? bond|thank you|wait|hold on|hold up|forget it|not now|abort))[.!,]?$/i;
 
 /** Answering "Notepad has unsaved changes": don't save / save / cancel. */
 export function unsavedAnswer(said: string): "discard" | "save" | "cancel" | null {
   const t = said.trim().toLowerCase();
   if (/\b(don'?t|do not|without|no) sav|^(don'?t|do not) say\b|\bdiscard|\bthrow (it|them) away|\bclose (it )?anyway|\blose (it|them)\b/.test(t)) return "discard";
-  if (/\bsave\b|\bkeep (it|them|the changes)\b/.test(t)) return "save";
+  // "Save" presses the program's Save button, so only a short, plain answer counts ("save it",
+  // "yes, save"), never a question or a sentence that happens to mention saving.
+  if (/\bsave\b|\bkeep (it|them|the changes)\b/.test(t)) return !NOT_A_YES.test(t) && t.split(/\s+/).length <= 4 ? "save" : null;
   if (/^(no|nope|cancel|stop|wait|leave it|never ?mind)\b|\b(cancel|leave it( open)?|keep it open)\b/.test(t)) return "cancel";
   return null;
 }
 
-/** He asked "Do this?" and you answered out loud. `lastCheck`: the second check before deleting. */
+/**
+ * He asked "Do this?" and you answered out loud. A "no" can be loose (it errs on the safe side);
+ * a "yes" must be a clear whole answer. `lastCheck` is the second check before deleting: that one
+ * is typed ("delete"), never spoken, so a voice (or a TV) can't be the final yes.
+ */
 export function spokenAnswer(said: string, lastCheck: boolean): "yes" | "no" | null {
   const t = said.trim();
   if (SAID_NO.test(t) || /\b(don'?t|do not|never ?mind|cancel)\b/i.test(t)) return "no";
-  if (lastCheck ? SAID_CONFIRM.test(t) : SAID_YES.test(t) || SAID_YES_ANYWHERE.test(t)) return "yes";
-  return null;
+  if (lastCheck || NOT_A_YES.test(t)) return null;
+  const plain = t.toLowerCase().replace(/\b(bond|please)\b/g, " ").replace(/[.!,]+/g, " ").replace(/\s+/g, " ").trim();
+  const lead = plain.match(YES_LEAD);
+  const rest = (lead ? plain.slice(lead[0].length) : plain).trim();
+  if (lead && rest === "") return "yes"; // "yes", "okay"
+  return YES_PHRASE.test(rest) ? "yes" : null;
 }
 
 /** "Stop", "be quiet", "thanks Bond": stop talking and close. */

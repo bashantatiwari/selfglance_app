@@ -15,7 +15,6 @@
 //   top_processes   what is using the CPU and memory
 //   free_memory     unload Bond's own models, then list what holds the most memory
 //   clipboard_get / clipboard_set
-//   remind / list_reminders                   (reminders.rs)
 //   find_files      search for files by name (read-only)
 //   click           a point on the screenshot Bond just looked at
 //   type_text       type text into whatever has focus
@@ -68,14 +67,6 @@ pub enum Action {
     FreeMemory,
     ClipboardGet,
     ClipboardSet { text: String },
-    Remind {
-        text: String,
-        #[serde(default)]
-        in_minutes: Option<f64>,
-        #[serde(default)]
-        at: Option<String>,
-    },
-    ListReminders,
     FindFiles {
         query: String,
         #[serde(default)]
@@ -914,12 +905,6 @@ fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Resul
             crate::system::clipboard_set(&text)?;
             Ok(Effect::line("Copied to the clipboard", 0))
         }
-        Action::Remind { text, in_minutes, at } => {
-            let when = crate::reminders::due_at(in_minutes, at.as_deref())?;
-            let r = crate::reminders::add(app, &text, when)?;
-            Ok(Effect::line(format!("Reminder set for {} — {}", crate::reminders::describe(r.at), r.text), 0))
-        }
-        Action::ListReminders => Ok(Effect::info(crate::reminders::summary(app))),
         Action::FindFiles { query, folder } => Ok(Effect::info(find_files(app, &query, folder.as_deref())?)),
         Action::Click { x, y, double } => {
             let g = shot.ok_or("Clicking needs a look at the screen first.")?;
@@ -964,6 +949,10 @@ fn input() -> Result<Enigo, String> {
 }
 
 fn press_combo(mods: &[Key], key: Key) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    if let Some(done) = press_vk(mods, key) {
+        return done;
+    }
     let mut e = input()?;
     for m in mods {
         e.key(*m, Direction::Press).map_err(|e| e.to_string())?;
@@ -973,6 +962,110 @@ fn press_combo(mods: &[Key], key: Key) -> Result<(), String> {
         let _ = e.key(*m, Direction::Release);
     }
     res
+}
+
+/// Ctrl+V: used only to put a draft you approved in the box (draft.rs).
+pub(crate) fn paste_shortcut() -> Result<(), String> {
+    ctrl_combo(b'V')
+}
+
+/// A key as a Windows virtual-key code, and whether it is an "extended" key. A modifier plus a
+/// typed character (what enigo sends for Key::Unicode) is not a shortcut to most programs; real
+/// key presses are, so every key the hotkey action allows goes this way.
+#[cfg(target_os = "windows")]
+fn vk_of(key: Key) -> Option<(u8, bool)> {
+    Some(match key {
+        Key::Control => (0x11, false),
+        Key::Shift => (0x10, false),
+        Key::Alt => (0x12, false),
+        Key::Meta => (0x5B, false),
+        Key::Return => (0x0D, false),
+        Key::Tab => (0x09, false),
+        Key::Escape => (0x1B, false),
+        Key::Space => (0x20, false),
+        Key::Backspace => (0x08, false),
+        Key::Delete => (0x2E, true),
+        Key::UpArrow => (0x26, true),
+        Key::DownArrow => (0x28, true),
+        Key::LeftArrow => (0x25, true),
+        Key::RightArrow => (0x27, true),
+        Key::Home => (0x24, true),
+        Key::End => (0x23, true),
+        Key::PageUp => (0x21, true),
+        Key::PageDown => (0x22, true),
+        Key::F1 => (0x70, false),
+        Key::F2 => (0x71, false),
+        Key::F3 => (0x72, false),
+        Key::F4 => (0x73, false),
+        Key::F5 => (0x74, false),
+        Key::F6 => (0x75, false),
+        Key::F7 => (0x76, false),
+        Key::F8 => (0x77, false),
+        Key::F9 => (0x78, false),
+        Key::F10 => (0x79, false),
+        Key::F11 => (0x7A, false),
+        Key::F12 => (0x7B, false),
+        Key::Unicode(c) if c.is_ascii_alphabetic() => (c.to_ascii_uppercase() as u8, false),
+        Key::Unicode(c) if c.is_ascii_digit() => (c as u8, false),
+        _ => return None,
+    })
+}
+
+/// The combo as real key presses; None when a key has no mapping (enigo then tries).
+#[cfg(target_os = "windows")]
+fn press_vk(mods: &[Key], key: Key) -> Option<Result<(), String>> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP};
+    let mod_codes: Vec<(u8, bool)> = mods.iter().map(|m| vk_of(*m)).collect::<Option<_>>()?;
+    let (code, ext) = vk_of(key)?;
+    let flag = |ext: bool| if ext { KEYEVENTF_EXTENDEDKEY } else { 0 };
+    let pause = || std::thread::sleep(Duration::from_millis(25));
+    unsafe {
+        for (m, e) in &mod_codes {
+            keybd_event(*m, 0, flag(*e), 0);
+            pause();
+        }
+        keybd_event(code, 0, flag(ext), 0);
+        pause();
+        keybd_event(code, 0, flag(ext) | KEYEVENTF_KEYUP, 0);
+        pause();
+        for (m, e) in mod_codes.iter().rev() {
+            keybd_event(*m, 0, flag(*e) | KEYEVENTF_KEYUP, 0);
+        }
+    }
+    Some(Ok(()))
+}
+
+#[cfg(test)]
+pub(crate) fn parse_combo_for_tests(combo: &str) -> (Vec<Key>, Key) {
+    parse_combo(combo).unwrap()
+}
+
+#[cfg(test)]
+pub(crate) fn press_combo_for_tests(mods: &[Key], key: Key) {
+    press_combo(mods, key).unwrap();
+}
+
+/// Ctrl + a letter key, sent as real key presses (virtual-key codes), which every app treats as a
+/// shortcut; typed characters would not be.
+#[cfg(target_os = "windows")]
+pub(crate) fn ctrl_combo(vk: u8) -> Result<(), String> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, VK_CONTROL};
+    let pause = || std::thread::sleep(Duration::from_millis(25));
+    unsafe {
+        keybd_event(VK_CONTROL as u8, 0, 0, 0);
+        pause();
+        keybd_event(vk, 0, 0, 0);
+        pause();
+        keybd_event(vk, 0, KEYEVENTF_KEYUP, 0);
+        pause();
+        keybd_event(VK_CONTROL as u8, 0, KEYEVENTF_KEYUP, 0);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn ctrl_combo(_vk: u8) -> Result<(), String> {
+    press_combo(&[Key::Control], Key::Unicode('v'))
 }
 
 /// "ctrl+shift+t" → ([Control, Shift], 't'). Unknown names are rejected rather than guessed.
@@ -1420,5 +1513,43 @@ mod shell_tests {
         assert!(out.contains("héllo"));
         let bad = super::run_shell("exit 3", &home).unwrap();
         assert!(bad.contains("Exit code 3"), "{bad}");
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod hotkey_tests {
+    #[test]
+    fn every_allowed_hotkey_has_a_real_key_code() {
+        for combo in crate::policy::SAFE_HOTKEYS {
+            let (mods, key) = super::parse_combo(combo).unwrap();
+            assert!(mods.iter().all(|m| super::vk_of(*m).is_some()) && super::vk_of(key).is_some(), "{combo} has no virtual-key mapping");
+        }
+    }
+
+    use std::time::Duration;
+
+    /// Does the hotkey action really reach a window? Select all with it in a real Notepad, copy with
+    /// real key presses, and read it back. Opens and ends a Notepad:
+    ///   cargo test --lib hotkey_tests::hotkey_live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn hotkey_live() {
+        let before = crate::system::find_processes("notepad").map(|f| f.pids).unwrap_or_default();
+        let file = std::env::temp_dir().join("bond-hotkey-test.txt");
+        std::fs::write(&file, "selected by the hotkey").unwrap();
+        std::process::Command::new("notepad").arg(&file).spawn().unwrap();
+        std::thread::sleep(Duration::from_secs(4));
+        crate::system::focus_app("bond-hotkey-test").expect("Notepad in front");
+        std::thread::sleep(Duration::from_millis(600));
+        crate::system::clipboard_set("sentinel").unwrap();
+        let (mods, key) = super::parse_combo("ctrl+a").unwrap();
+        super::press_combo(&mods, key).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        super::ctrl_combo(b'C').unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        let got = crate::system::clipboard_get().unwrap();
+        let pids: Vec<u32> = crate::system::find_processes("notepad").map(|f| f.pids).unwrap_or_default().into_iter().filter(|p| !before.contains(p)).collect();
+        let _ = crate::system::kill(&pids);
+        assert_eq!(got, "selected by the hotkey", "ctrl+a from the hotkey action reached Notepad");
     }
 }

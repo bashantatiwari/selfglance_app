@@ -4,9 +4,9 @@
 //   Break    every ~45 min of active use he web-drops in carrying a water bottle and
 //            holds it out to you. Step away and he knows; come back and he cheers.
 //            Or click the bottle to drink, and he does a stretch dance with you.
-//   Play     Ctrl+Alt+G (Cmd+Option+G) drops him at your cursor. Throw him around,
-//            poke him, or right-click him for actions: sit, dance, jump, wave,
-//            follow my cursor, open the dashboard ("Later" too, during a break).
+//   Move     Ctrl+Alt+G (Cmd+Option+G) drops him at your cursor. Drag and throw him
+//            wherever you like. Right-click: ask him, open the dashboard ("Later" too,
+//            during a break). No tricks on request: he's a companion, not a puppet.
 //   Talk     hold Ctrl+Alt+V and speak (or click the mic in the Ask box): he listens on
 //            this laptop, does what you said, and answers out loud.
 //   Ask      Ctrl+Alt+Space (or the menu): one box for everything. Bond works out what you
@@ -16,8 +16,7 @@
 //            goes to the AI. Typing goes straight back to your app once you press Enter.
 //            Anything powerful (run a command, end a program, delete files) waits in his
 //            card for your OK; deleting asks twice.
-//   Remind   "remind me in 45 minutes to…": when it's due he drops in with it and says it.
-//            He also warns when the battery runs low.
+//   Battery  he warns when the battery runs low.
 //   Nudge    long stretches of chatting with AI / note-taking without building → "Time to build!"
 //   Notice   on his own, at a natural pause: your habits ("you usually open Spotify in
 //            VS Code — want it?"), a tip when you copy an error or keep searching while
@@ -32,13 +31,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CharacterStage } from "./stage/CharacterStage";
-import type { ClipName, Rect } from "./stage/types";
+import type { Rect } from "./stage/types";
 import { BreakCoach, type BreakPhase } from "./break/BreakCoach";
 import { classify, type Activity, type Context } from "./companion/context";
 import { cursorPosition, inTauri, onTauriEvent, sendHitRegions } from "./platform";
 import { invoke } from "@tauri-apps/api/core";
-import { Tracker } from "./companion/tracker";
-import { loadSettings, type Settings } from "./settings";
+import { loadDay, Tracker } from "./companion/tracker";
+import { effective, loadSettings, type Settings } from "./settings";
 import { ActionMenu, ARC, arcBox, type ActionId } from "./ui/ActionMenu";
 import { AnswerCard, AskBox, type AskState } from "./ui/Ask";
 import { Guide, type GuideView } from "./ui/Guide";
@@ -60,9 +59,9 @@ import {
   releaseFocus,
   routeCommand,
   runActions,
+  setAdvancedActions,
   screenAsk,
   setLearning,
-  snoozeReminder,
   speak,
   isSpeaking,
   stopSpeaking,
@@ -74,6 +73,11 @@ import {
   wakeNotYou,
   wakeSet,
   diag,
+  aiDraft,
+  copyText,
+  draftRememberTarget,
+  draftWrite,
+  goalJudge,
   noticeAllowed,
   noticeEnable,
   noticeHabits,
@@ -83,11 +87,36 @@ import {
   type Feedback,
   type Habit,
   type Outcome,
-  type Reminder,
 } from "./ai";
 import { saidStop, spokenAnswer, understand, unsavedAnswer, type ScreenMode } from "./assistant/intent";
-import { journalFirstDue } from "./assistant/journalfirst";
-import { addIdea, dayKey, JOURNAL_FIRST_WORDS, journalGet, journalWordsAll, journalWritten, logToJournal, recordJournalSkip } from "./assistant/notes";
+import { addIdea } from "./assistant/notes";
+import { addChat } from "./assistant/chats";
+import {
+  cacheKey,
+  canNudge,
+  driftMoment,
+  driftRun,
+  driftText,
+  loadCache,
+  loadFixes,
+  loadGoals,
+  loadState,
+  makeJudge,
+  patchState,
+  recordNudge,
+  reviewDue,
+  reviewWeek,
+  saveCache,
+  saveFixes,
+  saveGoals,
+  saveState,
+  shouldAsk,
+  dayId,
+  unclear,
+  type Drift,
+  type Fit,
+} from "./assistant/goals";
+import { fmt } from "./dashboard/analyze";
 import {
   blockedBy,
   errorFallback,
@@ -106,7 +135,6 @@ import "./overlay.css";
 
 const TOUCH_AWAKE_MS = 6_000; // fully visible this long after you last touched him, then he fades
 const MANUAL_HOLD_MS = 3 * 60_000; // something you asked for overrides automatic behaviour this long
-const FOLLOW_MS = 30_000;
 const MENU_OPEN_MS = 8_000;
 const AWAY_AFTER_SEC = 120;
 const BRAINSTORM_WINDOW_MS = 30 * 60_000; // look back this far
@@ -138,7 +166,6 @@ function chime() {
 
 const FOLLOW_UP_SEC = 12; // after he answers a spoken request, a follow-up needs no "Hey Bond"
 const CHATTY = /\b(chatgpt|claude|gemini|perplexity|copilot|deepseek|grok|notion|obsidian|onenote|google keep)\b/i;
-const POKE_REACTIONS: ClipName[] = ["wave", "nod", "celebrate", "hang"];
 const CLIPBOARD_SYSTEM =
   "You are Bond, a friendly desktop companion. The user asks about the text they copied to their clipboard (given below their question). " +
   "Do what they ask with it (summarize, explain, translate, fix, answer). Keep it short: at most 6 sentences, plain text, no markdown.";
@@ -175,10 +202,9 @@ export default function App() {
   const stageRef = useRef<CharacterStage | null>(null);
   const coachRef = useRef<BreakCoach | null>(null);
   const drag = useRef<{ startX: number; startY: number; active: boolean; samples: { x: number; y: number; t: number }[] } | null>(null);
-  const pokes = useRef<number[]>([]);
   const ctxRef = useRef<Context>("other");
   const activityRef = useRef<Activity | null>(null);
-  const settingsRef = useRef<Settings>(loadSettings());
+  const settingsRef = useRef<Settings>(effective(loadSettings()));
   /** The request on screen in Bond's experience log, for 👍 / 👎 and refusals. */
   const expRef = useRef("");
   // Bond notices: what's waiting for a natural pause, and the suggestion on screen.
@@ -214,7 +240,6 @@ export default function App() {
   const touchTimer = useRef<number | undefined>(undefined);
   const [ctx, setCtx] = useState<Context>("other");
   const [menu, setMenu] = useState(false);
-  const [following, setFollowing] = useState(false);
   const [pop, setPop] = useState<{ text: string; n: number; note: boolean } | null>(null); // "Hey!" etc. beside his head
   const [ask, setAsk] = useState<AskState | null>(null);
   const askRef = useRef<AskState | null>(null);
@@ -442,91 +467,11 @@ export default function App() {
       setBusy(false);
     };
 
-    // A reminder is due: he comes in with it, says it, and holds the card until you answer.
-    const remind = async (r: Reminder) => {
-      await bringIn();
-      wake(60_000);
-      if (!coach.inBreak) stage.setPose("stand");
-      stage.play("wave", true);
-      if (settingsRef.current.speakAnswers && ctxRef.current !== "meeting") speak(`Reminder: ${r.text}`);
-      const current = askRef.current?.step;
-      if (current && current !== "answer" && current !== "error" && current !== "reminder") {
-        showPop(`⏰ ${r.text}`, 12_000, true); // you're in the middle of something with him
-        return;
-      }
-      clearTimeout(askTimer.current);
-      setAsk({ step: "reminder", reminder: r });
-    };
-    // Evening: today's journal is still empty (Bond's own "log" lines don't count) and you're
-    // here, so he asks once. Snoozing brings it back like any reminder.
-    let journalChecking = false;
-    let lastJournalRead = 0;
-    // "Journal first": from the evening hour, until 20 words are written (dictated ones count),
-    // he asks once, then again when you start something entertaining (at most every 15 min).
-    // He never closes or blocks anything; "Not tonight" skips the day.
-    const checkJournalFirst = async (st: Settings, day: string) => {
-      const now = Date.now();
-      const due = journalFirstDue({
-        now,
-        hour: new Date().getHours(),
-        at: st.journalAt,
-        day,
-        skippedDay: store.get("selfglance.journalSkipped"),
-        askedDay: store.get("selfglance.journalAskedDay"),
-        lastAsked: Number(store.get("selfglance.journalAsked") ?? 0),
-        entertaining: ctxRef.current === "watching",
-      });
-      if (!due || now - lastJournalRead < 20_000) return;
-      const firstTime = due === "first";
-      lastJournalRead = now;
-      journalChecking = true;
-      try {
-        const text = await journalGet(day);
-        if (journalWordsAll(text) >= JOURNAL_FIRST_WORDS) return;
-        store.set("selfglance.journalAsked", String(now));
-        store.set("selfglance.journalAskedDay", day);
-        await remind({
-          id: "journal",
-          text: firstTime
-            ? `Journal first? A few lines about today (${JOURNAL_FIRST_WORDS} words), then the evening is yours.`
-            : `Before you settle in: today's journal is still short. ${JOURNAL_FIRST_WORDS} words is enough.`,
-          at: now,
-          open: "journal",
-          skipToday: true,
-        });
-      } catch {
-        /* try again on the next tick */
-      } finally {
-        journalChecking = false;
-      }
-    };
-    const checkJournal = async (idleSec: number) => {
-      const st = settingsRef.current;
-      const day = dayKey();
-      if (st.journalFirst) {
-        if (journalChecking || idleSec >= AWAY_AFTER_SEC || coach.inBreak || inDashboardRef.current) return;
-        if (ctxRef.current === "meeting" || ctxRef.current === "game") return;
-        return checkJournalFirst(st, day);
-      }
-      if (!st.journalNudge || journalChecking || idleSec >= AWAY_AFTER_SEC || coach.inBreak) return;
-      if (new Date().getHours() < st.journalAt || store.get("selfglance.journalNudged") === day) return;
-      if (ctxRef.current === "meeting" || ctxRef.current === "game") return;
-      // You are in the dashboard right now (maybe writing it): he checks again after you leave.
-      if (inDashboardRef.current) return;
-      journalChecking = true;
-      try {
-        const text = await journalGet(day);
-        store.set("selfglance.journalNudged", day);
-        const written = journalWritten(text);
-        if (!written) await remind({ id: "journal", text: "Time to write today's journal. How did the day go?", at: Date.now(), open: "journal" });
-      } catch {
-        /* try again on the next tick */
-      } finally {
-        journalChecking = false;
-      }
-    };
-    const applySettings = (st: Settings) => {
+    // Saved settings go through effective(): the experimental features count only while Labs is on.
+    const applySettings = (saved: Settings) => {
+      const st = effective(saved);
       settingsRef.current = st;
+      void setAdvancedActions(saved.advancedActions);
       coach.configure({ everyMin: st.breakEveryMin, enabled: st.breaksOn });
       void setLearning(st.learnFromMe);
       void noticeEnable(st.notice !== "off");
@@ -595,6 +540,11 @@ export default function App() {
           if (reply === "no") return void deny(cur.approval.id);
           if (reply === "yes") return void approve(cur.approval.id);
         }
+        // A question is waiting for a clear yes or no: other talk (a TV, a call, thinking out loud)
+        // must neither answer it nor replace it with a new request.
+        if (cur?.step === "approve" && !saidStop(said)) {
+          return showPop(cur.approval.step > 1 ? "Type the word shown to confirm, or say no" : "Say yes or no", 2600, true);
+        }
         if (saidStop(said)) return cancelAll();
         void doAsk(said, false);
       }),
@@ -637,7 +587,7 @@ export default function App() {
         void behave();
         void deliverSuggestion();
         void scanForError();
-        void checkJournal(sec);
+        void goalTick();
       }),
       onTauriEvent<Activity>("activity", (a) => {
         activityRef.current = a;
@@ -650,7 +600,6 @@ export default function App() {
         setCtx(c);
         void behave();
       }),
-      onTauriEvent<Reminder>("reminder", (r) => void remind(r)),
       onTauriEvent<string>("clipboard-error", (text) => void noticeError(text, "clipboard")),
       onTauriEvent<number>("low-battery", async (pct) => {
         if (!settingsRef.current.batteryAlert) return;
@@ -748,7 +697,7 @@ export default function App() {
   const closeAsk = async () => {
     clearTimeout(askTimer.current);
     const cur = askRef.current;
-    const wasTyping = cur?.step === "input" || (cur?.step === "approve" && cur.approval.step > 1);
+    const wasTyping = cur?.step === "input" || cur?.step === "goalask" || cur?.step === "draft" || (cur?.step === "approve" && cur.approval.step > 1);
     if (cur?.step === "approve") void denyAction(cur.approval.id); // closing is a no
     if (cur?.step === "suggest") void giveFeedback(noticeIdRef.current, "ignored");
     setAsk(null);
@@ -784,6 +733,7 @@ export default function App() {
   /** An answer worth reading: shown in the card (and spoken if that's on). */
   const answer = (question: string, text: string, done: string[], say: boolean, info: string[] = []) => {
     setAsk({ step: "answer", question, answer: text, done, info });
+    addChat(question, [text, ...info].filter(Boolean).join(" · "), "answer");
     if (say && (settingsRef.current.speakAnswers || heardRef.current) && text) talkBack(text);
     stageRef.current?.play("nod", true);
     if (info.length) {
@@ -806,6 +756,7 @@ export default function App() {
       if (o.pending.step === 1 && (settingsRef.current.speakAnswers || heardRef.current)) talkBack(o.pending.title.replace(/\?.*$/, "?"));
       return;
     }
+    addChat(question, [...o.done, ...o.info].join(" · ") || reply, "action");
     if (o.info.length) return answer(question, reply, o.done, false, o.info);
     confirm(o.done.join(" · ") || reply || "Done ✓");
   };
@@ -1042,10 +993,10 @@ export default function App() {
       // 1. Bond's own understanding: instant, no AI call.
       const own = understand(question);
       // What he understood on his own is a sure example for the brain to learn from.
-      if (own?.kind === "log") {
-        await logToJournal(own.text);
-        void recordOwn(question, { intent: "log", text: own.text });
-        return confirm("Logged in your journal ✓");
+      if (own?.kind === "draft") return await runDraft(question);
+      if (own?.kind === "goal") {
+        saveGoals([own.text]);
+        return confirm("Focus for today set ✓");
       }
       if (own?.kind === "idea") {
         addIdea(own.text);
@@ -1082,9 +1033,6 @@ export default function App() {
       if (askEpoch.current !== my) return; // you said stop (or asked something else) meanwhile
       expRef.current = r.exp_id;
       switch (r.intent) {
-        case "log":
-          await logToJournal(r.text || question);
-          return confirm("Logged in your journal ✓");
         case "idea":
           addIdea(r.text || question);
           return confirm("Idea saved ✓");
@@ -1095,7 +1043,8 @@ export default function App() {
         case "guide":
           return await runGuide(question);
         case "task":
-          if (r.needs_screen) return await lookAtScreen(question, "task");
+          // Clicking and typing for you is an Advanced action; otherwise Bond points the way instead.
+          if (r.needs_screen) return settingsRef.current.advancedActions ? await lookAtScreen(question, "task") : await runGuide(question);
           return showOutcome(question, r.outcome ?? { done: [], info: [], pending: null }, r.reply);
         default:
           return answer(question, r.reply, [], true);
@@ -1248,6 +1197,150 @@ export default function App() {
     else wake();
   };
 
+  // --- Drafts: a message he writes for you ---------------------------------------------------
+  // "write me a message to my manager…" → a draft on his card. You read it, change it if you like,
+  // and press "Put in the box": it is pasted where you were typing and never sent (draft.rs).
+
+  const runDraft = async (question: string, again = false) => {
+    const my = askEpoch.current;
+    if (!again) await draftRememberTarget();
+    setAsk({ step: "thinking", question, looking: false, note: "writing…" });
+    try {
+      const d = await aiDraft(question);
+      if (askEpoch.current !== my) return;
+      clearTimeout(askTimer.current);
+      manualUntil.current = Date.now() + 10 * 60_000;
+      wake(10 * 60_000);
+      setAsk({ step: "draft", question, subject: d.subject, message: d.message, usedScreen: d.used_screen });
+      stageRef.current?.play("nod", true);
+      addChat(question, d.message, "draft", d.subject);
+    } catch (e) {
+      setAsk({ step: "error", question, error: String(e) });
+      stageRef.current?.play("annoyed", true);
+      autoClose();
+    }
+  };
+
+  const putDraft = async (text: string) => {
+    const cur = askRef.current;
+    if (cur?.step !== "draft") return;
+    setAsk({ ...cur, message: text, busy: true });
+    try {
+      const r = await draftWrite(text);
+      if (r.pasted) return confirm("It's in the box ✓ Read it, then send");
+      setAsk({ ...cur, message: text, note: r.note });
+    } catch (e) {
+      setAsk({ ...cur, message: text, note: String(e) });
+    }
+  };
+
+  const copyOut = (text: string) => {
+    void copyText(text).then(() => showPop("Copied ✓", 1500, true), () => showPop("Couldn't copy", 1800, true));
+  };
+
+  // --- Goals -------------------------------------------------------------------------------
+  // The morning question, a nudge when about ten minutes in a row went off today's goal, the
+  // Sunday review, and (in between) asking the brain about activities the rules can't judge.
+  // The rules and numbers are in assistant/goals.ts.
+
+  const goalCheck = useRef({ at: 0, drift: null as Drift | null });
+
+  /** Bring a goal card up, over whatever he is doing, and let it go after `ms`. */
+  const showGoalCard = async (card: AskState, ms: number) => {
+    const stage = stageRef.current;
+    if (stage && !stage.visible && !stage.busy) await stage.webDrop(homeX());
+    wake(ms);
+    stage?.play("wave", true);
+    setAsk(card);
+    clearTimeout(askTimer.current);
+    askTimer.current = window.setTimeout(() => void closeAsk(), ms);
+  };
+
+  /** On the idle tick, at most every 20 s: the one thing about goals that is due, if any. */
+  const goalTick = async () => {
+    const now = Date.now();
+    if (now - goalCheck.current.at < 20_000) return;
+    goalCheck.current.at = now;
+    const st = settingsRef.current;
+    const d = new Date();
+    const state = loadState();
+    const goals = loadGoals(d);
+    const quiet = st.quietOn && inQuietHours(d, st.quietFrom, st.quietTo);
+    const busy = !!askRef.current || stageRef.current?.busy === true;
+    const moment = { idleSec: idleRef.current, ctx: ctxRef.current, busy, inBreak: coachBreakRef.current() };
+    const today = loadDay(d);
+    if (quiet || busy || !today.length) return;
+
+    // 1. Nothing set yet today: ask once, at a quiet moment.
+    if (shouldAsk(state, goals, d) && naturalPause(moment)) {
+      patchState({ askedDay: dayId(d) });
+      return void showGoalCard({ step: "goalask" }, 120_000);
+    }
+
+    // 2. Sunday morning: the week, once.
+    if (st.goalReview && reviewDue(state, d) && naturalPause(moment)) {
+      const r = reviewWeek(d, loadDay, loadGoals);
+      patchState({ reviewed: dayId(d) });
+      if (r.usable) {
+        const share = r.share !== null ? ` (${r.share}% of the time I could tell)` : "";
+        return void showGoalCard({ step: "review", text: `This week: ${fmt(r.t.on)} on your goals, ${fmt(r.t.off)} off${share}. Want the picture and a few ideas for next week?` }, 30_000);
+      }
+    }
+
+    if (!goals.length) return;
+    const judge = makeJudge(goals);
+
+    // 3. About ten minutes off-goal in a row.
+    if (st.goalNudge && canNudge(state, now) && driftMoment(moment)) {
+      const run = driftRun(today, judge, now);
+      if (run) {
+        goalCheck.current.drift = run;
+        saveState(recordNudge(state, now));
+        return void showGoalCard({ step: "drift", text: driftText(goals[0], run) }, 25_000);
+      }
+    }
+
+    // 4. Unclear activities: ask the brain, a few at a time, remembering what it says.
+    if (now - (state.judgedAt ?? 0) < 90_000 || ctxRef.current === "meeting" || ctxRef.current === "game") return;
+    const items = unclear(today, judge, 2 * 60_000).slice(0, 6);
+    if (!items.length) return;
+    patchState({ judgedAt: now });
+    const fits = await goalJudge(
+      goals,
+      items.map((i) => ({ app: i.app, label: i.label })),
+      blockList(),
+    );
+    if (fits.length !== items.length) return patchState({ judgedAt: now + 8 * 60_000 }); // no brain: try again much later
+    const cache = loadCache();
+    items.forEach((it, i) => (cache[cacheKey(judge, it.key)] = fits[i] as Fit));
+    saveCache(cache);
+  };
+
+  /** What to do about the card: the answer to "what's your focus?". */
+  const setFocus = async (text: string) => {
+    saveGoals([text]);
+    await releaseFocus();
+    confirm("Focus for today set ✓");
+  };
+
+  const skipFocus = () => void closeAsk();
+
+  const driftOk = () => {
+    const key = goalCheck.current.drift?.topKey;
+    if (key) saveFixes({ ...loadFixes(), [key]: "on" as Fit });
+    confirm("Okay, that counts as on-goal ✓");
+  };
+
+  const driftSnooze = () => {
+    patchState({ snoozeUntil: Date.now() + 30 * 60_000 });
+    void closeAsk();
+  };
+
+  const openReview = () => {
+    if (inTauri) void invoke("open_dashboard", { page: "goals" });
+    void closeAsk();
+  };
+
   // --- Right-click actions ----------------------------------------------------------------
   const openMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1264,24 +1357,6 @@ export default function App() {
     manualUntil.current = Date.now() + MANUAL_HOLD_MS;
     wake();
     switch (id) {
-      case "sit":
-        stage.setPose(stage.currentPose === "sit" ? "stand" : "sit");
-        break;
-      case "dance":
-        stage.setPose("stand");
-        stage.play("dance");
-        window.setTimeout(() => stage.play("idle"), 7000);
-        break;
-      case "jump":
-        void stage.jump();
-        break;
-      case "wave":
-        stage.setPose("stand");
-        stage.play("wave", true);
-        break;
-      case "follow":
-        setFollowing((f) => !f);
-        break;
       case "ask":
         openAsk();
         break;
@@ -1301,38 +1376,9 @@ export default function App() {
     }
   };
 
-  // Follow my cursor: walk along the taskbar under the mouse for a while.
-  useEffect(() => {
-    if (!following) return;
-    const stage = stageRef.current;
-    const until = Date.now() + FOLLOW_MS;
-    const t = window.setInterval(async () => {
-      if (!stage || Date.now() > until) return setFollowing(false);
-      manualUntil.current = Date.now() + 2000;
-      playUntilRef.current = Date.now() + 2000;
-      const c = await cursorPosition();
-      if (c && stage.canWalk && Math.abs(c.x - stage.x) > 28) void stage.walkTo(c.x);
-    }, 200);
-    return () => {
-      clearInterval(t);
-      store.set("selfglance.homeX", String(Math.round(stage?.x ?? homeX())));
-    };
-  }, [following]);
-
-  // --- Play: poke, drag, throw ------------------------------------------------------------
-  const poke = () => {
-    const stage = stageRef.current;
-    if (!stage || stage.busy) return;
-    wake();
-    const now = Date.now();
-    pokes.current = [...pokes.current.filter((t) => now - t < 2500), now];
-    if (pokes.current.length >= 4) {
-      pokes.current = [];
-      stage.play("annoyed", true);
-    } else {
-      stage.play(POKE_REACTIONS[Math.floor(Math.random() * POKE_REACTIONS.length)], true);
-    }
-  };
+  // --- Move: drag and throw ------------------------------------------------------------
+  /** A click is just a touch: he stays fully visible a moment. No tricks. */
+  const poke = () => wake();
 
   const onPointerDown = (e: React.PointerEvent) => {
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -1386,8 +1432,8 @@ export default function App() {
 
   // --- Render -----------------------------------------------------------------------------
   const inBreak = phase !== "idle";
-  tuckedRef.current = inDashboard && !inBreak && !ask && !menu && !guide && !following;
-  const awake = hover || busy || touched || menu || following || !!ask || !!guide || phase === "arriving" || phase === "offering";
+  tuckedRef.current = inDashboard && !inBreak && !ask && !menu && !guide;
+  const awake = hover || busy || touched || menu || !!ask || !!guide || phase === "arriving" || phase === "offering";
   const dim = !awake && inBreak; // waiting / away: half visible, bottle still in view
   const look = awake ? "" : dim ? "dim" : ctx === "watching" ? "watch" : ctx === "focus" ? "faint" : "ghost";
 
@@ -1453,6 +1499,19 @@ export default function App() {
           onTake={() => void takeSuggestion()}
           onNotNow={() => dismissSuggestion(false)}
           onNever={() => dismissSuggestion(true)}
+          onCopy={copyOut}
+          onDraftPut={(text) => void putDraft(text)}
+          onDraftRetry={() => {
+            const cur = askRef.current;
+            if (cur?.step === "draft") void runDraft(cur.question, true);
+          }}
+          onGoalSet={(text) => void setFocus(text)}
+          onGoalSkip={skipFocus}
+          onDriftBack={() => void closeAsk()}
+          onDriftOk={driftOk}
+          onDriftSnooze={driftSnooze}
+          onReviewOpen={openReview}
+          onReviewLater={() => void closeAsk()}
           onRate={
             ask.step === "answer" && expRef.current
               ? (value: Feedback) => {
@@ -1475,28 +1534,10 @@ export default function App() {
             void wakeNotYou();
             void closeAsk();
           }}
-          onOpen={(page) => {
-            if (inTauri) void invoke("open_dashboard", { page });
-            closeAsk();
-          }}
-          onSkipJournal={() => {
-            store.set("selfglance.journalSkipped", dayKey());
-            recordJournalSkip();
-            void closeAsk();
-            showPop("Okay, not tonight.", 2200, true);
-          }}
-          onSnooze={async (r, min) => {
-            try {
-              await snoozeReminder(r.text, min);
-              confirm(`Snoozed for ${min} min`);
-            } catch (e) {
-              setAsk({ step: "error", question: r.text, error: String(e) });
-            }
-          }}
         />
       )}
       {guide && <Guide view={guide} origin={guideFrom} showDebug={settingsRef.current.guideDebug} tipRef={guideTipRef} onStop={() => stopGuide()} />}
-      {menu && <ActionMenu menuRef={menuRef} sitting={stageRef.current?.currentPose === "sit"} following={following} inBreak={phase !== "idle"} laterMin={settingsRef.current.snoozeMin} onPick={act} />}
+      {menu && <ActionMenu menuRef={menuRef} inBreak={phase !== "idle"} laterMin={settingsRef.current.snoozeMin} onPick={act} />}
     </>
   );
 }

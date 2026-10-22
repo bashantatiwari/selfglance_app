@@ -3,12 +3,10 @@
 //             top things + a few insights, and the day in words (AI).
 //   Activity  What exactly did I spend time on? One searchable list (projects, videos,
 //             sites, apps) and the session-by-session log.
-//   Week      Am I getting better? Last 7 days side by side.
-//   Journal   Type about your whole day and save it. One entry per day; "log …" to Bond adds a line.
+//   Goals     The day's focus, how it's going toward it, and the week in review.
+//   Chats     What you asked Bond and his answers, to search and copy.
 //   Ideas     Project ideas you told Bond ("idea: …") or added here.
-//   Reminders What you asked Bond to remind you about, soonest first.
-//   Settings  Reminders, Bond, AI — grouped, each explained.
-// "Now" lives in the sidebar so it's always visible without taking page space.
+//   Settings  Water breaks, Bond, his brain, voice and privacy, each explained.
 // Everything is computed locally from the diary the overlay records.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -38,21 +36,19 @@ import {
   type BrainStatus,
   type LearnStats,
 } from "../ai";
-import { analyzeDay, CATS, catName, catOf, clock, durOf, fmt, insights, kindOf, type Cat, type DayStats, type Item, type Kind } from "./analyze";
+import { analyzeDay, CATS, catName, clock, fmt, insights, type Cat, type DayStats, type Item, type Kind } from "./analyze";
 import { loadDay, type Segment } from "../companion/tracker";
 import { glassesToday } from "../break/BreakCoach";
-import { loadSettings, saveSettings, type Settings } from "../settings";
-import { dayKey as todayKey, journalGet, journalWords, journalWritten } from "../assistant/notes";
-import Journal from "./Journal";
+import { loadSettings, saveSettings, type Settings, effective } from "../settings";
+import Chats from "./Chats";
+import Goals, { GoalTile } from "./Goals";
 import Ideas from "./Ideas";
-import Reminders from "./Reminders";
-import { Avatar, KindBadge, Toasts } from "./ui";
+import { Avatar, KindBadge, Toasts, Toggle } from "./ui";
 import "./dashboard.css";
 import "./design.css";
 import "./neo.css";
-import "./ideas.css";
 
-type Page = "today" | "activity" | "week" | "journal" | "ideas" | "reminders" | "settings";
+type Page = "today" | "activity" | "goals" | "chats" | "ideas" | "settings";
 type NavGroup = "analyse" | "personal" | "prefs";
 const NAV_GROUPS: { id: NavGroup; name: string }[] = [
   { id: "analyse", name: "Analyse" },
@@ -62,10 +58,9 @@ const NAV_GROUPS: { id: NavGroup; name: string }[] = [
 const PAGES: { id: Page; name: string; group: NavGroup; icon: ReactNode }[] = [
   { id: "today", name: "Today", group: "analyse", icon: <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" /> },
   { id: "activity", name: "Activity", group: "analyse", icon: <path d="M4 6h16M4 12h10M4 18h13" /> },
-  { id: "week", name: "Week", group: "analyse", icon: <path d="M5 20V10M10 20V4M15 20v-7M20 20V8" /> },
-  { id: "journal", name: "Journal", group: "personal", icon: <path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6zM6 3v18M9.5 8h5M9.5 12h5" /> },
+  { id: "goals", name: "Goals", group: "personal", icon: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zM12 12.5a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z" /> },
+  { id: "chats", name: "Chats", group: "personal", icon: <path d="M4 5h16v11H9l-5 4zM8 9h8M8 12.5h5" /> },
   { id: "ideas", name: "Ideas", group: "personal", icon: <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" /> },
-  { id: "reminders", name: "Reminders", group: "personal", icon: <path d="M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM12 9v4l2.5 2M5 3 2 6M19 3l3 3" /> },
   { id: "settings", name: "Settings", group: "prefs", icon: <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z" /> },
 ];
 
@@ -140,9 +135,25 @@ export default function Dashboard() {
     const un = onTauriEvent<Page>("dashboard-page", (p) => PAGES.some((n) => n.id === p) && setPage(p));
     return () => void un.then((u) => u());
   }, []);
+  // The sidebar folds down to icons; the choice is remembered.
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("selfglance.sidebar") === "collapsed";
+    } catch {
+      return false;
+    }
+  });
+  const toggleSide = () =>
+    setCollapsed((c) => {
+      try {
+        localStorage.setItem("selfglance.sidebar", c ? "open" : "collapsed");
+      } catch {
+        /* not remembered */
+      }
+      return !c;
+    });
   const [offset, setOffset] = useState(0);
   const mainRef = useRef<HTMLElement>(null);
-  const today = useSegments(0);
   const viewed = useSegments(offset);
   const stats = useMemo(() => analyzeDay(viewed), [viewed]);
   const prev = useMemo(() => {
@@ -171,22 +182,27 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="app">
+    <div className={`app${collapsed ? " collapsed" : ""}`}>
       <aside className="side">
         <div className="brand">
           <span className="logo" aria-hidden />
-          SelfGlance
+          <span className="brand-name">SelfGlance</span>
+          <button className="side-toggle" onClick={toggleSide} aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"} aria-expanded={!collapsed} title={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}>
+            <svg viewBox="0 0 24 24" aria-hidden>
+              <path d={collapsed ? "M9 6l6 6-6 6" : "M15 6l-6 6 6 6"} />
+            </svg>
+          </button>
         </div>
         <nav aria-label="Main">
           {NAV_GROUPS.map((g) => (
             <div className="nav-group" key={g.id}>
               <span className="nav-label">{g.name}</span>
               {PAGES.filter((p) => p.group === g.id).map((p) => (
-                <button key={p.id} className={page === p.id ? "on" : ""} onClick={() => open(p.id)} aria-current={page === p.id ? "page" : undefined}>
+                <button key={p.id} className={page === p.id ? "on" : ""} onClick={() => open(p.id)} aria-current={page === p.id ? "page" : undefined} title={p.name}>
                   <svg viewBox="0 0 24 24" aria-hidden>
                     {p.icon}
                   </svg>
-                  {p.name}
+                  <span className="nav-text">{p.name}</span>
                 </button>
               ))}
             </div>
@@ -194,24 +210,15 @@ export default function Dashboard() {
         </nav>
         <div className="side-bottom">
           <ThemeButton />
-          <NowMini segs={today} />
         </div>
       </aside>
 
       <main ref={mainRef} key={page} className="page">
-        {page === "today" && <Today stats={stats} prev={prev} offset={offset} picker={dayPicker} go={open} />}
+        {page === "today" && <Today stats={stats} segs={viewed} prev={prev} offset={offset} picker={dayPicker} go={open} />}
         {page === "activity" && <Activity stats={stats} offset={offset} picker={dayPicker} />}
-        {page === "week" && (
-          <Week
-            onOpenDay={(o) => {
-              setOffset(o);
-              open("today");
-            }}
-          />
-        )}
-        {page === "journal" && <Journal />}
+        {page === "goals" && <Goals />}
+        {page === "chats" && <Chats />}
         {page === "ideas" && <Ideas />}
-        {page === "reminders" && <Reminders />}
         {page === "settings" && <SettingsPage />}
       </main>
       <Tooltip />
@@ -220,7 +227,7 @@ export default function Dashboard() {
   );
 }
 
-/** One click between light and dark (Settings → Appearance also offers "follow Windows"). */
+/** One click between light and dark. It follows Windows until you first click it. */
 function ThemeButton() {
   const [theme, setTheme] = useState(() => loadSettings().theme);
   const [os, setOs] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -249,7 +256,7 @@ function ThemeButton() {
       <svg viewBox="0 0 24 24" aria-hidden>
         {dark ? <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4" /> : <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />}
       </svg>
-      {dark ? "Light theme" : "Dark theme"}
+      <span className="theme-text">{dark ? "Light theme" : "Dark theme"}</span>
     </button>
   );
 }
@@ -278,41 +285,8 @@ function Section(props: { title: string; right?: ReactNode; children: ReactNode;
   );
 }
 
-// --- Now (sidebar) ---------------------------------------------------------------------
-function NowMini({ segs }: { segs: Segment[] }) {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const t = window.setInterval(() => tick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const last = segs[segs.length - 1];
-  if (!last) return <div className="now muted small">Nothing recorded yet today.</div>;
-  let spent = durOf(last);
-  let start = last.start;
-  for (let i = segs.length - 2; i >= 0; i--) {
-    const s = segs[i];
-    if (s.label !== last.label || start - s.end > 2 * 60_000) break;
-    start = s.start;
-    spent += durOf(s);
-  }
-  const live = Date.now() - last.end < 15_000;
-  const cat = catOf(last);
-  return (
-    <div className="now" title={`${last.label} — ${last.app}`}>
-      <span className="now-kicker">
-        <i className={live ? "live" : ""} style={{ background: catVar(cat) }} />
-        {live ? "Now" : `Last · ${fmt(Date.now() - last.end)} ago`}
-      </span>
-      <span className="now-what">{last.label}</span>
-      <span className="now-meta">
-        {kindOf(last)} · {catName(cat)} · <b>{fmt(spent)}</b>
-      </span>
-    </div>
-  );
-}
-
 // --- Today -----------------------------------------------------------------------------
-function Today({ stats, prev, offset, picker, go }: { stats: DayStats; prev: DayStats | null; offset: number; picker: ReactNode; go: (p: Page) => void }) {
+function Today({ stats, segs, prev, offset, picker, go }: { stats: DayStats; segs: Segment[]; prev: DayStats | null; offset: number; picker: ReactNode; go: (p: Page) => void }) {
   const goal = loadSettings().waterGoal;
   const notes = insights(stats, prev).slice(0, 3);
   const sub = dayDate(offset).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
@@ -320,6 +294,9 @@ function Today({ stats, prev, offset, picker, go }: { stats: DayStats; prev: Day
     return (
       <>
         <PageHead title={dayName(offset)} sub={sub} right={picker} />
+        <div className="bento">
+          <GoalTile segs={segs} date={dayDate(offset)} today={offset === 0} open={() => go("goals")} />
+        </div>
         <Empty />
       </>
     );
@@ -398,6 +375,8 @@ function Today({ stats, prev, offset, picker, go }: { stats: DayStats; prev: Day
           <span className="stat-delta muted">{stats.longestFocus ? `from ${clock(stats.longestFocus.start)}` : "no focus stretch yet"}</span>
         </section>
 
+        <GoalTile segs={segs} date={dayDate(offset)} today={offset === 0} open={() => go("goals")} />
+
         <Section title="Your day" className="t-wide">
           <DayStrip stats={stats} />
         </Section>
@@ -425,7 +404,6 @@ function Today({ stats, prev, offset, picker, go }: { stats: DayStats; prev: Day
           )}
         </Section>
 
-        {offset === 0 && <JournalStatus go={go} />}
         <BondTile full={offset !== 0} go={go} />
       </div>
 
@@ -436,9 +414,9 @@ function Today({ stats, prev, offset, picker, go }: { stats: DayStats; prev: Day
 
 /** Bond, as a tile: whether he's listening, which brain answers, and a way to ask him now. */
 function BondTile({ full, go }: { full: boolean; go: (p: Page) => void }) {
-  const [s, setS] = useState(loadSettings);
+  const [s, setS] = useState(() => effective(loadSettings()));
   useEffect(() => {
-    const read = () => setS(loadSettings());
+    const read = () => setS(effective(loadSettings()));
     window.addEventListener("focus", read);
     const t = window.setInterval(read, 4000);
     return () => {
@@ -465,7 +443,7 @@ function BondTile({ full, go }: { full: boolean; go: (p: Page) => void }) {
           <small>{brain}</small>
         </div>
       </div>
-      <p className="muted small">Try: “Hey Bond, remind me in 20 minutes to stretch.”</p>
+      <p className="muted small">Try: “goal: finish the micrograd tutorial” or “idea: an app that sorts my downloads”.</p>
       <div className="tile-actions">
         <button className="btn" onClick={() => void invoke("ask_bond").catch(() => {})} disabled={!inTauri} title={inTauri ? "Open Bond's ask box" : "Only in the desktop app"}>
           Ask Bond
@@ -475,46 +453,6 @@ function BondTile({ full, go }: { full: boolean; go: (p: Page) => void }) {
         </button>
       </div>
     </section>
-  );
-}
-
-/** Whether today's journal entry exists, read from the journal file itself. */
-function JournalStatus({ go }: { go: (p: Page) => void }) {
-  const [words, setWords] = useState<number | null>(null);
-  useEffect(() => {
-    const read = () =>
-      void journalGet(todayKey())
-        .then((t) => setWords(journalWritten(t) ? journalWords(t) : 0))
-        .catch(() => setWords(null));
-    read();
-    const un = onTauriEvent<null>("notes-changed", read);
-    window.addEventListener("focus", read);
-    return () => {
-      un.then((u) => u());
-      window.removeEventListener("focus", read);
-    };
-  }, []);
-  if (words === null) return null;
-  const done = words > 0;
-  return (
-    <button className={`jstatus tile t-journal ${done ? "done" : ""}`} onClick={() => go("journal")}>
-      <i aria-hidden>{done ? "✓" : "✎"}</i>
-      <span>
-        <b>{done ? "Today's journal is written" : "Today's journal isn't written yet"}</b>
-        <small>{done ? `${words} word${words === 1 ? "" : "s"} · saved on this computer` : "A few lines about the day is enough."}</small>
-      </span>
-      <em>{done ? "Open" : "Write it"} →</em>
-    </button>
-  );
-}
-
-function Stat(props: { label: string; value: string; delta: ReactNode }) {
-  return (
-    <div className="stat">
-      <span className="stat-label">{props.label}</span>
-      <span className="stat-value">{props.value}</span>
-      <span className="stat-delta">{props.delta}</span>
-    </div>
   );
 }
 
@@ -923,136 +861,8 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
   );
 }
 
-// --- Week ------------------------------------------------------------------------------
-function Week({ onOpenDay }: { onOpenDay: (offset: number) => void }) {
-  const days = useMemo(
-    () =>
-      Array.from({ length: 7 }, (_, i) => 6 - i).map((off) => ({
-        off,
-        st: analyzeDay(loadDay(dayDate(off))),
-        label: off === 0 ? "Today" : dayDate(off).toLocaleDateString([], { weekday: "short" }),
-        full: dayName(off),
-      })),
-    [],
-  );
-  // The 7 days before those, only to compare with (nothing is shown if there is no history).
-  const before = useMemo(() => {
-    const st = Array.from({ length: 7 }, (_, i) => analyzeDay(loadDay(dayDate(7 + i))));
-    const total = st.reduce((a, d) => a + d.total, 0);
-    return total > 0
-      ? { total, productive: st.reduce((a, d) => a + d.productive, 0), ent: st.reduce((a, d) => a + d.distracting, 0), active: st.filter((d) => d.total > 0).length }
-      : null;
-  }, []);
-  const total = days.reduce((a, d) => a + d.st.total, 0);
-  const productive = days.reduce((a, d) => a + d.st.productive, 0);
-  const ent = days.reduce((a, d) => a + d.st.distracting, 0);
-  const active = days.filter((d) => d.st.total > 0).length;
-  const max = Math.max(...days.map((d) => d.st.total), 1);
-  const cats = CATS.map((c) => ({ ...c, ms: days.reduce((a, d) => a + d.st.byCat[c.id], 0) })).filter((c) => c.ms > 0);
-  const withFocus = days.filter((d) => d.st.focusScore !== null);
-  const bestFocus = withFocus.reduce<(typeof days)[number] | null>((b, d) => (!b || d.st.focusScore! > b.st.focusScore! ? d : b), null);
-  const longest = days.reduce<(typeof days)[number] | null>((b, d) => (d.st.total > (b?.st.total ?? 0) ? d : b), null);
-
-  if (total === 0) {
-    return (
-      <>
-        <PageHead title="Week" sub="The last 7 days" />
-        <Empty />
-      </>
-    );
-  }
-  return (
-    <>
-      <PageHead title="Week" sub="The last 7 days" />
-      <section className="tiles">
-        <div className="stats4">
-          <Stat label="Screen time" value={fmt(total)} delta={before ? <Delta now={total} before={before.total} goodWhenUp={true} neutral vs="last week" /> : <span className="muted">{active} active day{active === 1 ? "" : "s"}</span>} />
-          <Stat label="Productive" value={fmt(productive)} delta={<span className="muted">{total ? Math.round((productive / total) * 100) : 0}% of it{before ? <> · <Delta now={productive} before={before.productive} goodWhenUp={true} vs="last week" /></> : null}</span>} />
-          <Stat label="Entertainment" value={fmt(ent)} delta={<span className="muted">{total ? Math.round((ent / total) * 100) : 0}% of it{before ? <> · <Delta now={ent} before={before.ent} goodWhenUp={false} vs="last week" /></> : null}</span>} />
-          <Stat label="Daily average" value={active ? fmt(total / active) : "–"} delta={<span className="muted">on {active} active day{active === 1 ? "" : "s"}</span>} />
-        </div>
-      </section>
-
-      <div className="cols2 week-cols">
-        <Section title="Day by day" right={<span className="muted small">Click a day to open it</span>}>
-          <ul className="weekbars">
-            {days.map((d) => (
-              <li key={d.off}>
-                <button className="wb-row" onClick={() => onOpenDay(d.off)} disabled={d.st.total === 0} aria-label={`Open ${d.full}`}>
-                  <span className="wb-day">{d.label}</span>
-                  <span className="wb-track">
-                    {CATS.filter((c) => d.st.byCat[c.id] > 0).map((c) => (
-                      <i
-                        key={c.id}
-                        style={{ width: `${(d.st.byCat[c.id] / max) * 100}%`, background: catVar(c.id) }}
-                        onPointerMove={(e) => tip.show(e, `${d.full} · ${c.name}`, [{ color: catVar(c.id), label: `${Math.round((d.st.byCat[c.id] / d.st.total) * 100)}% of that day`, value: fmt(d.st.byCat[c.id]) }])}
-                        onPointerLeave={tip.hide}
-                      />
-                    ))}
-                  </span>
-                  <span className="wb-val">{d.st.total ? fmt(d.st.total) : "–"}</span>
-                  <span
-                    className={`wb-focus ${d.st.focusScore === null ? "none" : ""}`}
-                    title="Focus score: the share of your productive plus entertainment time that was productive"
-                  >
-                    {d.st.focusScore !== null ? `Focus ${d.st.focusScore}` : ""}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          <ul className="catlegend">
-            {CATS.map((c) => (
-              <li key={c.id}>
-                <i style={{ background: catVar(c.id) }} />
-                {c.name}
-              </li>
-            ))}
-          </ul>
-        </Section>
-
-        <div className="week-side">
-          <Section title="Where the week went">
-            <ul className="toplist">
-              {cats.map((c) => (
-                <li key={c.id}>
-                  <span className="tl-name">
-                    <i className="dot" style={{ background: catVar(c.id) }} />
-                    <span>{c.name}</span>
-                  </span>
-                  <span className="muted small">{Math.round((c.ms / total) * 100)}%</span>
-                  <span className="tl-val">{fmt(c.ms)}</span>
-                  <span className="tl-bar">
-                    <i style={{ width: `${(c.ms / total) * 100}%`, background: catVar(c.id) }} />
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Section>
-          <Section title="Highlights">
-            <ul className="notes">
-              {bestFocus && (
-                <li>
-                  Highest focus: <b>{bestFocus.full}</b> (focus {bestFocus.st.focusScore}).
-                </li>
-              )}
-              {longest && (
-                <li>
-                  Longest day on the laptop: <b>{longest.full}</b>, {fmt(longest.st.total)}.
-                </li>
-              )}
-              <li className="muted">Focus score = productive time ÷ (productive + entertainment). Browsing &amp; other isn't counted either way.</li>
-            </ul>
-          </Section>
-        </div>
-      </div>
-    </>
-  );
-}
-
 // --- Settings --------------------------------------------------------------------------
 const SECTIONS = [
-  { id: "appearance", name: "Appearance", hint: "Light, dark or Windows" },
   { id: "wellness", name: "Wellness", hint: "Water breaks" },
   { id: "assistant", name: "Bond", hint: "How he behaves" },
   { id: "ai", name: "Bond's brain", hint: "Runs on this laptop" },
@@ -1066,7 +876,10 @@ type SecId = (typeof SECTIONS)[number]["id"];
 function SettingsPage() {
   const [s, setS] = useState<Settings>(loadSettings);
   const [saved, setSaved] = useState(false);
-  const [sec, setSec] = useState<SecId>("appearance");
+  const [sec, setSec] = useState<SecId>("wellness");
+  useEffect(() => {
+    if (!s.labs && (sec === "suggest" || sec === "learning")) setSec("wellness");
+  }, [s.labs, sec]);
   const update = (patch: Partial<Settings>) => {
     const next = { ...s, ...patch };
     setS(next);
@@ -1081,7 +894,7 @@ function SettingsPage() {
 
       <div className="settings">
         <div className="subnav" role="tablist" aria-label="Settings sections">
-          {SECTIONS.map((x) => (
+          {SECTIONS.filter((x) => s.labs || (x.id !== "suggest" && x.id !== "learning")).map((x) => (
             <button key={x.id} role="tab" aria-selected={sec === x.id} className={sec === x.id ? "on" : ""} onClick={() => setSec(x.id)}>
               {x.name}
               <small>{x.hint}</small>
@@ -1089,32 +902,6 @@ function SettingsPage() {
           ))}
         </div>
         <div className="settings-body">
-                {sec === "appearance" && (
-          <Group title="Appearance" desc="How the dashboard looks. “System” follows Windows.">
-            <div className="tabs" role="radiogroup" aria-label="Theme">
-              {(
-                [
-                  ["system", "System"],
-                  ["light", "Light"],
-                  ["dark", "Dark"],
-                ] as const
-              ).map(([v, label]) => (
-                <button
-                  key={v}
-                  role="radio"
-                  aria-checked={s.theme === v}
-                  className={s.theme === v ? "on" : ""}
-                  onClick={() => {
-                    applyTheme(v);
-                    update({ theme: v });
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </Group>
-        )}
         {sec === "wellness" && (
           <Group title="Water breaks" desc="Bond brings water after a stretch of active laptop use. Stepping away on your own counts as a break.">
         <Toggle label="Bring me water breaks" checked={s.breaksOn} onChange={(v) => update({ breaksOn: v })} />
@@ -1125,13 +912,27 @@ function SettingsPage() {
         )}
         {sec === "assistant" && (
           <Group title="Bond" desc="How he behaves around you.">
+        {s.labs && (
         <Toggle
           label="Nudge me when I'm brainstorming too long"
           hint="About 20 minutes with ChatGPT, Claude or notes and no editor time → “Time to build!”"
           checked={s.brainstormAlert}
           onChange={(v) => update({ brainstormAlert: v })}
         />
+        )}
         <Toggle label="Guide mode: show what he picked" hint="Outlines every control he could point at and says which one he chose and why. For finding out why he pointed wrong." checked={s.guideDebug} onChange={(v) => update({ guideDebug: v })} />
+        <Toggle
+          label="Advanced actions"
+          hint="Lets the AI run commands, end programs, type, click and copy for you. Off: Bond points the way (guide mode) and only does the safe things; running a command, ending a program or deleting always asks you first either way."
+          checked={s.advancedActions}
+          onChange={(v) => update({ advancedActions: v })}
+        />
+        <Toggle
+          label="Labs: experimental features"
+          hint="“Hey Bond”, suggestions he makes on his own, learning from you, and the brainstorm nudge. Unfinished, so they are off until you switch this on."
+          checked={s.labs}
+          onChange={(v) => update({ labs: v })}
+        />
         <Toggle
           label="Keep Bond out of screenshots and recordings"
           hint="You still see him; Snipping Tool, Print Screen and screen recorders don't. For a picture with him in it, say “include yourself in the screenshot” or use his tray menu: he appears for 5 minutes."
@@ -1140,14 +941,6 @@ function SettingsPage() {
         />
         <Toggle label="Read his answers aloud" checked={s.speakAnswers} onChange={(v) => update({ speakAnswers: v })} />
         <Toggle label="Warn me when the battery is low" hint="At 15% and again at 7%, while unplugged." checked={s.batteryAlert} onChange={(v) => update({ batteryAlert: v })} />
-        <Toggle label="Remind me to write my journal" hint="Once each evening, if today's entry is still empty and you're at the laptop." checked={s.journalNudge} onChange={(v) => update({ journalNudge: v })} />
-        <Toggle
-          label="Journal first, in the evening"
-          hint="Until you've written 20 words (words you dictate to Bond count), he asks again when you start something entertaining. He never closes or blocks anything. “Not tonight” skips the day. Replaces the single reminder above."
-          checked={s.journalFirst}
-          onChange={(v) => update({ journalFirst: v })}
-        />
-        <Slider label="Journal from" unit=":00" min={16} max={23} step={1} value={s.journalAt} disabled={!s.journalNudge && !s.journalFirst} onChange={(v) => update({ journalAt: v })} />
         <Slider label="Answers close after" unit="seconds" min={4} max={60} step={2} value={s.answerSeconds} onChange={(v) => update({ answerSeconds: v })} />
         <Autostart />
       </Group>
@@ -1161,9 +954,9 @@ function SettingsPage() {
       </Group>
         )}
         {sec === "voice" && (
-          <div className={`mic-banner ${s.wakeWord ? "live" : ""}`} role="status">
+          <div className={`mic-banner ${s.labs && s.wakeWord ? "live" : ""}`} role="status">
             <i aria-hidden />
-            {s.wakeWord
+            {s.labs && s.wakeWord
               ? "The microphone is open right now, listening for “Hey Bond”. What isn't for him is dropped as it's heard; nothing is recorded or sent."
               : "The microphone is closed. It opens only while you hold Ctrl+Alt+V and talk."}
           </div>
@@ -1188,7 +981,7 @@ function SettingsPage() {
         <LocalVoice voiceId={s.voiceId} speed={s.voiceSpeed} onChange={update} />
       </Group>
         )}
-        {sec === "voice" && (
+        {sec === "voice" && s.labs && (
           <Group
         title="“Hey Bond”"
         desc="Talk to him without a hotkey, like Siri. His ears, on this laptop, listen for “Hey Bond”; what isn't for him is dropped as soon as it's heard, and nothing is recorded or sent anywhere. With voice match he answers only you, not other people, videos or calls."
@@ -1257,7 +1050,8 @@ function SettingsPage() {
 }
 
 /** What is stored where, and what leaves this computer, from your real settings (read-only). */
-function PrivacyPanel({ s, go }: { s: Settings; go: (id: SecId) => void }) {
+function PrivacyPanel({ s: saved, go }: { s: Settings; go: (id: SecId) => void }) {
+  const s = effective(saved);
   const rows: { title: string; state: string; calm: boolean; text: string; to: SecId }[] = [
     {
       title: "Where answers come from",
@@ -1314,9 +1108,6 @@ function PrivacyPanel({ s, go }: { s: Settings; go: (id: SecId) => void }) {
         </div>
         <ul className="group-body kept">
           <li>
-            <b>Journal</b> One text file per day in Bond's data folder.
-          </li>
-          <li>
             <b>Activity, ideas, settings</b> In this app's local storage.
           </li>
           <li>
@@ -1340,20 +1131,6 @@ function Group(props: { title: string; desc: string; children: ReactNode }) {
       </div>
       <div className="group-body">{props.children}</div>
     </section>
-  );
-}
-
-function Toggle(props: { label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void; note?: string | null }) {
-  return (
-    <label className="toggle">
-      <input type="checkbox" role="switch" checked={props.checked} onChange={(e) => props.onChange(e.target.checked)} />
-      <span className="switch" aria-hidden />
-      <span>
-        {props.label}
-        {props.hint && <small className="muted">{props.hint}</small>}
-        {props.note && <small className="muted">{props.note}</small>}
-      </span>
-    </label>
   );
 }
 

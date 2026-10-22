@@ -52,7 +52,8 @@ struct FeedbackLine {
     value: String,
 }
 
-static LEARN: AtomicBool = AtomicBool::new(true);
+/// Off until Settings turns it on (a Labs feature), so nothing is kept before the settings load.
+static LEARN: AtomicBool = AtomicBool::new(false);
 static STORE: Mutex<Option<Vec<Exp>>> = Mutex::new(None);
 static FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
 
@@ -225,6 +226,11 @@ fn compact(v: &Value) -> String {
 }
 
 // --- Commands ----------------------------------------------------------------------------
+
+/// "Learn from me" is on (a Labs feature, off by default).
+pub fn learning_on() -> bool {
+    LEARN.load(Ordering::Relaxed)
+}
 
 #[tauri::command]
 pub fn brain_set_learning(on: bool) {

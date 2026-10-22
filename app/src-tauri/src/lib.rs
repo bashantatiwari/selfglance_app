@@ -18,7 +18,6 @@
 //      Doing things on the computer for you (agent.rs): a known set of actions; running
 //      commands, ending programs and deleting files wait for your approval first.
 //   7. The laptop itself (system.rs): status, busy programs, clipboard, low-battery warning.
-//      Reminders (reminders.rs) that fire whenever the app is running.
 //      Bond is left out of screenshots and recordings unless you ask (capture.rs).
 //   8. Start with the computer (autostart plugin; on by default in the installed app)
 //      and only ever one running copy (single-instance plugin).
@@ -26,15 +25,16 @@
 
 mod agent;
 mod diag;
+mod draft;
 mod egress;
 mod ai;
 mod brain;
 mod capture;
 mod experience;
-mod journal;
+mod goals;
 mod memory;
 mod notice;
-mod reminders;
+mod policy;
 mod screen;
 mod system;
 mod voice;
@@ -80,7 +80,7 @@ fn overlay(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("overlay")
 }
 
-/// Show the dashboard window (stats + settings), optionally on one page ("journal").
+/// Show the dashboard window (stats + settings), optionally on one page.
 #[tauri::command]
 fn open_dashboard(app: AppHandle, page: Option<String>) {
     show_dashboard(&app);
@@ -373,6 +373,19 @@ pub fn run() {
         .manage(regions.clone())
         // Closing the dashboard just hides it; the app keeps running in the tray.
         .on_window_event(|window, event| {
+            // The overlay is Bond's body. If it is ever closed (Alt+F4 while the Ask box has the
+            // keyboard, a WM_CLOSE from a tool) the app keeps running from the tray and nothing
+            // can bring him back, so the close is refused. "Quit" in the tray is the way out.
+            if window.label() == "overlay" {
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        diag::log("overlay: close refused (use Quit in the tray menu)");
+                    }
+                    tauri::WindowEvent::Destroyed => diag::log("overlay: window destroyed"),
+                    _ => {}
+                }
+            }
             if window.label() == "dashboard" {
                 match event {
                     tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -405,16 +418,9 @@ pub fn run() {
             agent::agent_approve,
             agent::agent_deny,
             agent::agent_cancel,
+            policy::agent_set_advanced,
             system::guide_prepare,
             system::clipboard_text,
-            journal::journal_get,
-            journal::journal_set,
-            journal::journal_append,
-            journal::journal_list,
-            reminders::reminders_list,
-            reminders::reminder_add,
-            reminders::reminder_remove,
-            reminders::reminder_snooze,
             take_focus,
             capture::capture_hide_by_default,
             capture::capture_show,
@@ -434,6 +440,11 @@ pub fn run() {
             notice::notice_allowed,
             notice::notice_shown,
             notice::notice_judge,
+            goals::goal_judge,
+            draft::ai_draft,
+            draft::draft_remember_target,
+            draft::draft_write,
+            draft::copy_text,
             notice::notice_scan,
             voice::voice_status,
             voice::voice_install,
@@ -466,6 +477,7 @@ pub fn run() {
             build_tray(app.handle())?;
             enable_autostart_first_run(app.handle());
             agent::preload_apps();
+            draft::spawn_foreground_watch();
             diag::init(app.handle());
             ai::forget_old_keys();
             memory::init(app.handle());
@@ -474,7 +486,6 @@ pub fn run() {
             experience::init(app.handle());
             notice::spawn_clipboard_watch(app.handle().clone());
             voice::init(app.handle());
-            reminders::spawn_watch(app.handle().clone());
             system::spawn_battery_watch(app.handle().clone());
             // Another app may already own the shortcut; the tray item still works then, and
             // Bond says which one is taken (once the overlay is up to show it).

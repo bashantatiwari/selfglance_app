@@ -49,17 +49,6 @@ export interface ScreenAnswer {
   exp_id: string;
 }
 
-export interface Reminder {
-  id: string;
-  text: string;
-  /** Due time, ms epoch. */
-  at: number;
-  /** A dashboard page the card offers to open ("journal"). */
-  open?: "journal";
-  /** "Journal first": the card also offers "Not tonight". */
-  skipToday?: boolean;
-}
-
 export const aiText = (system: string, prompt: string) => invoke<string>("ai_text", { system, prompt });
 
 /** Let the AI classify a command Bond couldn't place himself (text only, no screenshot). */
@@ -71,6 +60,23 @@ export const routeCommand = (text: string, spoken = false) => invoke<Route>("ai_
 /** Look at the screen now: explain it, help when stuck, or do a task on it. */
 export const screenAsk = (question: string, mode: ScreenMode, spoken = false) => invoke<ScreenAnswer>("ai_screen", { question, mode, spoken });
 
+/** Label activities against today's goals ("on" / "off" / "neutral", in order); empty when there is no brain to ask. */
+export const goalJudge = (goals: string[], items: { app: string; label: string }[], blocked: string[]) =>
+  inTauri ? invoke<string[]>("goal_judge", { goals, items, blocked }).catch((): string[] => []) : Promise.resolve([] as string[]);
+
+/** A message written for you to send. `subject` is for an email; `used_screen` = he read the conversation on screen. */
+export interface Draft {
+  subject: string;
+  message: string;
+  used_screen: boolean;
+}
+export const aiDraft = (request: string) => invoke<Draft>("ai_draft", { request });
+/** Remember the window you're in, so a draft can go back there. */
+export const draftRememberTarget = () => (inTauri ? invoke<void>("draft_remember_target").catch(() => {}) : Promise.resolve());
+/** Paste the draft in that window (never presses Enter). `pasted` false = it's on the clipboard instead, and `note` says why. */
+export const draftWrite = (text: string) => invoke<{ pasted: boolean; note: string }>("draft_write", { text });
+export const copyText = (text: string) => invoke<void>("copy_text", { text });
+
 /** What Bond remembers about you (memory.json), and forgetting it. */
 export const memoryList = () => (inTauri ? invoke<string[]>("memory_list").catch(() => []) : Promise.resolve([]));
 export const memoryForget = (fact: string | null) => invoke<void>("memory_forget", { fact });
@@ -81,6 +87,8 @@ export const runActions = (actions: Action[]) => invoke<Outcome>("agent_run", { 
 /** Yes to a pending approval: the next step (a second confirmation) or the result. */
 export const approveAction = (id: string, alt = false) => invoke<Outcome>("agent_approve", { id, alt });
 export const guidePrepare = (goal: string) => (inTauri ? invoke<string | null>("guide_prepare", { goal }).catch(() => null) : Promise.resolve(null));
+/** Settings → Bond → Advanced actions: lets the AI run commands, type, click and more (policy.rs). */
+export const setAdvancedActions = (on: boolean) => (inTauri ? invoke<void>("agent_set_advanced", { on }).catch(() => {}) : Promise.resolve());
 export const cancelAgent = () => (inTauri ? invoke<void>("agent_cancel").catch(() => {}) : Promise.resolve());
 export const denyAction = (id: string) => (inTauri ? invoke<void>("agent_deny", { id }).catch(() => {}) : Promise.resolve());
 
@@ -94,10 +102,6 @@ export const captureHideByDefault = (hide: boolean) => (inTauri ? invoke<boolean
 /** "Include yourself in the screenshot" (show) or hide again. Resolves to whether he is hidden from captures now. */
 export const captureShow = (show: boolean) => (inTauri ? invoke<boolean>("capture_show", { show }).catch(() => true) : Promise.resolve(!show));
 
-export const listReminders = () => (inTauri ? invoke<Reminder[]>("reminders_list") : Promise.resolve([] as Reminder[]));
-export const addReminder = (text: string, at: number) => invoke<Reminder>("reminder_add", { text, at });
-export const removeReminder = (id: string) => invoke<void>("reminder_remove", { id });
-export const snoozeReminder = (text: string, minutes: number) => invoke<Reminder>("reminder_snooze", { text, minutes });
 
 // --- Bond's own brain ------------------------------------------------------------------------
 

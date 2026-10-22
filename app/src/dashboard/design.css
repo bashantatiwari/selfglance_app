@@ -55,7 +55,6 @@ h2,
 .big,
 .stat-value,
 .tl-val,
-.wb-val,
 .s-value,
 .num,
 .count,
@@ -159,10 +158,6 @@ nav button.on::before {
   gap: 8px;
 }
 
-.side-bottom .now {
-  margin-top: 0;
-}
-
 /* One-click light / dark, above the "Now" card. */
 .themebtn {
   display: flex;
@@ -194,11 +189,6 @@ nav button.on::before {
 .themebtn:hover {
   background: var(--hover);
   color: var(--ink);
-}
-
-.now {
-  border-radius: var(--r-m);
-  padding: 11px 12px;
 }
 
 main {
@@ -415,7 +405,6 @@ main {
   vertical-align: 1px;
   border: 1px solid transparent;
 }
-
 
 .count {
   display: inline-block;
@@ -745,104 +734,14 @@ tr.pickable.picked td:first-child {
   font-variant-numeric: tabular-nums;
 }
 
-/* --- Week ------------------------------------------------------------------------------ */
-.week-cols {
-  grid-template-columns: 1.5fr 1fr;
-  gap: 36px;
-}
-
-.week-side {
-  display: flex;
-  flex-direction: column;
-  gap: 28px;
-}
-
 .hero-note {
   margin: 0;
-}
-
-.weekbars {
-  gap: 4px;
-}
-
-.weekbars li {
-  display: block;
-}
-
-.wb-row {
-  display: grid;
-  grid-template-columns: 54px 1fr 70px 72px;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  transition: background 120ms;
-}
-
-.wb-row:hover:not(:disabled) {
-  background: var(--hover);
-}
-
-.wb-row:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
-.wb-track {
-  height: 18px;
-  border-radius: 5px;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--hover) 60%, transparent);
-}
-
-.wb-track i {
-  border-radius: 3px;
-}
-
-.wb-focus {
-  justify-self: end;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--hover);
-  color: var(--ink-2);
-  font-size: 11.5px;
-  font-weight: 600;
-}
-
-.wb-focus.none {
-  background: transparent;
-}
-
-/* --- Journal --------------------------------------------------------------------------- */
-.journal-today {
-  gap: 12px;
 }
 
 .prompt-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-}
-
-.journal-today textarea {
-  min-height: 320px;
-  padding: 26px 30px;
-  border-radius: var(--r-l);
-  box-shadow: var(--shadow-1);
-  font-family: var(--font-read);
-  font-size: 17px;
-  line-height: 1.8;
-  letter-spacing: 0.005em;
-}
-
-.journal-today textarea::placeholder {
-  color: var(--muted);
-  font-style: italic;
 }
 
 .save-pill {
@@ -880,51 +779,6 @@ tr.pickable.picked td:first-child {
 
 .save-pill.error i {
   background: var(--bad);
-}
-
-.journal-actions {
-  justify-content: flex-start;
-}
-
-.journal-past .section-head {
-  margin-bottom: 4px;
-}
-
-.journal-past .section-head h2 {
-  margin: 0;
-}
-
-.month-name {
-  margin: 22px 0 4px;
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.journal-past article {
-  padding: 16px 0;
-}
-
-.journal-past h4 {
-  margin: 0 0 6px;
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--ink-2);
-}
-
-.journal-past p {
-  font-family: var(--font-read);
-  font-size: 15.5px;
-  line-height: 1.7;
-}
-
-.journal-past p.clamp {
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 /* --- Ideas, reminders ------------------------------------------------------------------ */
@@ -1073,38 +927,6 @@ li:focus-within > .row-actions {
   box-shadow: var(--ring);
 }
 
-.composer {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-l);
-  background: var(--surface);
-  box-shadow: var(--shadow-1);
-}
-
-.composer-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.composer-row .search {
-  min-width: 0;
-  box-shadow: none;
-}
-
-.composer .capture-input {
-  box-shadow: none;
-  min-width: 200px;
-}
-
-.composer-row.quick {
-  gap: 8px;
-}
-
 .grow {
   margin-left: auto;
 }
@@ -1126,54 +948,6 @@ li:focus-within > .row-actions {
 
 .rgroup.over .rgroup-name {
   color: var(--bad);
-}
-
-.rlist {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--r-m);
-  background: var(--surface);
-  box-shadow: var(--shadow-1);
-  overflow: hidden;
-}
-
-.rlist li {
-  display: grid;
-  grid-template-columns: 130px 1fr auto;
-  align-items: center;
-  gap: 14px;
-  padding: 12px 14px;
-  border-top: 1px solid var(--grid);
-}
-
-.rlist li:first-child {
-  border-top: 0;
-}
-
-.rlist .icon-btn {
-  opacity: 0;
-}
-
-.rlist li:hover .icon-btn,
-.rlist li:focus-within .icon-btn {
-  opacity: 1;
-}
-
-.r-when {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.3;
-}
-
-.r-when small {
-  font-size: 12px;
-}
-
-.rlist p {
-  margin: 0;
-  overflow-wrap: anywhere;
 }
 
 /* --- Settings -------------------------------------------------------------------------- */
@@ -1380,9 +1154,6 @@ li:focus-within > .row-actions {
 
 /* --- Small windows --------------------------------------------------------------------- */
 @media (max-width: 1100px) {
-  .week-cols {
-    grid-template-columns: 1fr;
-  }
   .explorer.with-detail {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1441,30 +1212,14 @@ li:focus-within > .row-actions {
   main {
     padding: 22px 22px 48px;
   }
-  .rlist li {
-    grid-template-columns: 1fr auto;
-  }
-  .rlist .r-when {
-    grid-column: 1 / -1;
-    flex-direction: row;
-    gap: 8px;
-    align-items: baseline;
-  }
 }
 
 @media (max-width: 600px) {
   .big {
     font-size: 40px;
   }
-  .capture,
-  .composer-row {
+  .capture {
     flex-wrap: wrap;
-  }
-  .wb-row {
-    grid-template-columns: 44px 1fr 60px;
-  }
-  .wb-focus {
-    display: none;
   }
   .group {
     padding: 16px;
@@ -1529,64 +1284,6 @@ th.num,
   .table-wrap .table {
     min-width: 660px;
   }
-}
-
-/* --- Journal status on Today, idea conversation ---------------------------------------- */
-.jstatus {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  width: 100%;
-  padding: 12px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-m);
-  background: var(--surface);
-  text-align: left;
-  cursor: pointer;
-  box-shadow: var(--shadow-1);
-  transition: border-color 120ms;
-}
-
-.jstatus:hover {
-  border-color: var(--accent-line);
-}
-
-.jstatus > i {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--cat-browsing) 18%, transparent);
-  color: var(--cat-browsing);
-  font-style: normal;
-  font-weight: 700;
-}
-
-.jstatus.done > i {
-  background: color-mix(in srgb, var(--good) 16%, transparent);
-  color: var(--good);
-}
-
-.jstatus span {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
-  line-height: 1.35;
-}
-
-.jstatus small {
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
-.jstatus em {
-  font-style: normal;
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--accent);
 }
 
 .discuss {
@@ -1680,11 +1377,6 @@ th.num,
   color: var(--ink);
   font: inherit;
   font-size: 13.5px;
-}
-
-/* --- Journal first ----------------------------------------------------------------------- */
-.journal-actions {
-  flex-wrap: wrap;
 }
 
 .goal-pill {

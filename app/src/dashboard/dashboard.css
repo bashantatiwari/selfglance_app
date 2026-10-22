@@ -165,56 +165,6 @@ nav button.on {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), inset 0 0 0 1px var(--border);
 }
 
-/* Now, in the sidebar */
-.now {
-  margin-top: auto;
-  padding: 12px;
-  border-radius: 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.now-kicker {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11.5px;
-  font-weight: 650;
-  color: var(--ink-2);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.now-kicker i {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.now-kicker i.live {
-  animation: live 1.6s ease-in-out infinite;
-}
-
-.now-what {
-  font-weight: 650;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.now-meta {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.now-meta b {
-  color: var(--ink);
-}
-
 @keyframes live {
   50% {
     opacity: 0.3;
@@ -733,49 +683,6 @@ main {
   height: 100%;
 }
 
-/* --- Week ----------------------------------------------------------------------------- */
-.weekbars {
-  list-style: none;
-  margin: 0 0 14px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.weekbars li {
-  display: grid;
-  grid-template-columns: 60px 1fr 72px 70px;
-  align-items: center;
-  gap: 12px;
-}
-
-.wb-day {
-  font-weight: 600;
-  color: var(--ink-2);
-}
-
-.wb-track {
-  display: flex;
-  gap: 2px;
-  height: 16px;
-}
-
-.wb-track i {
-  min-width: 2px;
-  border-radius: 2px;
-}
-
-.wb-val {
-  text-align: right;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
-
-.wb-focus {
-  font-size: 12px;
-}
-
 /* --- Settings ------------------------------------------------------------------------- */
 .saved {
   font-size: 13px;
@@ -915,63 +822,6 @@ main {
   flex: 1;
 }
 
-/* --- Journal ------------------------------------------------------------------------- */
-.journal-today {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.journal-today textarea {
-  width: 100%;
-  min-height: 260px;
-  resize: vertical;
-  padding: 18px 20px;
-  border-radius: 14px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  font-size: 15px;
-  line-height: 1.65;
-}
-
-.journal-today textarea:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
-}
-
-.journal-actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 14px;
-}
-
-.journal-past h2 {
-  margin: 0 0 14px;
-  font-size: 15px;
-  font-weight: 650;
-}
-
-.journal-past article {
-  padding: 16px 0;
-  border-top: 1px solid var(--grid);
-}
-
-.journal-past h3 {
-  margin: 0 0 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink-2);
-}
-
-.journal-past p {
-  margin: 0;
-  white-space: pre-wrap;
-  line-height: 1.6;
-}
-
 .table-wrap {
   overflow-x: auto;
   border-radius: 14px;
@@ -1042,10 +892,6 @@ main {
   }
   nav {
     flex-direction: row;
-  }
-  .now {
-    margin-top: 0;
-    flex: 1 1 220px;
   }
   main {
     padding: 22px 20px 40px;
@@ -1127,20 +973,8 @@ main {
     max-width: 100%;
     overflow-x: auto;
   }
-  .weekbars li {
-    grid-template-columns: 44px 1fr 60px;
-  }
-  .wb-focus {
-    display: none;
-  }
   .key-row {
     flex-wrap: wrap;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .now-kicker i.live {
-    animation: none;
   }
 }
 

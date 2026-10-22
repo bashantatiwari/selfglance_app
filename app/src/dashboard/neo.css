@@ -236,19 +236,14 @@ nav button.on::before {
 .group,
 .table,
 .detail,
-.composer,
-.rlist,
 .idea-list li,
-.jstatus,
 .empty-state,
 .empty,
 .mic-banner,
 .privacy-row,
 .stepper,
 .toast,
-.tip,
-.now,
-.journal-past article {
+.tip {
   background: var(--surface);
   border: var(--bw) solid var(--bd);
   border-radius: var(--r-m);
@@ -345,10 +340,6 @@ nav button.on::before {
 }
 .t-notes {
   grid-column: span 5;
-}
-.t-journal {
-  grid-column: span 7;
-  text-align: left;
 }
 .t-bond {
   grid-column: span 5;
@@ -524,38 +515,6 @@ nav button.on::before {
   border-left-color: var(--border);
   color: var(--muted);
   background: transparent;
-}
-
-/* Journal status, Bond tile */
-.jstatus {
-  align-items: center;
-  width: 100%;
-  cursor: pointer;
-  transition: transform 100ms, box-shadow 100ms;
-}
-
-.jstatus:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 4px 4px 0 var(--shadow-c);
-}
-
-.jstatus > i {
-  width: 34px;
-  height: 34px;
-  border: var(--bw) solid var(--bd);
-  border-radius: 9px;
-  background: var(--tone-orange);
-  color: var(--ink);
-}
-
-.jstatus.done > i {
-  background: var(--tone-green);
-  color: var(--ink);
-}
-
-.jstatus em {
-  color: var(--ink);
-  font-weight: 800;
 }
 
 .bond-head {
@@ -887,72 +846,6 @@ tr.pickable.picked td:first-child {
   letter-spacing: -0.03em;
 }
 
-.wb-row {
-  border: var(--bw) solid transparent;
-  border-radius: 10px;
-}
-
-.wb-row:hover:not(:disabled) {
-  background: var(--surface-2);
-  border-color: var(--bd);
-}
-
-.wb-track {
-  height: 22px;
-  border: var(--bw) solid var(--bd);
-  border-radius: 7px;
-  background: var(--surface-2);
-}
-
-.wb-track i {
-  border-radius: 0;
-}
-
-.wb-track i + i {
-  border-left: 1.5px solid var(--bd);
-}
-
-.wb-day {
-  font-weight: 800;
-  color: var(--ink);
-}
-
-.wb-val {
-  font-weight: 800;
-}
-
-.wb-focus {
-  border: 1.5px solid var(--bd);
-  background: var(--tone-yellow);
-  color: var(--ink);
-  font-weight: 800;
-}
-
-.wb-focus.none {
-  border-color: transparent;
-  background: transparent;
-}
-
-/* --- Journal: a notebook ---------------------------------------------------------------------- */
-.journal-today textarea {
-  min-height: 360px;
-  padding: 32px 36px 32px 76px;
-  border: var(--bw) solid var(--bd);
-  border-radius: var(--r-l);
-  background-color: var(--surface);
-  background-image: linear-gradient(to right, transparent 58px, color-mix(in srgb, var(--bad) 55%, transparent) 58px, color-mix(in srgb, var(--bad) 55%, transparent) 60px, transparent 60px),
-    repeating-linear-gradient(to bottom, transparent 0, transparent 31px, color-mix(in srgb, var(--ink) 14%, transparent) 31px, color-mix(in srgb, var(--ink) 14%, transparent) 32px);
-  background-attachment: local;
-  box-shadow: var(--shadow-2);
-  font-size: 17px;
-  line-height: 32px;
-  color: var(--ink);
-}
-
-.journal-today textarea:focus {
-  box-shadow: 5px 5px 0 var(--accent);
-}
-
 .save-pill {
   padding: 3px 12px;
   border: 1.5px solid var(--bd);
@@ -987,35 +880,6 @@ tr.pickable.picked td:first-child {
 .goal-pill.done {
   background: var(--tone-green);
   color: var(--ink);
-}
-
-.month-name {
-  display: inline-block;
-  margin: 26px 0 12px;
-  padding: 3px 12px;
-  border: var(--bw) solid var(--bd);
-  border-radius: 999px;
-  background: var(--pop);
-  color: var(--pop-ink);
-  font-weight: 800;
-  letter-spacing: 0.1em;
-}
-
-.journal-past article {
-  margin: 0 0 16px;
-  padding: 16px 20px 14px;
-  border-top: var(--bw) solid var(--bd);
-}
-
-.journal-past h4 {
-  display: inline-block;
-  margin: 0 0 8px;
-  padding: 1px 8px;
-  border: 1.5px solid var(--bd);
-  border-radius: 6px;
-  background: var(--surface-2);
-  color: var(--ink);
-  font-weight: 800;
 }
 
 /* --- Ideas, reminders ------------------------------------------------------------------------------ */
@@ -1083,11 +947,6 @@ tr.pickable.picked td:first-child {
   font-weight: 800;
 }
 
-.composer {
-  background: var(--tone-yellow);
-  padding: 18px;
-}
-
 .rgroup-name {
   display: inline-block;
   align-self: flex-start;
@@ -1104,18 +963,6 @@ tr.pickable.picked td:first-child {
 .rgroup.over .rgroup-name {
   background: var(--tone-orange);
   color: var(--bad);
-}
-
-.rlist li {
-  border-top: 1.5px dashed var(--border);
-}
-
-.r-when b {
-  font-weight: 800;
-}
-
-.rlist .icon-btn {
-  opacity: 1;
 }
 
 .empty-state,
@@ -1429,7 +1276,6 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   .t-wide,
   .t-top,
   .t-notes,
-  .t-journal,
   .t-bond,
   .t-bond.full {
     grid-column: span 6;
@@ -1473,22 +1319,15 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   .tiles .stats4 {
     grid-template-columns: minmax(0, 1fr);
   }
-  .journal-today textarea {
-    padding-left: 56px;
-    background-image: linear-gradient(to right, transparent 40px, color-mix(in srgb, var(--bad) 55%, transparent) 40px, color-mix(in srgb, var(--bad) 55%, transparent) 42px, transparent 42px),
-      repeating-linear-gradient(to bottom, transparent 0, transparent 31px, color-mix(in srgb, var(--ink) 14%, transparent) 31px, color-mix(in srgb, var(--ink) 14%, transparent) 32px);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .btn,
-  .jstatus,
   .privacy-row,
   .idea-list li {
     transition: none;
   }
   .btn:hover:not(:disabled),
-  .jstatus:hover,
   .privacy-row:hover,
   .idea-list li:hover {
     transform: none;
@@ -1504,13 +1343,510 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   box-shadow: none;
 }
 
-/* Fixes from the screenshots */
-.journal-past .month-name {
+/* --- Collapsible sidebar --------------------------------------------------------------- */
+.brand {
+  display: flex;
+  align-items: center;
+}
+
+.side-toggle {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: var(--bw) solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.side-toggle:hover {
+  border-color: var(--bd);
+  background: var(--surface);
+  box-shadow: 2px 2px 0 var(--shadow-c);
+}
+
+.side-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (min-width: 901px) {
+  .app {
+    transition: grid-template-columns 160ms ease;
+  }
+
+  .app.collapsed {
+    grid-template-columns: 78px minmax(0, 1fr);
+  }
+
+  .app.collapsed .side {
+    padding-left: 10px;
+    padding-right: 10px;
+    align-items: stretch;
+  }
+
+  .app.collapsed .brand {
+    flex-direction: column;
+    gap: 10px;
+    padding: 2px 0 0;
+  }
+
+  .app.collapsed .side-toggle {
+    margin-left: 0;
+  }
+
+  .app.collapsed .brand-name,
+  .app.collapsed .nav-label,
+  .app.collapsed .nav-text,
+  .app.collapsed .theme-text {
+    display: none;
+  }
+
+  .app.collapsed nav button,
+  .app.collapsed .themebtn {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app {
+    transition: none;
+  }
+}
+
+/* --- Ideas: a plain list --------------------------------------------------------------- */
+.idea-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.idea-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+}
+
+.idea-list li.done .idea-body p {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.idea-check input {
+  width: 20px;
+  height: 20px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.idea-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.idea-body p {
+  margin: 0;
+  font-size: 15.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.idea-body small {
+  color: var(--muted);
+}
+
+/* --- Goals ------------------------------------------------------------------------------------------ */
+.goal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.goal-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.goal-lines li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border: var(--bw) solid var(--bd);
+  border-left: 9px solid var(--pop);
+  border-radius: var(--r-s);
+  background: var(--surface-2);
+  font-size: 16px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.goal-lines.plain {
+  margin-bottom: 12px;
+}
+
+.goal-lines .icon-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.goal-today,
+.goal-tile .goalbar {
+  margin-top: 14px;
+}
+
+.goalbar {
+  display: flex;
+  height: 18px;
+  border: var(--bw) solid var(--bd);
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.goalbar.blank {
+  opacity: 0.5;
+}
+
+.goalbar i {
+  min-width: 5px;
+}
+
+.goalbar i + i {
+  border-left: var(--bw) solid var(--bd);
+}
+
+.goalbar .on {
+  background: color-mix(in srgb, var(--good) 62%, var(--surface));
+}
+
+.goalbar .off {
+  background: color-mix(in srgb, var(--bad) 50%, var(--surface));
+}
+
+.goalbar .other {
+  background: var(--grid);
+}
+
+.goal-numbers {
+  margin: 10px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.goal-hint {
+  margin: -6px 0 12px;
+}
+
+.goal-sub {
+  margin: 18px 0 10px;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.goal-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.goal-rows li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-s);
+  background: var(--surface-2);
+}
+
+.gr-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.gr-label {
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fit {
+  flex: none;
+  padding: 2px 10px;
+  border: var(--bw) solid var(--bd);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  background: var(--surface);
+}
+
+.fit-on {
+  background: var(--tone-green);
+}
+
+.fit-off {
+  background: var(--tone-orange);
+}
+
+.fit-pick {
+  flex: none;
+  display: inline-flex;
+  border: var(--bw) solid var(--bd);
+  border-radius: var(--r-s);
+  overflow: hidden;
+}
+
+.fit-pick button {
+  padding: 4px 10px;
+  border: 0;
+  border-left: var(--bw) solid var(--bd);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.fit-pick button:first-child {
+  border-left: 0;
+}
+
+.fit-pick button:hover {
+  background: var(--hover);
+}
+
+.fit-pick button.on {
+  background: var(--pop);
   color: var(--pop-ink);
 }
 
-.jstatus.tile {
-  flex-direction: row;
+.goal-days {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.goal-days li {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1.2fr) minmax(0, 2fr) 64px;
   align-items: center;
-  text-align: left;
+  gap: 12px;
+}
+
+.goal-days li.none .gd-goal {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.gd-name {
+  font-weight: 800;
+}
+
+.gd-goal {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gd-track .goalbar {
+  height: 14px;
+}
+
+.gd-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+
+.week-empty {
+  padding: 4px 0 2px;
+}
+
+.week-empty p {
+  margin: 4px 0;
+}
+
+.week-dots {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.week-dots span {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.week-dots i {
+  width: 22px;
+  height: 22px;
+  border: var(--bw) dashed var(--axis);
+  border-radius: 50%;
+}
+
+.week-dots small {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.goal-options {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+@media (max-width: 760px) {
+  .goal-rows li {
+    flex-wrap: wrap;
+  }
+
+  .goal-days li {
+    grid-template-columns: 40px minmax(0, 1fr) 56px;
+  }
+
+  .gd-goal {
+    display: none;
+  }
+}
+
+/* --- Chats ------------------------------------------------------------------------------------------ */
+.chats-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+.chats-clear {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hist-day {
+  margin-bottom: 22px;
+}
+
+.hist-day-name {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.hist-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hist {
+  padding: 14px 16px;
+  background: var(--surface);
+  border: var(--bw) solid var(--bd);
+  border-left: 9px solid var(--cat-working);
+  border-radius: var(--r-m);
+  box-shadow: var(--shadow-1);
+}
+
+.hist-draft {
+  border-left-color: var(--pop);
+}
+
+.hist-action {
+  border-left-color: var(--cat-learning);
+}
+
+.hist-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hist-kind {
+  padding: 1px 9px;
+  border: var(--bw) solid var(--bd);
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 800;
+  background: var(--surface-2);
+}
+
+.hist-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.hist-actions .icon-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hist-q {
+  margin: 8px 0 6px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.hist-subject {
+  margin: 0 0 4px;
+}
+
+.hist-a {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  line-height: 1.5;
 }
