@@ -410,6 +410,7 @@ pub fn run() {
             get_autostart,
             ai::ai_text,
             ai::ai_route,
+            ai::ai_chat,
             ai::ai_prime,
             ai::ai_screen,
             ai::ai_guide,

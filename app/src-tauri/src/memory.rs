@@ -345,6 +345,16 @@ pub fn about_yourself(text: &str) -> bool {
 
 /// Everything the brain should know before reading your new message.
 pub fn context_block() -> String {
+    context_for(true)
+}
+
+/// The same for plain talk: without the list of open windows. Given that list, a small model keeps steering
+/// the talk to whatever is open ("want to switch to OBS Studio?").
+pub fn chat_context() -> String {
+    context_for(false)
+}
+
+fn context_for(windows: bool) -> String {
     let mut out = Vec::new();
     let about = profile();
     if !about.is_empty() {
@@ -357,7 +367,7 @@ pub fn context_block() -> String {
     if let Some(now) = NOW.lock().unwrap().clone() {
         out.push(format!("In front of the user right now: {now}"));
     }
-    let open = crate::system::open_windows_summary();
+    let open = if windows { crate::system::open_windows_summary() } else { String::new() };
     if !open.is_empty() {
         out.push(format!("Open windows now (front first): {open}"));
     }

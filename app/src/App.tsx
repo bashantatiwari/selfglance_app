@@ -47,6 +47,8 @@ import { AnswerCard, AskBox, type AskState } from "./ui/Ask";
 import { Guide, type GuideView } from "./ui/Guide";
 import {
   aiGuide,
+  aiChat,
+  speakStream,
   aiText,
   approveAction,
   aiPrime,
@@ -1161,8 +1163,35 @@ export default function App() {
           // Clicking and typing for you is an Advanced action; otherwise Bond points the way instead.
           if (r.needs_screen) return settingsRef.current.advancedActions ? await lookAtScreen(question, "task") : await runGuide(question);
           return showOutcome(question, r.outcome ?? { done: [], info: [], pending: null }, r.reply);
-        default:
-          return answer(question, r.reply, [], true);
+        default: {
+          // Something the router itself had to say ("I can't run commands right now").
+          if (r.reply) return answer(question, r.reply, [], true);
+          // Talk: the answer is shown and spoken sentence by sentence while it is still being written.
+          const byVoice = heardRef.current;
+          const voice = settingsRef.current.speakAnswers || byVoice ? speakStream() : null;
+          let text = "";
+          const un = await onTauriEvent<{ id: number; text: string }>("chat-piece", (p) => {
+            if (p.id !== my || askEpoch.current !== my) return;
+            text = text ? `${text} ${p.text}` : p.text;
+            clearTimeout(askTimer.current);
+            setAsk({ step: "answer", question, answer: text, done: [] });
+            voice?.push(p.text);
+          });
+          try {
+            const full = await aiChat(question, byVoice, my);
+            if (askEpoch.current !== my) return;
+            setAsk({ step: "answer", question, answer: full, done: [] });
+            stageRef.current?.play("nod", true);
+            void aiPrime(); // talking replaced what his brain had read; read the router's instructions again
+            void voice?.end().then(() => {
+              const st = settingsRef.current;
+              if (st.wakeWord && byVoice && st.followUp) void wakeFollowUp(FOLLOW_UP_SEC);
+            });
+            return autoClose();
+          } finally {
+            un();
+          }
+        }
       }
     } catch (e) {
       diag(`request failed: ${String(e)}`);

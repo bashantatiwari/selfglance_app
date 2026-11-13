@@ -139,10 +139,10 @@ intent is one of (if you return any actions, intent is "task"):
 - "screen": a question about what is currently on the screen. needs_screen true.
 - "help": the user is stuck, confused or has an error with what they are doing. needs_screen true.
 - "write": the user wants Bond to WRITE a text for them to use: a message, email, reply, post, comment, prompt, caption, letter, bio or other short piece of writing. text = their request, kept as they said it. reply = "". Bond then writes it and shows it for them to read and put in the box. Not code, not a question to answer, not a search.
-- "chat": anything else (a general question, small talk). reply = the answer, at most 4 short sentences, plain text.
+- "chat": anything else (a general question, small talk, the user talking about their day or about you). reply = "": Bond answers these himself right after, so do not write the answer.
 
-reply is always a very short, friendly line Bond says (for log/idea: a confirmation; for task: what you're doing).
-The message may come with what you know about the user, what is in front of them, and the conversation so far. Use them: "it", "that", "again" and short follow-ups refer to the conversation ("close it" right after opening Notepad means Notepad; "yes, run it" after you proposed a command means that command, so repeat that action). Answer questions about the user from what you know; never say you don't know something the conversation or the facts say.
+reply is a very short, friendly line Bond says (for idea: a confirmation; for task: what you're doing; for chat: empty).
+The message may come with what you know about the user, what is in front of them, and the conversation so far. Use them: "it", "that", "again" and short follow-ups refer to the conversation ("close it" right after opening Notepad means Notepad; "yes, run it" after you proposed a command means that command, so repeat that action).
 remember: only when the user's new message itself tells you something lasting about them (their name, people, preferences, projects, where they work or study), one short sentence in the third person ("The user's name is Alex."). Never from the screen, folders, the conversation or what you already know; otherwise "".
 Programs that may already be running: "Open windows now" below lists them. "switch to / go to / bring up / show me OBS" is focus_app; open_app starts a program (and brings it forward if it is already open). "minimize the terminal" is minimize_app.
 Never say you started, recorded, sent or finished something unless one of your actions does exactly that. Never invent a hotkey for a particular app: hotkey is only for shortcuts every app shares (ctrl+t, ctrl+w, ctrl+s, ctrl+z, ctrl+f, ctrl+c, ctrl+v, alt+tab, f5). When the user wants to DO something inside an app (record, export, set up, configure) and asks for help or how, that is "guide", not a hotkey.
@@ -376,7 +376,11 @@ fn screen_task_schema() -> Value {
 /// has learned anything from you. (Worded differently from the eval set below on purpose.)
 const STARTER_EXAMPLES: &str = r#"Examples:
 User: what's a good name for a coffee shop
-You: {"intent":"chat","text":"","reply":"How about Daily Grind, Bean There, or Brew Haven?","actions":[],"needs_screen":false}
+You: {"intent":"chat","text":"","reply":"","actions":[],"needs_screen":false}
+User: honestly today wore me out
+You: {"intent":"chat","text":"","reply":"","actions":[],"needs_screen":false}
+User: i'd like to add an idea, a sleep mask that plays rain sounds when you snore
+You: {"intent":"idea","text":"Snore-aware sleep mask — a sleep mask that plays rain sounds when you snore","reply":"Idea saved.","actions":[],"needs_screen":false}
 User: switch windows to light theme
 You: {"intent":"task","text":"","reply":"Switching to light theme.","actions":[{"do":"run_command","command":"Set-ItemProperty -Path HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize -Name AppsUseLightTheme -Value 1; Set-ItemProperty -Path HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize -Name SystemUsesLightTheme -Value 1","why":"Turns on the light theme."}],"needs_screen":false}
 User: create notes.txt in my documents
@@ -488,7 +492,23 @@ pub async fn ai_route(app: AppHandle, text: String, spoken: Option<bool>) -> Res
         system = format!("{system}\n\n{examples}");
     }
     let schema = router_schema_for(crate::memory::about_yourself(text));
-    let reply = complete(&system, &prompt, None, Some(&schema)).await?;
+    // The router writes its intent first. Once it says "chat" the rest of its reply is not needed (ai_chat
+    // answers talk), so it is stopped there: a fraction of a second instead of the seconds it takes to write
+    // an answer nobody reads. Not when a lasting fact may follow ("call me Alex"): that field comes last.
+    let may_learn = crate::memory::about_yourself(text) && crate::experience::learning_on();
+    let mut seen = String::new();
+    let mut talk = false;
+    let reply = crate::brain::chat_stream(&system, &prompt, Some(&schema), 1024, |delta| {
+        seen.push_str(delta);
+        talk = !may_learn && says_chat(&seen);
+        !talk
+    })
+    .await?;
+    if talk {
+        crate::diag::log("route: talk");
+        let exp_id = crate::experience::record("route", text, json!({"intent": "chat"}), "local", Ok(()));
+        return Ok(Route { intent: "chat".into(), text: String::new(), reply: String::new(), needs_screen: false, outcome: None, exp_id });
+    }
     let v = json_in(&reply)?;
     let s = |k: &str| v[k].as_str().unwrap_or("").trim().to_string();
     // Only what you said about yourself, not what the model picked up from the screen or the
@@ -507,6 +527,10 @@ pub async fn ai_route(app: AppHandle, text: String, spoken: Option<bool>) -> Res
         outcome: None,
         exp_id: String::new(),
     };
+    // Talk is always answered by ai_chat, whatever the router wrote for it.
+    if intent == "chat" {
+        route.reply.clear();
+    }
     let mut result = Ok(());
     if intent == "task" && !route.needs_screen {
         match actions_in(&v) {
@@ -522,9 +546,143 @@ pub async fn ai_route(app: AppHandle, text: String, spoken: Option<bool>) -> Res
             Err(e) => result = Err(e),
         }
     }
-    crate::memory::turn(text, &what_bond_did(&route.reply, v["actions"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), route.outcome.as_ref(), result.as_ref().err()));
+    // Plain talk is answered by ai_chat, which keeps the exchange once it has the answer.
+    let talk = intent == "chat" && route.reply.is_empty() && result.is_ok();
+    if !talk {
+        crate::memory::turn(text, &what_bond_did(&route.reply, v["actions"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), route.outcome.as_ref(), result.as_ref().err()));
+    }
     route.exp_id = crate::experience::record("route", text, v, "local", result.clone());
     result.map(|_| route)
+}
+
+// --- Talking ----------------------------------------------------------------------------
+// What is not a command, a task or a question about the screen is talk. The router only says "this is talk"
+// (a few words, quick); the answer is written here, with instructions made for talking rather than for
+// planning actions, and handed over sentence by sentence so Bond starts speaking about a second after you
+// stop, not after the whole answer is written. (Through the router, the answer was a field in its JSON:
+// nothing could be said until all of it was there, about five seconds, and its command examples leaked into
+// the talk: "want to switch to OBS Studio?")
+
+const CHAT_SYSTEM: &str = r#"You are Bond, the user's own desktop companion. They built you (their project is called SelfGlance) and you live on their OS_NAME laptop. Right now you are simply talking with them.
+- Answer what they actually said, directly and warmly, like a sharp friend who knows computers. Plain text only: no markdown, no lists, no emojis.
+- LENGTH
+- Questions of general knowledge (science, history, how things work, computers, advice): answer them yourself, fully, from what you know. Give the answer now; never offer to explain it later.
+- Only things that change by the day (today's news, the weather forecast, prices, scores) can't be answered: you run on this laptop with no internet, so say you can't look that up from here.
+- You are only talking. Never say you opened, saved, changed, set, searched or scheduled anything. If they ask for something to be done, tell them in a few words how to ask you ("say: open Notepad", "say: idea: …", "say: walk me through …").
+- Use what you know about them and the conversation so far, and never say you don't know something those tell you.
+- Stay on what they said. Do not mention apps, windows, switching to something or their goals unless they brought it up, and do not end by offering other things to do.
+- Speech can be misheard. If their words make no sense, say what you heard and ask them to say it again, in one short sentence. Do not guess a meaning.
+- Never make up facts. If you don't know, say so."#;
+
+/// Added to the talking instructions while Advanced actions are off (the router no longer says this itself).
+const ADVANCED_OFF_TALK: &str = r#"
+- You can't run commands, type or click for them right now: "Advanced actions" are off (Settings → Bond). If they ask for that, say so, and offer to walk them through it instead ("say: walk me through …")."#;
+
+/// The talking instructions and the message with what Bond knows around it.
+fn chat_prompt(text: &str, spoken: bool) -> (String, String) {
+    let length = if spoken {
+        "They are speaking and you answer out loud: one to three short sentences."
+    } else {
+        "Keep it short: at most six sentences, fewer when one will do."
+    };
+    let mut system = CHAT_SYSTEM.replace("OS_NAME", OS_NAME).replace("LENGTH", length);
+    if !crate::policy::advanced() {
+        system.push_str(ADVANCED_OFF_TALK);
+    }
+    let known = crate::memory::chat_context();
+    let now = chrono::Local::now().format("%A %Y-%m-%d %H:%M");
+    let said = if spoken { "The user says (spoken, so words may be misheard)" } else { "The user says" };
+    let prompt = if known.is_empty() { format!("Now: {now}.\n\n{said}: {text}") } else { format!("Now: {now}.\n{known}\n\n{said}: {text}") };
+    (system, prompt)
+}
+
+/// Cuts an answer that arrives bit by bit into pieces to say: the first sentence at once, so he starts
+/// talking, then longer pieces (a sentence at a time sounds choppy), and what is left at the end.
+#[derive(Default)]
+pub(crate) struct Pieces {
+    buf: String,
+    sent: usize,
+}
+
+/// A piece after the first is held until it is about this long (characters).
+const PIECE_CHARS: usize = 160;
+
+impl Pieces {
+    /// Add new text; the piece that is now ready, if any.
+    pub(crate) fn push(&mut self, delta: &str) -> Option<String> {
+        self.buf.push_str(delta);
+        let want = if self.sent == 0 { 12 } else { PIECE_CHARS };
+        // The last place a sentence ends: . ! ? … followed by a space (so "3.5" and a still-unfinished word don't count).
+        let chars: Vec<(usize, char)> = self.buf.char_indices().collect();
+        let cut = chars.windows(2).rev().find(|w| matches!(w[0].1, '.' | '!' | '?' | '…') && w[1].1.is_whitespace()).map(|w| w[1].0)?;
+        if self.buf[..cut].trim().chars().count() < want {
+            return None;
+        }
+        // The first piece is one sentence only: the earliest ending that makes it long enough.
+        let cut = if self.sent == 0 {
+            chars.windows(2).find(|w| matches!(w[0].1, '.' | '!' | '?' | '…') && w[1].1.is_whitespace() && self.buf[..w[1].0].trim().chars().count() >= want).map(|w| w[1].0).unwrap_or(cut)
+        } else {
+            cut
+        };
+        let piece = self.buf[..cut].trim().to_string();
+        self.buf = self.buf[cut..].to_string();
+        self.sent += 1;
+        Some(piece)
+    }
+
+    /// What is left when the answer ends.
+    pub(crate) fn rest(&mut self) -> Option<String> {
+        let piece = std::mem::take(&mut self.buf).trim().to_string();
+        (!piece.is_empty()).then_some(piece)
+    }
+}
+
+/// A piece of an answer, as it is written (`chat-piece` event). `id` is the request it belongs to.
+#[derive(Serialize, Clone)]
+struct ChatPiece {
+    id: u64,
+    text: String,
+}
+
+/// Answer plain talk. The answer is sent piece by piece as `chat-piece` events while it is written, and
+/// returned whole at the end.
+#[tauri::command]
+pub async fn ai_chat(app: AppHandle, text: String, spoken: Option<bool>, id: u64) -> Result<String, String> {
+    use tauri::Emitter;
+    let text = text.trim().to_string();
+    let spoken = spoken.unwrap_or(false);
+    let (system, prompt) = chat_prompt(&text, spoken);
+    let started = std::time::Instant::now();
+    let mut first: Option<f64> = None;
+    let mut pieces = Pieces::default();
+    let answer = crate::brain::chat_stream(&system, &prompt, None, if spoken { 220 } else { 420 }, |delta| {
+        if let Some(piece) = pieces.push(delta) {
+            first.get_or_insert_with(|| started.elapsed().as_secs_f64());
+            let _ = app.emit("chat-piece", ChatPiece { id, text: piece });
+        }
+        true
+    })
+    .await?;
+    if let Some(piece) = pieces.rest() {
+        let _ = app.emit("chat-piece", ChatPiece { id, text: piece });
+    }
+    crate::diag::log(&format!(
+        "chat: {} characters in {:.1}s, first sentence after {:.1}s",
+        answer.chars().count(),
+        started.elapsed().as_secs_f64(),
+        first.unwrap_or_else(|| started.elapsed().as_secs_f64())
+    ));
+    if answer.is_empty() {
+        return Err("I didn't come up with an answer. Ask me again?".into());
+    }
+    crate::memory::turn(&text, &answer);
+    Ok(answer)
+}
+
+/// Does the start of the router's reply already say the request is talk? (`{"intent":"chat"`, however it is spaced.)
+fn says_chat(start: &str) -> bool {
+    let s: String = start.chars().filter(|c| !c.is_whitespace()).take(40).collect();
+    s.starts_with(r#"{"intent":"chat""#)
 }
 
 /// Your message with what Bond knows around it (memory.rs).
@@ -1329,7 +1487,14 @@ mod eval {
                 let t = std::time::Instant::now();
                 let reply = complete(&sys, &prompt, None, Some(&schema)).await;
                 let secs = t.elapsed().as_secs_f64();
-                let v = reply.as_deref().map_err(|e| e.clone()).and_then(json_in).unwrap_or(Value::Null);
+                let mut v = reply.as_deref().map_err(|e| e.clone()).and_then(json_in).unwrap_or(Value::Null);
+                // Talk is answered by the talking instructions, as in the app (ai_chat).
+                if v["intent"] == "chat" && v["reply"].as_str().unwrap_or("").is_empty() {
+                    let (cs, cp) = chat_prompt(said, *spoken);
+                    if let Ok(a) = crate::brain::chat(&cs, &cp, None, None, 220).await {
+                        v["reply"] = json!(a);
+                    }
+                }
                 let good = ok(&v);
                 right += good as i32;
                 println!("{} {secs:.1}s {name:<17} “{said}” → {}", if good { "✓" } else { "✗" }, serde_json::to_string(&v).unwrap_or_default().chars().take(260).collect::<String>());
@@ -1612,6 +1777,109 @@ mod eval {
             m.retain(|k, x| k != "intent" && !(x.is_string() && x.as_str() == Some("")) && x != &json!([]) && x != &json!(false));
         }
         o.to_string().chars().take(160).collect()
+    }
+}
+
+#[cfg(test)]
+mod talk_tests {
+    use super::*;
+
+    /// Feed an answer a few characters at a time, as the engine writes it.
+    fn pieces_of(answer: &str) -> Vec<String> {
+        let mut p = Pieces::default();
+        let chars: Vec<char> = answer.chars().collect();
+        let mut out: Vec<String> = chars.chunks(3).filter_map(|c| p.push(&c.iter().collect::<String>())).collect();
+        out.extend(p.rest());
+        out
+    }
+
+    #[test]
+    fn the_first_sentence_goes_out_alone_and_the_rest_in_longer_pieces() {
+        let answer = "I'm doing well, thanks. Version 3.5 is out… or so I hear! The rest of this answer runs on for a while so that it has to be cut somewhere sensible. It keeps going with another sentence here. And one more to pass the limit for a piece. Then the end";
+        let got = pieces_of(answer);
+        assert_eq!(got[0], "I'm doing well, thanks.", "he starts talking after one sentence");
+        assert!(got.len() >= 3, "{got:?}");
+        assert!(got[1..got.len() - 1].iter().all(|p| p.chars().count() >= PIECE_CHARS), "later pieces are long enough to sound natural: {got:?}");
+        assert!(got.iter().all(|p| !p.contains("3.") || p.contains("3.5")), "a number is never cut at its point");
+        assert!(got.last().unwrap().ends_with("Then the end"), "what is left comes out at the end");
+        assert_eq!(got.join(" "), answer, "nothing is lost or repeated");
+    }
+
+    #[test]
+    fn the_router_is_stopped_as_soon_as_it_says_talk() {
+        assert!(says_chat(r#"{"intent":"chat","te"#));
+        assert!(says_chat(r#"{ "intent": "chat","#));
+        assert!(!says_chat(r#"{"intent":"cha"#), "not until the word is whole");
+        assert!(!says_chat(r#"{"intent":"task","text":"","reply":"let's chat"#));
+    }
+
+    /// The real thing, timed: cargo test --lib talk_tests::talk_live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn talk_live() {
+        let local = std::env::var("LOCALAPPDATA").expect("LOCALAPPDATA");
+        crate::brain::use_dir(std::path::Path::new(&local).join("com.selfglance.app").join("brain"));
+        let sys = router_prompt(true, "Now: Thursday 2026-10-08 21:00 (the user's local time). OS: Windows.");
+        let schema = router_schema_for(false);
+        tauri::async_runtime::block_on(async {
+            crate::brain::brain_warm().await.expect("brain starts");
+            crate::brain::prime(&sys).await.unwrap();
+            for said in ["The day was very rough, I guess.", "why is the sky blue", "who are you", "open notepad", "pick something uh like while I am talking to you I'm still pressing this button"] {
+                let t = std::time::Instant::now();
+                let mut seen = String::new();
+                let mut talk = false;
+                let r = crate::brain::chat_stream(&sys, said, Some(&schema), 1024, |d| {
+                    seen.push_str(d);
+                    talk = says_chat(&seen);
+                    !talk
+                })
+                .await
+                .unwrap();
+                let routed = t.elapsed().as_secs_f64();
+                if !talk {
+                    println!("{said:?}: routed in {routed:.1}s → {r}");
+                    continue;
+                }
+                let (cs, cp) = chat_prompt(said, true);
+                let (t, mut first, mut p) = (std::time::Instant::now(), None, Pieces::default());
+                let a = crate::brain::chat_stream(&cs, &cp, None, 220, |d| {
+                    if p.push(d).is_some() {
+                        first.get_or_insert_with(|| t.elapsed().as_secs_f64());
+                    }
+                    true
+                })
+                .await
+                .unwrap();
+                println!("{said:?}: talk after {routed:.1}s, first sentence +{:.1}s, all +{:.1}s → {a}", first.unwrap_or(t.elapsed().as_secs_f64()), t.elapsed().as_secs_f64());
+                crate::brain::prime(&sys).await.unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn a_short_answer_is_one_piece() {
+        assert_eq!(pieces_of("Sure."), vec!["Sure."]);
+        assert_eq!(pieces_of("Hi! I'm good."), vec!["Hi! I'm good."]);
+        assert!(pieces_of("   ").is_empty());
+    }
+
+    #[test]
+    fn talk_gets_its_own_instructions_without_the_command_list() {
+        let (system, prompt) = chat_prompt("how are you", true);
+        assert!(system.contains("one to three short sentences") && !system.contains("LENGTH") && !system.contains("OS_NAME"));
+        assert!(!system.contains("open_app") && !system.contains("OBS"), "the router's actions and examples stay out of the talk");
+        assert!(prompt.ends_with("The user says (spoken, so words may be misheard): how are you"));
+        assert!(chat_prompt("how are you", false).0.contains("at most six sentences"));
+    }
+
+    #[test]
+    fn the_router_leaves_talk_to_the_talking_instructions() {
+        let p = router_prompt(true, "");
+        assert!(p.contains(r#"reply = "": Bond answers these himself"#));
+        // Every chat example leaves the reply empty (the one that says what he can't do is the non-advanced one).
+        for line in STARTER_EXAMPLES.lines().filter(|l| l.contains(r#""intent":"chat""#)) {
+            assert!(line.contains(r#""reply":"""#), "{line}");
+        }
     }
 }
 

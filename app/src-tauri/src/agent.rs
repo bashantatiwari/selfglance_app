@@ -236,6 +236,7 @@ static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::ne
 
 #[tauri::command]
 pub fn agent_cancel() {
+    crate::brain::cancel_stream(); // and stop an answer he is in the middle of saying
     CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 

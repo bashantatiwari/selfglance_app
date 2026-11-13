@@ -486,3 +486,102 @@ pub async fn chat(system: &str, prompt: &str, image: Option<&str>, schema: Optio
     alive(); // a long answer counts as use
     Ok(v["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string())
 }
+
+/// Set by "stop": the answer being streamed is dropped, which also stops the engine writing it.
+static STREAM_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Stop the answer that is streaming now, if any.
+pub fn cancel_stream() {
+    STREAM_CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// One chat turn in plain text, handed over as it is written: `on_text` gets each new bit, so Bond can
+/// start speaking the first sentence while the rest is still coming. Returns the whole answer. `schema`
+/// forces the reply's shape as in `chat`; `on_text` returns false to stop early.
+pub async fn chat_stream(system: &str, prompt: &str, schema: Option<&Value>, max_tokens: u32, mut on_text: impl FnMut(&str) -> bool) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+    let port = port().await?;
+    STREAM_CANCEL.store(false, Ordering::SeqCst);
+    let mut body = json!({
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_tokens,
+        "stream": true,
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "chat_template_kwargs": {"enable_thinking": false},
+    });
+    if let Some(s) = schema {
+        body["response_format"] = json!({"type": "json_schema", "json_schema": {"name": "reply", "schema": s}});
+        body["temperature"] = json!(0.0);
+    }
+    let mut res = reqwest::Client::new().post(format!("http://127.0.0.1:{port}/v1/chat/completions")).timeout(Duration::from_secs(180)).json(&body).send().await.map_err(|e| format!("Bond's brain didn't answer: {e}"))?;
+    if !res.status().is_success() {
+        let v: Value = res.json().await.unwrap_or(Value::Null);
+        return Err(format!("Bond's brain had a problem: {}", v["error"]["message"].as_str().unwrap_or("request failed")));
+    }
+    let mut all = String::new();
+    let mut pending: Vec<u8> = Vec::new();
+    'read: while let Some(chunk) = res.chunk().await.map_err(|e| format!("Bond's brain stopped mid-answer: {e}"))? {
+        if STREAM_CANCEL.load(Ordering::SeqCst) {
+            break; // dropping the response closes the connection, and the engine stops writing
+        }
+        pending.extend_from_slice(&chunk);
+        // The answer arrives as lines of "data: {json}"; a line may be split across chunks.
+        while let Some(end) = pending.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            match stream_delta(&String::from_utf8_lossy(&line)) {
+                Delta::Text(t) => {
+                    all.push_str(&t);
+                    // "Enough": the caller has what it needs, so the engine stops writing.
+                    if !on_text(&t) {
+                        break 'read;
+                    }
+                }
+                Delta::Done => break 'read,
+                Delta::Nothing => {}
+            }
+        }
+    }
+    alive();
+    Ok(all.trim().to_string())
+}
+
+#[derive(Debug, PartialEq)]
+enum Delta {
+    Text(String),
+    Done,
+    Nothing,
+}
+
+/// What one line of the engine's stream carries.
+fn stream_delta(line: &str) -> Delta {
+    let Some(data) = line.trim().strip_prefix("data:") else { return Delta::Nothing };
+    let data = data.trim();
+    if data == "[DONE]" {
+        return Delta::Done;
+    }
+    match serde_json::from_str::<Value>(data).ok().and_then(|v| v["choices"][0]["delta"]["content"].as_str().map(String::from)) {
+        Some(t) if !t.is_empty() => Delta::Text(t),
+        _ => Delta::Nothing,
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_engines_stream_lines() {
+        assert_eq!(stream_delta(r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#), Delta::Text("Hel".into()));
+        assert_eq!(stream_delta("data: {\"choices\":[{\"delta\":{\"content\":\" lo\"}}]}\r\n"), Delta::Text(" lo".into()));
+        assert_eq!(stream_delta(r#"data: {"choices":[{"delta":{"role":"assistant","content":null}}]}"#), Delta::Nothing);
+        assert_eq!(stream_delta(r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#), Delta::Nothing);
+        assert_eq!(stream_delta(""), Delta::Nothing);
+        assert_eq!(stream_delta(": keep-alive"), Delta::Nothing);
+        assert_eq!(stream_delta("data: [DONE]"), Delta::Done);
+    }
+}

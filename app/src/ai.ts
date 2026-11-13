@@ -322,6 +322,41 @@ export async function speak(text: string) {
   }
 }
 
+/** Plain talk: the answer arrives piece by piece as `chat-piece` events (id = this request), then whole. */
+export const aiChat = (text: string, spoken: boolean, id: number) => invoke<string>("ai_chat", { text, spoken, id });
+
+/**
+ * Speak an answer while it is still being written: each piece is said in order, the next one made
+ * ready while one plays. `end()` resolves when the last piece has been said (or he was stopped).
+ */
+export function speakStream(): { push(text: string): void; end(): Promise<void> } {
+  stopSpeaking();
+  const token = speakToken;
+  speaking = true;
+  let made: Promise<unknown> = Promise.resolve(); // one piece is synthesized at a time
+  let said: Promise<void> = Promise.resolve();
+  return {
+    push(piece: string) {
+      const text = speakable(piece);
+      if (!text || token !== speakToken) return;
+      const own = inTauri && loadSettings().voice === "bond";
+      const { voiceId, voiceSpeed } = loadSettings();
+      const wav = own ? (made = made.then(() => (token === speakToken ? voiceSay(text, voiceId, voiceSpeed) : null)).catch(() => null)) : Promise.resolve(null);
+      said = said.then(async () => {
+        if (token !== speakToken) return;
+        const b64 = (await wav) as string | null;
+        if (token !== speakToken) return;
+        if (b64) await play(b64, token).catch(() => {});
+        else await systemVoice(text);
+      });
+    },
+    async end() {
+      await said;
+      if (token === speakToken) speaking = false;
+    },
+  };
+}
+
 async function speakWith(text: string, token: number) {
   const choice = loadSettings().voice;
   if (inTauri && choice === "bond") {
