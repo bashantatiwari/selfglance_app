@@ -115,6 +115,10 @@ body,
 }
 
 /* A confirmation ("Logged ✓", "Opened Spotify"): calmer and longer-lived than "Hey!". */
+.hey.note.long {
+  animation-duration: 6.5s;
+}
+
 .hey.note {
   max-width: 300px;
   font-size: 16px;

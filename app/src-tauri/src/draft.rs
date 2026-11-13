@@ -46,6 +46,8 @@ pub struct Draft {
     pub message: String,
     /// The text on screen was read to answer a conversation.
     pub used_screen: bool,
+    /// A question to ask first when the draft needs a fact nobody has given ("What is the channel about?"). Then `message` is empty.
+    pub need: String,
 }
 
 const SYSTEM: &str = r#"You write messages for the user to send, in their voice. They tell you what they want to say; you write the message itself.
@@ -56,12 +58,17 @@ Rules:
 - For an email, put a short subject line in "subject" (otherwise leave it empty) and leave the sign-off name out.
 - If they ask for a prompt for ChatGPT or another AI, the message is that prompt itself: specific, well structured, ready to paste (up to about 150 words), written to the AI, not to the user.
 - If conversation text from their screen is given, write a reply to its last message that does what they asked.
+- What you know about the user and the jobs they just did (a channel they created, a form they filled) is background: use it for the facts, never invent beyond it. If the message needs a fact (what a channel or project is about, a name, a date) that neither the request nor that background gives, do not guess: put ONE short question in "need" and leave "message" empty. Otherwise "need" is empty.
 
 Examples:
 Request: write me a msg stating it has been a lot of time and i am still waiting for the review i submitted the task on oct 19 and not able to get the review till now
-{"subject":"","message":"Hi, it's been a while since I submitted the task on October 19, and I'm still waiting for the review. Could you please check on it?"}
+{"subject":"","message":"Hi, it's been a while since I submitted the task on October 19, and I'm still waiting for the review. Could you please check on it?","need":""}
+Request: i need a bio for my youtube channel (nothing known about what the channel covers)
+{"subject":"","message":"","need":"What is your channel about?"}
+Request: i need a bio for my youtube channel (the user said: the channel is about budget travel in Nepal)
+{"subject":"","message":"Budget travel in Nepal, made simple. Real prices, honest routes and tips for exploring without overspending. New videos every week.","need":""}
 Request: write an email to my manager asking for friday off because of a family event
-{"subject":"Leave request for Friday","message":"Hi,\n\nI would like to request Friday off because of a family event.\n\nPlease let me know if that works.\n\nThank you."}"#;
+{"subject":"Leave request for Friday","message":"Hi,\n\nI would like to request Friday off because of a family event.\n\nPlease let me know if that works.\n\nThank you.","need":""}"#;
 
 fn schema() -> Value {
     json!({
@@ -69,8 +76,9 @@ fn schema() -> Value {
         "properties": {
             "subject": {"type": "string", "maxLength": 120},
             "message": {"type": "string", "maxLength": 1800},
+            "need": {"type": "string", "maxLength": 160},
         },
-        "required": ["subject", "message"],
+        "required": ["subject", "message", "need"],
         "additionalProperties": false,
     })
 }
@@ -78,18 +86,21 @@ fn schema() -> Value {
 /// Replies to what is on screen need to see it; a fresh message doesn't.
 fn needs_screen(request: &str) -> bool {
     let r = request.to_lowercase();
-    ["reply", "respond", "answer her", "answer him", "answer them", "this message", "this mail", "this email", "his message", "her message", "their message", "what should i say", "what should i write"]
+    ["reply", "respond", "answer her", "answer him", "answer them", "this message", "this mail", "this email", "his message", "her message", "their message", "what should i say", "what should i write", "what should i type", "what should i prompt", "what should i answer", "supposed to"]
         .iter()
         .any(|k| r.contains(k))
 }
 
-fn parse(reply: &str) -> Result<(String, String), String> {
+/// (subject, message, need): either a message, or the one question to ask first.
+fn parse(reply: &str) -> Result<(String, String, String), String> {
     let v: Value = serde_json::from_str(reply).map_err(|e| format!("unreadable draft: {e}"))?;
     let message = v["message"].as_str().unwrap_or("").trim().to_string();
-    if message.is_empty() {
+    let need = v["need"].as_str().unwrap_or("").trim().to_string();
+    if message.is_empty() && need.is_empty() {
         return Err("Bond couldn't write that one. Try saying a bit more about what you want to say.".into());
     }
-    Ok((v["subject"].as_str().unwrap_or("").trim().to_string(), message))
+    let need = if message.is_empty() { need } else { String::new() };
+    Ok((v["subject"].as_str().unwrap_or("").trim().to_string(), message, need))
 }
 
 /// Write a draft for a request. Replies read the conversation on screen first (text only, on
@@ -100,7 +111,8 @@ pub async fn ai_draft(request: String) -> Result<Draft, String> {
         return Err("Bond's brain isn't installed yet. Open the dashboard → Settings → Bond's brain.".into());
     }
     let request: String = request.chars().take(1500).collect();
-    let mut prompt = format!("Request: {request}");
+    let known = crate::memory::context_block();
+    let mut prompt = if known.is_empty() { format!("Request: {request}") } else { format!("What you know:\n{known}\n\nRequest: {request}") };
     let mut used_screen = false;
     if needs_screen(&request) {
         let window = active_win_pos_rs::get_active_window().map(|w| format!("{} {}", w.app_name, w.title)).unwrap_or_default();
@@ -115,8 +127,8 @@ pub async fn ai_draft(request: String) -> Result<Draft, String> {
         }
     }
     let reply = crate::brain::chat(SYSTEM, &prompt, None, Some(&schema()), 600).await?;
-    let (subject, message) = parse(&reply)?;
-    Ok(Draft { subject, message, used_screen })
+    let (subject, message, need) = parse(&reply)?;
+    Ok(Draft { subject, message, used_screen, need })
 }
 
 // --- Putting it in the box ---------------------------------------------------------------
@@ -318,8 +330,11 @@ mod tests {
 
     #[test]
     fn parses_a_draft_and_refuses_an_empty_one() {
-        assert_eq!(parse(r#"{"subject":" Leave ","message":" Hi, Friday off please. "}"#).unwrap(), ("Leave".to_string(), "Hi, Friday off please.".to_string()));
-        assert!(parse(r#"{"subject":"","message":"  "}"#).is_err());
+        assert_eq!(parse(r#"{"subject":" Leave ","message":" Hi, Friday off please. ","need":""}"#).unwrap(), ("Leave".to_string(), "Hi, Friday off please.".to_string(), String::new()));
+        assert!(parse(r#"{"subject":"","message":"  ","need":""}"#).is_err());
+        // Missing a fact: a question instead of a guess; a message wins when both come back.
+        assert_eq!(parse(r#"{"subject":"","message":"","need":"What is your channel about?"}"#).unwrap().2, "What is your channel about?");
+        assert_eq!(parse(r#"{"subject":"","message":"Hello","need":"Why?"}"#).unwrap().2, "");
         assert!(parse("nope").is_err());
     }
 
@@ -327,7 +342,9 @@ mod tests {
     fn the_prompt_examples_are_valid_json() {
         for line in SYSTEM.lines().filter(|l| l.starts_with("{\"subject\"")) {
             let v: Value = serde_json::from_str(line).expect("example is JSON");
-            assert!(v["message"].as_str().is_some_and(|m| !m.is_empty()));
+            // A message, or the one question that comes first (never both).
+            let (m, n) = (v["message"].as_str().unwrap_or(""), v["need"].as_str().unwrap_or(""));
+            assert!(m.is_empty() != n.is_empty(), "{line}");
         }
     }
 
@@ -438,7 +455,7 @@ mod tests {
             for r in requests {
                 let t = std::time::Instant::now();
                 let reply = crate::brain::chat(SYSTEM, &format!("Request: {r}"), None, Some(&schema()), 600).await;
-                println!("\n> {r}\n({:.1}s) {}", t.elapsed().as_secs_f64(), reply.map(|x| parse(&x).map(|(s, m)| format!("[{s}]\n{m}")).unwrap_or_else(|e| e)).unwrap_or_else(|e| e));
+                println!("\n> {r}\n({:.1}s) {}", t.elapsed().as_secs_f64(), reply.map(|x| parse(&x).map(|(s, m, n)| format!("[{s}]\n{m}{}", if n.is_empty() { String::new() } else { format!("\n(asks: {n})") })).unwrap_or_else(|e| e)).unwrap_or_else(|e| e));
             }
         });
     }

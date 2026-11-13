@@ -7,7 +7,7 @@
 //              2026-10-08, voice::tests::speak_speed).
 //   Listening  Parakeet TDT 0.6B v2 (int8): 0.24 s to understand a request, no word errors
 //              on Bond's own test sentences (voice::tests::bench).
-//              Push-to-talk: hold Ctrl+Alt+V, speak, let go; or click the mic in the Ask box
+//              Push-to-talk: hold Ctrl+Alt, speak, let go; or click the mic in the Ask box
 //              and he stops by himself when you go quiet. The microphone is open only then.
 //              What he hears goes through exactly the same path as typed requests.
 //
@@ -62,6 +62,7 @@ fn touch() {
 
 /// Free the voice and ears models' memory now. True if anything was loaded.
 pub fn unload() -> bool {
+    WARM.store(false, Ordering::SeqCst);
     let tts = TTS.lock().unwrap().take().is_some();
     let asr = ASR.lock().unwrap().take().is_some();
     *LAST_USED.lock().unwrap() = None;
@@ -158,6 +159,30 @@ pub(crate) fn untar(archive: &Path, target: &Path) -> Result<(), String> {
 // --- Speaking ----------------------------------------------------------------------------
 
 static TTS: Mutex<Option<Arc<sherpa_onnx::OfflineTts>>> = Mutex::new(None);
+/// The voice has loaded and said one throwaway word, so the first real answer isn't slow.
+static WARM: AtomicBool = AtomicBool::new(false);
+
+/// Get the voice ready while the user is still asking: loading it and its first sentence cost
+/// seconds, and they used to land between the text appearing and Bond speaking.
+#[tauri::command]
+pub async fn voice_warm() -> Result<(), String> {
+    if WARM.load(Ordering::SeqCst) || !installed() {
+        touch();
+        return Ok(());
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        let started = Instant::now();
+        match synthesize("Hi.", 0, 1.0) {
+            Ok(_) => {
+                WARM.store(true, Ordering::SeqCst);
+                crate::diag::log(&format!("voice warmed in {} ms", started.elapsed().as_millis()));
+            }
+            Err(e) => crate::diag::log(&format!("voice warm-up failed: {e}")),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
 
 fn tts() -> Result<Arc<sherpa_onnx::OfflineTts>, String> {
     touch();
@@ -263,14 +288,71 @@ pub(crate) fn resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
         .collect()
 }
 
+/// Downsampling with a low-pass filter. Plain interpolation lets sound above the new rate fold back into
+/// the speech band (a laptop microphone has plenty of it), which is what the recognizer then mishears.
+/// A windowed sinc keeps what is below the new Nyquist and removes the rest.
+pub(crate) fn resample_filtered(x: &[f32], from: u32, to: u32) -> Vec<f32> {
+    if from <= to || x.is_empty() {
+        return resample(x, from, to);
+    }
+    let ratio = from as f64 / to as f64;
+    let n = (x.len() as f64 / ratio) as usize;
+    let cut = 0.92 / ratio; // a little under the new Nyquist, as a fraction of the old one
+    let half = (8.0 / cut).ceil();
+    (0..n)
+        .map(|i| {
+            let p = i as f64 * ratio;
+            let c = p.round() as isize;
+            let (mut acc, mut sum) = (0f64, 0f64);
+            for j in (c - half as isize)..=(c + half as isize) {
+                if j < 0 || j as usize >= x.len() {
+                    continue;
+                }
+                let t = j as f64 - p;
+                if t.abs() > half {
+                    continue;
+                }
+                let a = std::f64::consts::PI * cut * t;
+                let sinc = if a.abs() < 1e-9 { 1.0 } else { a.sin() / a };
+                let hann = 0.5 + 0.5 * (std::f64::consts::PI * t / half).cos();
+                let w = cut * sinc * hann;
+                acc += w * x[j as usize] as f64;
+                sum += w;
+            }
+            if sum.abs() > 1e-9 { (acc / sum) as f32 } else { 0.0 }
+        })
+        .collect()
+}
+
+/// What the microphone recorded, ready for the recognizer: at its rate, and brought up to a good level
+/// when the microphone is quiet. The length and loudness go in the log, so a weak microphone shows up.
+pub(crate) fn prepare_mic(samples: &[f32], rate: u32) -> Vec<f32> {
+    let mut x = resample_filtered(samples, rate, ASR_RATE);
+    let peak = x.iter().fold(0f32, |m, s| m.max(s.abs()));
+    let level = (x.iter().map(|s| s * s).sum::<f32>() / x.len().max(1) as f32).sqrt();
+    crate::diag::log(&format!("voice: heard {:.1} s, peak {:.2}, level {:.3}", x.len() as f32 / ASR_RATE as f32, peak, level));
+    if peak > 0.01 {
+        let gain = (0.7 / peak).clamp(1.0, 10.0);
+        if gain > 1.05 {
+            for s in x.iter_mut() {
+                *s = (*s * gain).clamp(-1.0, 1.0);
+            }
+        }
+    }
+    x
+}
+
 pub(crate) static LISTENING: AtomicBool = AtomicBool::new(false);
+/// Set when the keys turned out to be another shortcut: what was recorded is thrown away, not answered.
+static CANCEL: AtomicBool = AtomicBool::new(false);
 /// Set to stop the recording (key released, or the click-to-talk heard silence).
 static STOP: AtomicBool = AtomicBool::new(false);
 
 /// Longest a single request can be.
-const MAX_LISTEN: Duration = Duration::from_secs(20);
-/// Click-to-talk: quiet this long after speaking ends it.
-pub(crate) const END_SILENCE: Duration = Duration::from_millis(1200);
+const MAX_LISTEN: Duration = Duration::from_secs(30);
+/// Click-to-talk: quiet this long after speaking ends it. Long enough for someone who talks slowly
+/// or stops to think; holding Ctrl+Alt has no such limit.
+pub(crate) const END_SILENCE: Duration = Duration::from_millis(2000);
 /// …or this long without any speech at all.
 const NO_SPEECH: Duration = Duration::from_secs(6);
 
@@ -282,22 +364,33 @@ pub fn start(app: AppHandle, hands_free: bool) {
         return; // already listening
     }
     STOP.store(false, Ordering::SeqCst);
+    CANCEL.store(false, Ordering::SeqCst);
     std::thread::spawn(move || {
         // "Listening…" only once sound is actually arriving (the microphone takes ~0.5 s to
         // start), so the cue is honest and the first words aren't lost.
         let ready = app.clone();
-        let result = record(hands_free, move || {
-            let _ = ready.emit("voice-state", "listening");
-        })
-        .and_then(|(samples, rate)| {
-            let _ = app.emit("voice-state", "thinking");
-            if samples.len() < (rate as usize) / 4 {
-                return Ok(String::new()); // a tap, not speech
-            }
-            transcribe(&samples, rate)
-        });
+        // A panic in the microphone or the recognizer must not leave LISTENING set: nothing could be heard again.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            record(hands_free, move || {
+                let _ = ready.emit("voice-state", "listening");
+            })
+            .and_then(|(samples, rate)| {
+                if CANCEL.load(Ordering::SeqCst) {
+                    return Ok(String::new());
+                }
+                let _ = app.emit("voice-state", "thinking");
+                if samples.len() < (rate as usize) / 4 {
+                    return Ok(String::new()); // a tap, not speech
+                }
+                transcribe(&prepare_mic(&samples, rate), ASR_RATE)
+            })
+        }))
+        .unwrap_or_else(|_| Err("Bond's ears ran into a problem. Try again.".to_string()));
         LISTENING.store(false, Ordering::SeqCst);
         let _ = app.emit("voice-state", "idle");
+        if CANCEL.swap(false, Ordering::SeqCst) {
+            return; // it was a different shortcut: nothing to say about it
+        }
         match result {
             Ok(text) => {
                 let _ = app.emit("voice-heard", text);
@@ -310,6 +403,12 @@ pub fn start(app: AppHandle, hands_free: bool) {
 }
 
 pub fn stop() {
+    STOP.store(true, Ordering::SeqCst);
+}
+
+/// Stop and throw away what was recorded (the keys were part of another shortcut).
+pub fn cancel() {
+    CANCEL.store(true, Ordering::SeqCst);
     STOP.store(true, Ordering::SeqCst);
 }
 
@@ -549,6 +648,55 @@ mod tests {
 
     /// Kokoro variants: model precision × threads.
     ///   BOND_VOICE_DIR=… cargo test --release --lib voice::tests::speak_speed -- --ignored --nocapture
+    /// A laptop microphone is quiet and hissy, with sound well above what the recognizer needs. Say lines,
+    /// push them through that, and see what the recognizer hears the old way (plain interpolation) and the
+    /// new way (prepare_mic). BOND_VOICE_DIR=%LOCALAPPDATA%\com.selfglance.app\voice
+    #[test]
+    #[ignore]
+    fn mic_path() {
+        let root = PathBuf::from(std::env::var("BOND_VOICE_DIR").expect("BOND_VOICE_DIR"));
+        use_dir(root);
+        let lines = [
+            "What is on my desktop?",
+            "Open the downloads folder.",
+            "Remind me in ten minutes to stretch.",
+            "Walk me through creating a YouTube channel.",
+            "What are my laptop specs?",
+            "Close all the notepad windows.",
+            "I need a bio for my channel.",
+            "Why is my laptop so slow right now?",
+        ];
+        let words = |t: &str| -> Vec<String> { t.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(String::from).collect() };
+        let (mut old_ok, mut new_ok, mut total) = (0, 0, 0);
+        let mut seed = 12345u32;
+        let mut noise = move || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / 8_388_608.0 - 1.0
+        };
+        for line in lines {
+            let (speech, rate) = synthesize(line, 18, 1.0).unwrap();
+            // To a 48 kHz microphone: quiet speech, hiss across the whole band, a low hum.
+            let up = resample(&speech, rate, 48_000);
+            let peak = up.iter().fold(0f32, |m, s| m.max(s.abs())).max(1e-6);
+            let mic: Vec<f32> = up.iter().enumerate().map(|(i, s)| s / peak * 0.06 + noise() * 0.012 + 0.004 * (i as f32 * 0.0131).sin()).collect();
+            let old = transcribe(&mic, 48_000).unwrap();
+            let new = transcribe(&prepare_mic(&mic, 48_000), ASR_RATE).unwrap();
+            let want = words(line);
+            let hit = |heard: &str| {
+                let h = words(heard);
+                want.iter().filter(|w| h.contains(w)).count()
+            };
+            let (o, n) = (hit(&old), hit(&new));
+            old_ok += o;
+            new_ok += n;
+            total += want.len();
+            println!("{line}
+   old {o}/{}: {old}
+   new {n}/{}: {new}", want.len(), want.len());
+        }
+        println!("WORDS HEARD: old {old_ok}/{total}, new {new_ok}/{total}");
+    }
+
     #[test]
     #[ignore]
     fn speak_speed() {
@@ -625,6 +773,19 @@ mod tests {
     }
 
     #[test]
+    fn filtered_downsampling_keeps_speech_and_drops_what_would_fold_back() {
+        let tone = |hz: f32| -> Vec<f32> { (0..48_000).map(|i| (2.0 * std::f32::consts::PI * hz * i as f32 / 48_000.0).sin()).collect() };
+        let rms = |x: &[f32]| (x[2000..x.len() - 2000].iter().map(|s| s * s).sum::<f32>() / (x.len() - 4000) as f32).sqrt();
+        let low = resample_filtered(&tone(1000.0), 48_000, 16_000);
+        assert_eq!(low.len(), 16_000);
+        assert!(rms(&low) > 0.65, "speech-band sound stays: {}", rms(&low));
+        // 12 kHz cannot exist at 16 kHz: plain interpolation folds it down to 4 kHz, the filter removes it.
+        let high = resample_filtered(&tone(12_000.0), 48_000, 16_000);
+        assert!(rms(&high) < 0.05, "above the new Nyquist it is gone: {}", rms(&high));
+        assert!(rms(&resample(&tone(12_000.0), 48_000, 16_000)) > 0.3, "the old way let it through");
+    }
+
+    #[test]
     fn resamples_to_the_right_length() {
         let x: Vec<f32> = (0..48_000).map(|i| (i as f32 / 10.0).sin()).collect();
         assert_eq!(resample(&x, 48_000, 16_000).len(), 16_000);
@@ -640,9 +801,48 @@ mod tests {
         assert!(!e.feed(&quiet, ms(30)));
         assert!(!e.feed(&loud, ms(600)));
         assert!(!e.feed(&quiet, ms(1000)));
-        assert!(e.feed(&quiet, ms(2300)), "1.2 s of quiet after speaking");
+        assert!(!e.feed(&quiet, ms(2300)), "1.3 s of quiet: someone who talks slowly is still thinking");
+        assert!(e.feed(&quiet, ms(3100)), "2 s of quiet after speaking");
         let mut never = Endpoint::default();
         assert!(!never.feed(&quiet, ms(3000)));
         assert!(never.feed(&quiet, ms(6100)), "no speech at all");
+    }
+}
+
+#[cfg(test)]
+mod tts_probe {
+    /// Awkward text through the real speech engine. A native failure kills the test process, so each
+    /// line is printed first: the last one shown is the culprit. BOND_VOICE_DIR=...\voice
+    /// cargo test --lib tts_probe -- --ignored --nocapture --test-threads=1
+    #[test]
+    #[ignore]
+    fn awkward_text() {
+        super::use_dir(std::path::PathBuf::from(std::env::var("BOND_VOICE_DIR").expect("BOND_VOICE_DIR")));
+        let long = "The window in front is Notepad and the screen shows a document with several lines of text. ".repeat(12);
+        let cases: Vec<(&str, String)> = vec![
+            ("plain", "You are looking at Notepad.".into()),
+            ("one dot", ".".into()),
+            ("one letter", "a".into()),
+            ("digits", "You have 3,189 characters and 12 windows, 4.5 GB free at 10:42.".into()),
+            ("url", "Open https://www.youtube.com/results?search_query=lofi+beats now.".into()),
+            ("path", r"Your file is in C:\Users\Lenovo\Documents\notes\final_v2.txt today.".into()),
+            ("symbols", "Press Ctrl+Alt+Del, then <Enter> & {save} [now] #1 @home 50% ~ ^ | / * =".into()),
+            ("quotes", "He said \u{201c}hello\u{201d} and she said \u{2018}no\u{2019} \u{2014} then left\u{2026}".into()),
+            ("emoji", "Great job \u{1F44D} you did it \u{2705}".into()),
+            ("unicode", "Caf\u{e9} na\u{ef}ve \u{4f60}\u{597d} \u{43f}\u{440}\u{438}\u{432}\u{435}\u{442} \u{928}\u{92e}\u{938}\u{94d}\u{924}\u{947}".into()),
+            ("long", long),
+            ("code", "fn main() { println!(\"hi\"); } // let x = vec![1,2,3];".into()),
+            ("only symbols", "-> ... ??? !!!".into()),
+            ("newlines", "Line one\nLine two\n\nLine three".into()),
+            ("whitespace", "   ".into()),
+        ];
+        for (name, text) in cases {
+            print!("{name} ... ");
+            use std::io::Write;
+            std::io::stdout().flush().ok();
+            let t = std::time::Instant::now();
+            let r = super::synthesize(&text, 18, 1.0);
+            println!("{} ({:.1}s)", match &r { Ok((s, _)) => format!("ok, {} samples", s.len()), Err(e) => format!("error: {e}") }, t.elapsed().as_secs_f64());
+        }
     }
 }

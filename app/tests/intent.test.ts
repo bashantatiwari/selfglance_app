@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { saidStop, spokenAnswer, understand, unsavedAnswer } from "../src/assistant/intent.ts";
+import { isGuideFollowUp, saidStop, spokenAnswer, understand, unsavedAnswer } from "../src/assistant/intent.ts";
 
 test("clearing out screenshots goes to delete, never straight to a command", () => {
   for (const q of ["delete my screenshots", "delete all my screenshots", "clear the screenshots folder", "remove all of my screenshot images", "get rid of my screenshots"]) {
@@ -166,6 +166,13 @@ test("a message to write is understood without the AI", () => {
   assert.equal(kind("can you help me write a follow-up email"), "draft");
   assert.equal(kind("what should I reply to this?"), "draft");
   assert.equal(kind("reply to her saying yes, thursday works"), "draft");
+  // in the middle of a guided job, these carry on with it
+  for (const s of ["Already I am already in Cloudflare dot com, now what's next?", "I'm already in Cloudflare.com, now what's next?", "now what", "what next?", "okay, what do I do now", "As for the instruction I have given you earlier, now what next?", "continue", "I did that"]) assert.ok(isGuideFollowUp(s), s);
+  for (const s of ["what should I reply to the terminal", "open notepad", "next week remind me to call Sam", "what is the weather", "I am in a meeting"]) assert.ok(!isGuideFollowUp(s), s);
+  // said in a longer sentence: text to put in the terminal's box, not a click-by-click guide
+  assert.equal(kind("I want to know what should I reply to the terminal on my right side."), "draft");
+  assert.equal(kind("I'm confused what am I supposed to give prompt to the command terminal."), "draft");
+  assert.equal(kind("Thank you, what should I type?"), "draft");
   assert.deepEqual(understand("write me a message to Sam saying hi"), { kind: "draft", request: "write me a message to Sam saying hi" });
   // text for a box that isn't a "message"
   assert.equal(kind("Write a prompt in the chatgpt stating that I want logo for selfglance and write it in a professional way"), "draft");
@@ -177,4 +184,110 @@ test("a message to write is understood without the AI", () => {
   assert.notEqual(kind("write a poem about rain"), "draft");
   assert.notEqual(kind("open slack"), "draft");
   assert.notEqual(kind("write a function in rust that reverses a string"), "draft");
+});
+
+test("a search can name the browser", () => {
+  const act = (s: string) => (understand(s) as { actions: { do: string; query?: string; browser?: string }[] } | null)?.actions[0];
+  assert.deepEqual(act("search standing desks in brave"), { do: "web_search", query: "standing desks", browser: "brave" });
+  assert.deepEqual(act("google best laptops on Chrome"), { do: "web_search", query: "best laptops", browser: "chrome" });
+  assert.deepEqual(act("in firefox, look up rust tutorials"), { do: "web_search", query: "rust tutorials", browser: "firefox" });
+  assert.deepEqual(act("open brave and search for lofi mix"), { do: "web_search", query: "lofi mix", browser: "brave" });
+  assert.deepEqual(act("search for cheap flights using microsoft edge"), { do: "web_search", query: "cheap flights", browser: "edge" });
+  // no browser named: the default one
+  assert.deepEqual(act("search for rust tutorials"), { do: "web_search", query: "rust tutorials" });
+});
+
+test("laptop specs are read from the machine, not answered with a command to copy", () => {
+  const first = (s: string) => (understand(s) as { actions: { do: string }[] } | null)?.actions?.[0]?.do;
+  for (const q of ["what are my laptop specs", "my laptop specification", "show me my pc configuration", "which gpu do i have", "what is my computer hardware?"]) {
+    assert.equal(first(q), "system_specs", q);
+  }
+  // how it is doing is the status, not the specs
+  assert.equal(first("how is my laptop"), "system_status");
+  assert.equal(first("how much battery do i have left"), "system_status");
+});
+
+test("Bond understands reminders and timers", async () => {
+  const { parseReminder } = await import("../src/assistant/remind.ts");
+  const now = new Date(2026, 9, 27, 15, 0, 0); // 3:00 pm
+  const mins = (s: string) => {
+    const r = parseReminder(s, now);
+    return r ? { m: Math.round((r.at - now.getTime()) / 60_000), text: r.text } : null;
+  };
+  assert.deepEqual(mins("remind me in 10 minutes to call mom"), { m: 10, text: "call mom" });
+  assert.deepEqual(mins("Remind me to stretch in 20 min"), { m: 20, text: "stretch" });
+  assert.deepEqual(mins("in an hour remind me to check the oven"), { m: 60, text: "check the oven" });
+  assert.deepEqual(mins("remind me in half an hour about the call"), { m: 30, text: "the call" });
+  assert.deepEqual(mins("set a timer for 5 minutes"), { m: 5, text: "Your timer is up" });
+  assert.deepEqual(mins("remind me at 5pm to submit the report"), { m: 120, text: "submit the report" });
+  assert.deepEqual(mins("remind me to take a walk at 3:30 pm"), { m: 30, text: "take a walk" });
+  // a time that has already passed today means tomorrow
+  assert.deepEqual(mins("remind me at 2pm to call Sam"), { m: 23 * 60, text: "call Sam" });
+  // not reminders
+  assert.equal(parseReminder("what is a reminder", now), null);
+  assert.equal(parseReminder("remind me in 10 minutes", now), null);
+  assert.equal(parseReminder("open notepad", now), null);
+  // through understand(): a reminder is its own kind
+  assert.equal(understand("remind me in 10 minutes to stretch")?.kind, "remind");
+});
+
+test("closing every window of a program names the program", () => {
+  const first = (s: string) => (understand(s) as { actions: { do: string; name?: string }[] } | null)?.actions?.[0];
+  assert.deepEqual(first("close all the notepad windows"), { do: "close_app", name: "notepad" });
+  assert.deepEqual(first("shut every chrome window"), { do: "close_app", name: "chrome" });
+  assert.deepEqual(first("Close all my notepad windows please"), { do: "close_app", name: "notepad" });
+  // not a program
+  assert.notEqual(first("close all windows")?.do, "close_app");
+  assert.notEqual(first("close everything")?.do, "close_app");
+});
+
+test("reminders: whole words, tomorrow, and a time with no am or pm", async () => {
+  const { parseReminder, whenText } = await import("../src/assistant/remind.ts");
+  const now = new Date(2026, 9, 27, 15, 0, 0); // 3:00 pm
+  const hours = (s: string) => {
+    const r = parseReminder(s, now);
+    return r ? { h: Math.round(((r.at - now.getTime()) / 3_600_000) * 10) / 10, text: r.text } : null;
+  };
+  // "tomorrow" is a day, not "to" + "morrow"
+  assert.deepEqual(hours("remind me at 9am tomorrow to call sam"), { h: 18, text: "call sam" });
+  assert.deepEqual(hours("remind me to call sam at 9am tomorrow"), { h: 18, text: "call sam" });
+  assert.deepEqual(hours("remind me tomorrow at 9am to call sam"), { h: 18, text: "call sam" });
+  // "at 5" at 3 pm means 5 pm today, not 5 am tomorrow
+  assert.deepEqual(hours("remind me at 5 to call sam"), { h: 2, text: "call sam" });
+  assert.deepEqual(hours("remind me at 2 to call sam"), { h: 23, text: "call sam" });
+  assert.equal(whenText(parseReminder("remind me at 9am tomorrow to call sam", now)!.at, now.getTime()), "tomorrow at 9:00 AM");
+  assert.equal(whenText(parseReminder("remind me at 5pm to call sam", now)!.at, now.getTime()), "at 5:00 PM");
+  // "tomorrow" in a goal sentence is not a reminder and not a focus goal either
+  assert.equal(understand("tomorrow I'll be late")?.kind ?? "none", "none");
+  assert.notEqual(understand("tomorrow, remind me to call mom")?.kind, "goal");
+});
+
+test("planning the day is understood without the AI", () => {
+  const plan = (s: string) => understand(s);
+  assert.deepEqual(plan("Plan my day: three videos, research a channel"), { kind: "plan", text: "three videos, research a channel" });
+  assert.deepEqual(plan("plan my day"), { kind: "plan", text: "" });
+  assert.deepEqual(plan("add to my plan: study transformers at 5pm"), { kind: "plan", text: "study transformers at 5pm" });
+  assert.deepEqual(plan("what's my plan"), { kind: "plan", text: "" });
+  assert.notEqual(plan("how do I plan my day better")?.kind, "plan");
+});
+
+test("Windows jobs from today's test go to guide mode, even with speech noise in front", () => {
+  const guide = { kind: "screen", mode: "guide" };
+  for (const q of [
+    "I want to delete an app called Hey Clicky from my laptop",
+    "uninstall OBS",
+    "help me uninstall Hey Clicky",
+    "And help me connect to a Wi-Fi network.",
+    "Show me the self glance icon on my desktop.",
+    "Ow me the Self Glance icon on my desktop",
+    "How do I stop Opera fr from being startup at Windows when open?",
+    "where is the bluetooth button",
+    "Won't help me turn on dark mode",
+  ]) {
+    assert.deepEqual(understand(q), guide, q);
+  }
+  for (const q of ["npm uninstall lodash", "how do I uninstall a pip package", "I want to build a startup", "delete my screenshots", "show me my plan"]) {
+    assert.notDeepEqual(understand(q), guide, q);
+  }
+  assert.deepEqual(understand("Hey Bon, open Zed"), { kind: "do", actions: [{ do: "open_app", name: "Zed" }] });
 });

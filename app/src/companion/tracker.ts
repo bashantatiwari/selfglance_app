@@ -30,6 +30,32 @@ export function loadDay(d = new Date()): Segment[] {
   }
 }
 
+export const LOG_EVENT = "selfglance:log";
+
+/** Take stretches out of a day's record because you chose to forget them. Returns what went, for Undo. */
+export function forgetSegments(d: Date, match: (s: Segment) => boolean): Segment[] {
+  const all = loadDay(d);
+  const gone = all.filter(match);
+  if (!gone.length) return [];
+  try {
+    localStorage.setItem(dayKey(d), JSON.stringify(all.filter((s) => !match(s))));
+  } catch {
+    return [];
+  }
+  window.dispatchEvent(new Event(LOG_EVENT));
+  return gone;
+}
+
+/** Put back what forgetSegments took out. */
+export function restoreSegments(d: Date, back: Segment[]) {
+  try {
+    localStorage.setItem(dayKey(d), JSON.stringify([...loadDay(d), ...back].sort((a, b) => a.start - b.start)));
+  } catch {
+    /* storage full or unavailable */
+  }
+  window.dispatchEvent(new Event(LOG_EVENT));
+}
+
 const BROWSER_SUFFIX = /\s[-–—]\s(Google Chrome|Mozilla Firefox|Firefox|Microsoft​?\s?Edge|Brave|Opera|Vivaldi|Chromium|Arc|Safari)$/i;
 const VIDEO_SUFFIX = /\s[-–—]\s(YouTube|Netflix|Prime Video|Disney\+|Hotstar|JioCinema|Twitch|Vimeo)$/i;
 const EDITOR_APPS = /^(code|code - insiders|cursor|windsurf|zed|sublime_text|notepad\+\+|devenv)$/i;
@@ -56,6 +82,13 @@ export function describe(a: Activity, ctx: Context): string {
 export class Tracker {
   private day = dayKey();
   private segments: Segment[] = loadDay();
+
+  constructor() {
+    // The dashboard (another window) forgot something: keep what it left, or it would be written straight back.
+    window.addEventListener("storage", (e) => {
+      if (e.key === this.day) this.segments = loadDay();
+    });
+  }
 
   /** Call every few seconds. `active` = you're actually using the laptop (or watching). */
   tick(a: Activity | null, ctx: Context, active: boolean) {

@@ -36,6 +36,9 @@ jobs:
 
       # Don't ship what the tests say is broken.
       - run: npm test
+      - run: npx tsc --noEmit
+      - run: cargo test --lib
+        working-directory: app/src-tauri
 
       - uses: tauri-apps/tauri-action@v0
         env:

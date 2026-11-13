@@ -9,6 +9,8 @@ export interface Idea {
   at: number;
   /** Ticked off (older versions: "started"). */
   done: boolean;
+  /** Notes written about the idea, shown only when it is opened. */
+  note?: string;
 }
 
 /** Newest first. */

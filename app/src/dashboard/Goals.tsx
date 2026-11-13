@@ -26,6 +26,7 @@ import {
 import { loadSettings, saveSettings, type Settings } from "../settings";
 import { fmt } from "./analyze";
 import { toast, Toggle } from "./ui";
+import Plan, { TomorrowPlan } from "./Plan";
 
 const VERDICT_NAME: Record<Verdict, string> = { on: "On goal", off: "Off goal", neutral: "Neutral", unsure: "Not sure" };
 const FITS: { id: Fit; name: string }[] = [
@@ -49,11 +50,16 @@ export function useToday() {
   return segs;
 }
 
-/** The goals for today, with a form to change them. */
-export function useGoals() {
-  const [goals, setGoals] = useState(() => loadGoals());
+/** The goals for today (or `daysAhead` days on), with a form to change them. The day is worked out on every use, so a page left open past midnight stays right. */
+export function useGoals(daysAhead = 0) {
+  const dayOf = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + daysAhead);
+    return d;
+  };
+  const [goals, setGoals] = useState(() => loadGoals(dayOf()));
   useEffect(() => {
-    const read = () => setGoals(loadGoals());
+    const read = () => setGoals(loadGoals(dayOf()));
     window.addEventListener("focus", read);
     const t = window.setInterval(read, 4000); // Bond may have set it from his card
     return () => {
@@ -62,13 +68,13 @@ export function useGoals() {
     };
   }, []);
   const update = (next: string[]) => {
-    saveGoals(next);
-    setGoals(loadGoals());
+    saveGoals(next, dayOf());
+    setGoals(loadGoals(dayOf()));
   };
   return { goals, update };
 }
 
-export function GoalForm(props: { goals: string[]; update: (g: string[]) => void; compact?: boolean }) {
+export function GoalForm(props: { goals: string[]; update: (g: string[]) => void; compact?: boolean; placeholder?: string }) {
   const [draft, setDraft] = useState("");
   const full = props.goals.length >= MAX_GOALS;
   const add = () => {
@@ -102,7 +108,7 @@ export function GoalForm(props: { goals: string[]; update: (g: string[]) => void
             className="capture-input"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={props.goals.length ? "Add another (optional)" : "What's your focus today? e.g. finish the micrograd tutorial"}
+            placeholder={props.goals.length ? "Add another (optional)" : (props.placeholder ?? "What's your focus today? e.g. finish the micrograd tutorial")}
             aria-label="Focus for today"
             maxLength={120}
           />
@@ -120,7 +126,12 @@ export function GoalBar(props: { on: number; off: number; other: number; scale?:
   const total = props.on + props.off + props.other;
   if (total <= 0) return <div className="goalbar blank" aria-hidden />;
   return (
-    <div className="goalbar" role="img" aria-label={`On goal ${fmt(props.on)}, off goal ${fmt(props.off)}, other ${fmt(props.other)}`} style={props.scale ? { width: `${Math.max(4, (total / props.scale) * 100)}%` } : undefined}>
+    <div
+      className="goalbar"
+      role="img"
+      aria-label={`On goal ${fmt(props.on)}, off goal ${fmt(props.off)}, other ${fmt(props.other)}`}
+      style={props.scale ? { width: `${Math.max(4, (total / props.scale) * 100)}%` } : undefined}
+    >
       {props.on > 0 && <i className="on" style={{ flexGrow: props.on }} />}
       {props.off > 0 && <i className="off" style={{ flexGrow: props.off }} />}
       {props.other > 0 && <i className="other" style={{ flexGrow: props.other }} />}
@@ -165,6 +176,7 @@ export function GoalTile(props: { segs: Segment[]; date: Date; today: boolean; o
 export default function Goals() {
   const segs = useToday();
   const { goals, update } = useGoals();
+  const { goals: nextGoals, update: updateNext } = useGoals(1);
   const [version, setVersion] = useState(0);
   const bump = () => setVersion((v) => v + 1);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
@@ -206,142 +218,184 @@ export default function Goals() {
   };
 
   const maxDay = Math.max(...review.days.map((d) => d.t.on + d.t.off + d.t.other), 1);
-  const tracked = t.on + t.off + t.other;
+  // One page, three questions: what now, what next, how did it go. Sunday's review opens on the week.
+  const [tab, setTab] = useState<PlanTab>(() => (reviewDue(loadState(), new Date()) ? "week" : "today"));
 
   return (
     <>
       <header className="page-head">
         <div>
-          <h1>Goals</h1>
-          <p className="muted">One line for the day. Bond tracks how it's going, tells you if you drift, and looks back on Sunday morning.</p>
+          <h1>Plan</h1>
+          <p className="muted">{TABS.find((x) => x.id === tab)!.sub}</p>
+        </div>
+        <div className="tabs" role="tablist" aria-label="Plan">
+          {TABS.map((x) => (
+            <button key={x.id} role="tab" aria-selected={tab === x.id} className={tab === x.id ? "on" : ""} onClick={() => setTab(x.id)}>
+              {x.name}
+            </button>
+          ))}
         </div>
       </header>
 
-      <section className="section">
-        <div className="section-head">
-          <h2>Today's focus</h2>
-        </div>
-        <GoalForm goals={goals} update={update} />
-        {goals.length > 0 && (
-          <div className="goal-today">
-            <GoalBar {...t} />
-            <p className="goal-numbers">
-              <b>{fmt(t.on)}</b> on goal · <b>{fmt(t.off)}</b> off · <b>{fmt(t.other)}</b> other
-              {tracked > 0 && t.on + t.off > 5 * 60_000 && <span className="muted"> · {Math.round((t.on / (t.on + t.off)) * 100)}% of the time I could tell</span>}
-            </p>
-          </div>
-        )}
-      </section>
-
-      {goals.length > 0 && rows.length > 0 && (
-        <section className="section">
-          <div className="section-head">
-            <h2>What counted</h2>
-          </div>
-          <p className="muted goal-hint">I only see app names and window titles, so this is an estimate. Tap On, Off or Neutral to correct me — I'll remember.</p>
-          <ul className="goal-rows">
-            {rows.map((r) => (
-              <li key={r.key}>
-                <div className="gr-main">
-                  <span className="gr-label">{r.label}</span>
-                  <small className="muted">
-                    {r.app} · {fmt(r.ms)}
-                  </small>
-                </div>
-                <span className={`fit fit-${r.v}`}>{VERDICT_NAME[r.v]}</span>
-                <span className="fit-pick" role="group" aria-label={`Count “${r.label}” as`}>
-                  {FITS.map((f) => (
-                    <button key={f.id} className={fixes[r.key] === f.id ? "on" : ""} aria-pressed={fixes[r.key] === f.id} onClick={() => correct(r.key, fixes[r.key] === f.id ? null : f.id)}>
-                      {f.name}
-                    </button>
-                  ))}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
+      {tab === "tomorrow" && (
+        <>
+          <section className="section">
+            <div className="section-head">
+              <h2>Tomorrow's focus</h2>
+            </div>
+            <GoalForm goals={nextGoals} update={updateNext} placeholder="e.g. study diffusion transformers" />
+          </section>
+          <TomorrowPlan />
+        </>
       )}
 
-      <section className="section">
-        <div className="section-head">
-          <h2>Your week</h2>
-        </div>
-        {review.goalDays === 0 ? (
-          <div className="week-empty">
-            <div className="week-dots" aria-hidden>
-              {review.days.map((d) => (
-                <span key={d.id}>
-                  <i />
-                  <small>{d.date.toLocaleDateString([], { weekday: "short" })}</small>
-                </span>
-              ))}
+      {tab === "today" && (
+        <>
+          <section className="section goal-hero">
+            <div className="section-head">
+              <h2>Focus</h2>
             </div>
-            <p>
-              <b>No focus set in the last seven days.</b>
-            </p>
-            <p className="muted">Set one line each morning, at the top of this page or by telling Bond “goal: …”. On Sunday this shows how each day went and what to try next.</p>
-          </div>
-        ) : (
-          <>
-            <p className="muted goal-hint">The last seven days. Bond brings this up on Sunday morning with a few ideas for the week ahead.</p>
-            <ul className="goal-days">
-              {review.days.map((d) => (
-                <li key={d.id} className={d.goals.length ? "" : "none"}>
-                  <span className="gd-name">{d.date.toLocaleDateString([], { weekday: "short" })}</span>
-                  <span className="gd-goal">{d.goals[0] ?? "no focus set"}</span>
-                  <span className="gd-track">{d.goals.length > 0 && <GoalBar {...d.t} scale={maxDay} />}</span>
-                  <span className="gd-val">{d.goals.length ? fmt(d.t.on) : ""}</span>
-                </li>
-              ))}
-            </ul>
-            {review.usable ? (
-              <p className="goal-numbers">
-                <b>{fmt(review.t.on)}</b> on goal · <b>{fmt(review.t.off)}</b> off
-                {review.share !== null && <span> · {review.share}%</span>}
-                {review.share !== null && review.prevShare !== null && <span className="muted"> (week before: {review.prevShare}%)</span>}
-              </p>
-            ) : (
-              <p className="muted">Not much tracked time on your focus days yet, so there's little to sum up.</p>
+            <GoalForm goals={goals} update={update} />
+            {goals.length > 0 && (
+              <div className="goal-today">
+                <div className="goal-big">
+                  <b>{fmt(t.on)}</b>
+                  <span className="muted">
+                    on your focus
+                    {t.on + t.off > 5 * 60_000 ? ` · ${Math.round((t.on / (t.on + t.off)) * 100)}% of the time I could tell` : ""}
+                  </span>
+                </div>
+                <GoalBar {...t} />
+                <p className="goal-numbers muted">
+                  {fmt(t.off)} off · {fmt(t.other)} other
+                </p>
+              </div>
             )}
-            {review.suggestions.length > 0 && (
+          </section>
+
+          <Plan />
+
+          {goals.length > 0 && rows.length > 0 && (
+            <details className="section fold">
+              <summary>How I counted today</summary>
+              <p className="muted goal-hint">I only see app names and window titles, so this is an estimate. Tap On, Off or Neutral to correct me.</p>
+              <ul className="goal-rows">
+                {rows.map((r) => (
+                  <li key={r.key}>
+                    <div className="gr-main">
+                      <span className="gr-label">{r.label}</span>
+                      <small className="muted">
+                        {r.app} · {fmt(r.ms)}
+                      </small>
+                    </div>
+                    <span className={`fit fit-${r.v}`}>{VERDICT_NAME[r.v]}</span>
+                    <span className="fit-pick" role="group" aria-label={`Count “${r.label}” as`}>
+                      {FITS.map((f) => (
+                        <button key={f.id} className={fixes[r.key] === f.id ? "on" : ""} aria-pressed={fixes[r.key] === f.id} onClick={() => correct(r.key, fixes[r.key] === f.id ? null : f.id)}>
+                          {f.name}
+                        </button>
+                      ))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </>
+      )}
+
+      {tab === "week" && (
+        <>
+          <section className="section">
+            <div className="section-head">
+              <h2>This week</h2>
+            </div>
+            {review.goalDays === 0 ? (
+              <div className="week-empty">
+                <div className="week-dots" aria-hidden>
+                  {review.days.map((d) => (
+                    <span key={d.id}>
+                      <i />
+                      <small>{d.date.toLocaleDateString([], { weekday: "short" })}</small>
+                    </span>
+                  ))}
+                </div>
+                <p>
+                  <b>No focus set in the last seven days.</b>
+                </p>
+                <p className="muted">Set a focus on the Today tab, or tell Bond “goal: …”.</p>
+              </div>
+            ) : (
               <>
-                <h3 className="goal-sub">Ideas for next week</h3>
-                <ul className="notes">
-                  {review.suggestions.map((s) => (
-                    <li key={s}>{s}</li>
+                <ul className="goal-days">
+                  {review.days.map((d) => (
+                    <li key={d.id} className={d.goals.length ? "" : "none"}>
+                      <span className="gd-name">{d.date.toLocaleDateString([], { weekday: "short" })}</span>
+                      <span className="gd-goal">{d.goals[0] ?? "no focus set"}</span>
+                      <span className="gd-track">{d.goals.length > 0 && <GoalBar {...d.t} scale={maxDay} />}</span>
+                      <span className="gd-val">{d.goals.length ? fmt(d.t.on) : ""}</span>
+                    </li>
                   ))}
                 </ul>
+                {review.usable ? (
+                  <p className="goal-numbers">
+                    <b>{fmt(review.t.on)}</b> on goal · <b>{fmt(review.t.off)}</b> off
+                    {review.share !== null && <span> · {review.share}%</span>}
+                    {review.share !== null && review.prevShare !== null && <span className="muted"> (week before: {review.prevShare}%)</span>}
+                  </p>
+                ) : (
+                  <p className="muted">Not much tracked time on your focus days yet, so there's little to sum up.</p>
+                )}
+                {review.suggestions.length > 0 && (
+                  <>
+                    <h3 className="goal-sub">Ideas for next week</h3>
+                    <ul className="notes">
+                      {review.suggestions.map((s) => (
+                        <li key={s}>{s}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
               </>
             )}
-          </>
-        )}
-      </section>
+          </section>
 
-      {fixList.length > 0 && (
-        <section className="section">
-          <div className="section-head">
-            <h2>Your corrections</h2>
-          </div>
-          <ul className="goal-rows">
-            {fixList.map(([key, fit]) => (
-              <li key={key}>
-                <div className="gr-main">
-                  <span className="gr-label">{key.split("|").reverse().join(" · ")}</span>
-                </div>
-                <span className={`fit fit-${fit}`}>{VERDICT_NAME[fit]}</span>
-                <button className="btn ghost" onClick={() => correct(key, null)}>
-                  Forget
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
+          {fixList.length > 0 && (
+            <details className="section fold">
+              <summary>Your corrections ({fixList.length})</summary>
+              <ul className="goal-rows">
+                {fixList.map(([key, fit]) => (
+                  <li key={key}>
+                    <div className="gr-main">
+                      <span className="gr-label">{key.split("|").reverse().join(" · ")}</span>
+                    </div>
+                    <span className={`fit fit-${fit}`}>{VERDICT_NAME[fit]}</span>
+                    <button className="btn ghost" onClick={() => correct(key, null)}>
+                      Forget
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          <section className="section goal-options">
+            <Toggle label="Nudge me when I drift" checked={settings.goalNudge} onChange={(v) => set({ goalNudge: v })} />
+            <Toggle label="Sunday morning review" checked={settings.goalReview} onChange={(v) => set({ goalReview: v })} />
+          </section>
+        </>
       )}
-
-      <section className="section goal-options">
-        <Toggle label="Nudge me when I drift" hint="After about 10 minutes in a row off your focus, at most twice an hour. You can snooze it." checked={settings.goalNudge} onChange={(v) => set({ goalNudge: v })} />
-        <Toggle label="Sunday morning review" hint="Bond looks back on the week on Sunday from 9:00." checked={settings.goalReview} onChange={(v) => set({ goalReview: v })} />
-      </section>
     </>
   );
 }
+
+type PlanTab = "today" | "tomorrow" | "week";
+const TABS: { id: PlanTab; name: string; sub: string }[] = [
+  { id: "today", name: "Today", sub: "Your focus and what to work on now." },
+  {
+    id: "tomorrow",
+    name: "Tomorrow",
+    sub: "Plan tomorrow tonight, so the morning starts with a list.",
+  },
+  { id: "week", name: "Week", sub: "How the week went, and how I counted it." },
+];

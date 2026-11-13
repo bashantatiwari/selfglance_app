@@ -19,8 +19,11 @@ export type AskState =
   /** Goals: the morning question, a nudge about drifting, and the Sunday review. */
   /** A message he wrote for you: read it, change it, copy it or put it in the box you were typing in. */
   | { step: "draft"; question: string; subject: string; message: string; usedScreen: boolean; note?: string; busy?: boolean }
+  /** A draft needs one fact first ("What is the channel about?"). */
+  | { step: "draftneed"; question: string; need: string }
   | { step: "goalask" }
   | { step: "drift"; text: string }
+  | { step: "goalnudge"; text: string }
   | { step: "review"; text: string }
   | { step: "unsure" }
   | { step: "error"; question: string; error: string };
@@ -49,7 +52,7 @@ export function AskBox(props: { boxRef: Ref<HTMLDivElement>; onAsk: (q: string) 
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === "Escape" && props.onClose()}
-          placeholder={props.onMic ? "Tell Bond anything… or hold Ctrl+Alt+V to talk" : "Tell Bond anything…"}
+          placeholder={props.onMic ? "Tell Bond anything… or hold Ctrl+Alt to talk" : "Tell Bond anything…"}
           aria-label="Ask Bond"
         />
         {props.onMic && !q.trim() && (
@@ -98,6 +101,8 @@ export interface CardActions {
   /** Drifting: back to it, "this is on-goal", or leave me alone for a while. */
   onDriftBack: () => void;
   onDriftOk: () => void;
+  onGoalDrop: () => void;
+  onNeedAnswer: (answer: string) => void;
   onDriftSnooze: () => void;
   /** The Sunday review: open it, or later. */
   onReviewOpen: () => void;
@@ -133,7 +138,25 @@ export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskStat
         </>
       )}
       {s.step === "draft" && <DraftBody key={s.question + s.message} s={s} onCopy={props.onCopy} onPut={props.onDraftPut} onRetry={props.onDraftRetry} onWantFocus={props.onWantFocus} />}
+      {s.step === "draftneed" && <NeedBody need={s.need} onAnswer={props.onNeedAnswer} onSkip={props.onGoalSkip} onWantFocus={props.onWantFocus} />}
       {s.step === "goalask" && <GoalAsk onSet={props.onGoalSet} onSkip={props.onGoalSkip} onWantFocus={props.onWantFocus} />}
+      {s.step === "goalnudge" && (
+        <>
+          <p className="q">Your focus</p>
+          <p className="a">{s.text}</p>
+          <div className="choices">
+            <button className="btn-ghost" onClick={props.onGoalDrop}>
+              Drop it
+            </button>
+            <button className="btn-ghost" onClick={props.onDriftSnooze}>
+              Later · 30 min
+            </button>
+            <button className="btn-primary" onClick={props.onDriftBack}>
+              On it
+            </button>
+          </div>
+        </>
+      )}
       {s.step === "drift" && (
         <>
           <p className="q">Your focus</p>
@@ -288,6 +311,38 @@ function DraftBody(props: { s: Extract<AskState, { step: "draft" }>; onCopy: (t:
           Put in the box
         </button>
       </div>
+    </>
+  );
+}
+
+/** A draft needs one fact first: a question and a few words in answer. */
+function NeedBody(props: { need: string; onAnswer: (a: string) => void; onSkip: () => void; onWantFocus: () => void }) {
+  const [text, setText] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    props.onWantFocus();
+    const t = window.setTimeout(() => input.current?.focus(), 60);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <>
+      <p className="q">One thing first</p>
+      <p className="a">{props.need}</p>
+      <form
+        className="choices"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (text.trim()) props.onAnswer(text.trim());
+        }}
+      >
+        <input ref={input} className="confirm" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Escape" && props.onSkip()} placeholder="A few words are enough" aria-label={props.need} maxLength={300} autoComplete="off" spellCheck={false} />
+        <button type="button" className="btn-ghost" onClick={props.onSkip}>
+          Cancel
+        </button>
+        <button type="submit" className="btn-primary" disabled={!text.trim()}>
+          Write it
+        </button>
+      </form>
     </>
   );
 }

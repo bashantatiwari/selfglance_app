@@ -1,7 +1,7 @@
 [package]
 name = "selfglance"
 version = "0.1.0"
-description = "SelfGlance - a 3D desktop companion"
+description = "SelfGlance: Bond, a desktop guide that shows you the next click. Runs on your laptop."
 authors = ["Bashanta Tiwari"]
 edition = "2021"
 
@@ -48,7 +48,8 @@ tar = "0.4.46"
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# A panic ends the task it happened in and is written to bond.log, not the whole app (it used to abort the process silently).
+panic = "unwind"
 strip = true
 
 # Dependencies (screenshot capture, image resize/encode, HTTP) are compiled optimized even

@@ -7,9 +7,9 @@
 //   Move     Ctrl+Alt+G (Cmd+Option+G) drops him at your cursor. Drag and throw him
 //            wherever you like. Right-click: ask him, open the dashboard ("Later" too,
 //            during a break). No tricks on request: he's a companion, not a puppet.
-//   Talk     hold Ctrl+Alt+V and speak (or click the mic in the Ask box): he listens on
+//   Talk     hold Ctrl+Alt and speak (or click the mic in the Ask box): he listens on
 //            this laptop, does what you said, and answers out loud.
-//   Ask      Ctrl+Alt+Space (or the menu): one box for everything. Bond works out what you
+//   Ask      Win+Alt (or the menu): one box for everything. Bond works out what you
 //            mean: log your day, save an idea, do something on the desktop (open apps,
 //            sites, folders, media keys, or click/type on screen), explain your screen,
 //            or help when you're stuck. Clear commands are handled locally; the rest
@@ -31,8 +31,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CharacterStage } from "./stage/CharacterStage";
-import type { Rect } from "./stage/types";
-import { BreakCoach, type BreakPhase } from "./break/BreakCoach";
+import type { CharacterManifest, Rect } from "./stage/types";
+import { BUDDY_EVENT, BUDDY_KEY, loadBuddy } from "./stage/buddy";
+import { differs, still } from "./assistant/settle";
+import { addReminder, LATE_MS, takeDue, whenText } from "./assistant/remind";
+import { BreakCoach, glassesToday, type BreakPhase } from "./break/BreakCoach";
+import { backLine, doneLine, nudgeLine, offerLine, reaction } from "./break/lines";
 import { classify, type Activity, type Context } from "./companion/context";
 import { cursorPosition, inTauri, onTauriEvent, sendHitRegions } from "./platform";
 import { invoke } from "@tauri-apps/api/core";
@@ -53,6 +57,9 @@ import {
   denyAction,
   giveFeedback,
   guideMouse,
+  guideSignature,
+  jobDone,
+  jobNote,
   guideOutcome,
   guidePrepare,
   recordOwn,
@@ -62,6 +69,7 @@ import {
   setAdvancedActions,
   screenAsk,
   setLearning,
+  memoryKeep,
   speak,
   isSpeaking,
   stopSpeaking,
@@ -87,10 +95,12 @@ import {
   type Feedback,
   type Habit,
   type Outcome,
+  memoryProfile,
 } from "./ai";
-import { saidStop, spokenAnswer, understand, unsavedAnswer, type ScreenMode } from "./assistant/intent";
+import { isGuideFollowUp, saidStop, spokenAnswer, understand, unsavedAnswer, type ScreenMode } from "./assistant/intent";
 import { addIdea } from "./assistant/notes";
-import { addChat } from "./assistant/chats";
+import { fit, loadPlan, MAX_ITEMS, minutesNow, parsePlan, planSummary, savePlan } from "./assistant/plan";
+import { dayBounds, hasProfile, loadProfile, profileLine } from "./assistant/profile";
 import {
   cacheKey,
   canNudge,
@@ -111,6 +121,11 @@ import {
   saveGoals,
   saveState,
   shouldAsk,
+  stalled,
+  tally,
+  stallText,
+  startText,
+  tomorrowOf,
   dayId,
   unclear,
   type Drift,
@@ -187,7 +202,10 @@ const store = {
   },
 };
 
-async function loadCharacter() {
+async function loadCharacter(): Promise<{ base: string; manifest: CharacterManifest }> {
+  // Your photo buddy, when you made one (Settings → Buddy), stands in for the robot.
+  const buddy = loadBuddy();
+  if (buddy) return { base: "", manifest: { id: "photo", name: buddy.name, model: "", photo: buddy.url, height: buddy.height, entrance: "web-drop" } };
   const index: { default: string; characters: string[] } = await (await fetch("/characters/index.json")).json();
   const saved = store.get("selfglance.character");
   const id = saved && index.characters.includes(saved) ? saved : index.default;
@@ -240,7 +258,7 @@ export default function App() {
   const touchTimer = useRef<number | undefined>(undefined);
   const [ctx, setCtx] = useState<Context>("other");
   const [menu, setMenu] = useState(false);
-  const [pop, setPop] = useState<{ text: string; n: number; note: boolean } | null>(null); // "Hey!" etc. beside his head
+  const [pop, setPop] = useState<{ text: string; n: number; note: boolean | "long" } | null>(null); // "Hey!" etc. beside his head
   const [ask, setAsk] = useState<AskState | null>(null);
   const askRef = useRef<AskState | null>(null);
   askRef.current = ask;
@@ -248,6 +266,12 @@ export default function App() {
   const [guide, setGuide] = useState<GuideView | null>(null);
   const [guideFrom, setGuideFrom] = useState<{ x: number; y: number } | null>(null);
   const guideRun = useRef(0);
+  /** The guide you were in the middle of: "now what next?" carries on with it instead of starting a new one. */
+  const lastGuide = useRef<{ goal: string; shown: string[]; at: number; finished: boolean } | null>(null);
+  const guideToResume = (said: string) => {
+    const g = lastGuide.current;
+    return g && !g.finished && Date.now() - g.at < 30 * 60_000 && isGuideFollowUp(said) ? g : null;
+  };
   /** Goes up on every new request and on "stop": an older request that comes back later is dropped. */
   const askEpoch = useRef(0);
   const guideTipRef = useRef<HTMLDivElement>(null);
@@ -263,7 +287,7 @@ export default function App() {
   };
 
   /** A word popping up beside his head ("Hey!", "Time to build!"). */
-  const showPop = (text: string, ms = 1600, note = false) => {
+  const showPop = (text: string, ms = 1600, note: boolean | "long" = false) => {
     setPop((p) => ({ text, n: (p?.n ?? 0) + 1, note }));
     clearTimeout(heyTimer.current);
     heyTimer.current = window.setTimeout(() => setPop(null), ms);
@@ -359,6 +383,8 @@ export default function App() {
           stage.offerBottle(true);
           coach.arrived();
           setPhase("offering");
+          // Words that fit the moment, so a break isn't the same silent bottle every time.
+          showPop(offerLine({ glasses: glassesToday(), goal: settingsRef.current.waterGoal, hour: new Date().getHours() }), 7000, "long");
         }, 900);
       },
       settle() {
@@ -369,6 +395,7 @@ export default function App() {
       nudge() {
         stage.offerBottle(true);
         stage.play("wave", true);
+        showPop(nudgeLine(), 4500, "long");
         window.setTimeout(() => stage.offerBottle(false), 15_000);
       },
       away() {
@@ -380,14 +407,16 @@ export default function App() {
         setPhase("idle");
         stage.setSitting(false);
         await stage.drinkBottle();
-        stage.play("celebrate", true);
+        stage.play(reaction(), true);
+        const facts = { glasses: glassesToday(), goal: settingsRef.current.waterGoal };
+        showPop(how === "drank" ? doneLine(facts) : backLine(facts), 4500, "long");
         // Drank at the desk: he leads a quick stretch so the break still gets one.
         if (how === "drank") window.setTimeout(() => stage.play("dance", true), 1600);
       },
     }, () => {
       const c = ctxRef.current;
       return c === "meeting" || c === "game" || hiddenByCtx.current ? "hard" : c === "watching" ? "soft" : null;
-    });
+    }, undefined, diag);
 
     // Brainstorm loop: lots of chatting with AI / note-taking, almost no building → nudge.
     const checkBrainstorm = (active: boolean) => {
@@ -474,6 +503,7 @@ export default function App() {
       void setAdvancedActions(saved.advancedActions);
       coach.configure({ everyMin: st.breakEveryMin, enabled: st.breaksOn });
       void setLearning(st.learnFromMe);
+      void memoryKeep(saved.keepChats); // off: Bond stops writing new conversations to disk
       void noticeEnable(st.notice !== "off");
       void wakeSet(st.wakeWord, st.voiceMatch).catch(() => {}); // not downloaded yet: Settings says so
       void captureHideByDefault(st.hideFromCaptures);
@@ -481,6 +511,9 @@ export default function App() {
     };
     coachBreakRef.current = () => coach.inBreak;
     applySettings(settingsRef.current);
+    // What you wrote in Settings → About you, for the brain (memory.json may hold the other copy's).
+    const about = loadProfile();
+    if (hasProfile(about)) void memoryProfile(profileLine(about));
     const tracker = new Tracker();
 
     (async () => {
@@ -495,6 +528,19 @@ export default function App() {
       diag(`character failed to load: ${err}`);
       setBusy(false);
     });
+    // A new buddy made (or the robot chosen again) in Settings: he changes where he stands, no restart.
+    let buddyAt = loadBuddy()?.at ?? 0;
+    const changeBuddy = () => {
+      const at = loadBuddy()?.at ?? 0;
+      if (at === buddyAt) return; // the same change, heard twice
+      buddyAt = at;
+      void loadCharacter()
+        .then(({ base, manifest }) => stage.swap(base, manifest))
+        .then(() => diag(`character changed to ${at ? "a photo buddy" : "the robot"}`))
+        .catch((err) => diag(`character change failed: ${err}`));
+    };
+    const onStorage = (e: StorageEvent) => e.key === BUDDY_KEY && changeBuddy();
+    window.addEventListener("storage", onStorage);
 
     // Without Tauri (plain browser preview) there is no idle signal: assume active use.
     const fakeIdle = inTauri ? undefined : window.setInterval(() => coach.onIdle(0), 2000);
@@ -580,14 +626,20 @@ export default function App() {
       onTauriEvent<number>("idle", (sec) => {
         idleRef.current = sec;
         const watching = ctxRef.current === "watching";
-        tracker.tick(activityRef.current, ctxRef.current, watching || sec < AWAY_AFTER_SEC);
-        checkBrainstorm(sec < AWAY_AFTER_SEC);
+        // The break timer comes first and the rest can't stop it: it was once skipped when a later step threw.
         // Watching a video is screen time even with no keyboard/mouse input.
         coach.onIdle(ctxRef.current === "watching" ? 0 : sec);
+        try {
+          tracker.tick(activityRef.current, ctxRef.current, watching || sec < AWAY_AFTER_SEC);
+          checkBrainstorm(sec < AWAY_AFTER_SEC);
+        } catch (e) {
+          diag(`idle tick failed: ${e}`);
+        }
         void behave();
         void deliverSuggestion();
         void scanForError();
         void goalTick();
+        void reminderTick();
       }),
       onTauriEvent<Activity>("activity", (a) => {
         activityRef.current = a;
@@ -670,11 +722,13 @@ export default function App() {
         store.set("selfglance.homeX", String(Math.round(stage.x)));
         setBusy(false);
       }),
+      onTauriEvent<null>(BUDDY_EVENT, changeBuddy),
     ];
 
     return () => {
       disposed = true;
       clearInterval(fakeIdle);
+      window.removeEventListener("storage", onStorage);
       stage.dispose();
       unlisten.forEach((p) => p.then((u) => u()));
     };
@@ -733,7 +787,6 @@ export default function App() {
   /** An answer worth reading: shown in the card (and spoken if that's on). */
   const answer = (question: string, text: string, done: string[], say: boolean, info: string[] = []) => {
     setAsk({ step: "answer", question, answer: text, done, info });
-    addChat(question, [text, ...info].filter(Boolean).join(" · "), "answer");
     if (say && (settingsRef.current.speakAnswers || heardRef.current) && text) talkBack(text);
     stageRef.current?.play("nod", true);
     if (info.length) {
@@ -756,7 +809,6 @@ export default function App() {
       if (o.pending.step === 1 && (settingsRef.current.speakAnswers || heardRef.current)) talkBack(o.pending.title.replace(/\?.*$/, "?"));
       return;
     }
-    addChat(question, [...o.done, ...o.info].join(" · ") || reply, "action");
     if (o.info.length) return answer(question, reply, o.done, false, o.info);
     confirm(o.done.join(" · ") || reply || "Done ✓");
   };
@@ -861,10 +913,19 @@ export default function App() {
     guideRun.current = id;
     const alive = () => guideRun.current === id;
     const pause = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
-    const shown: string[] = [];
+    // "Now what next?" in the middle of a job is the same job: its goal and the steps already shown stay.
+    const resume = guideToResume(goal);
+    if (resume) goal = resume.goal;
+    const shown: string[] = resume ? [...resume.shown] : [];
+    lastGuide.current = { goal, shown, at: Date.now(), finished: false };
     const seen: Record<string, number> = {};
     const say = (text: string) => {
       if (heardRef.current) void speak(text);
+    };
+    // What he walked you through, kept for a few hours: "now write the bio for it" knows what "it" is.
+    const record = (finished: boolean) => {
+      lastGuide.current = { goal, shown, at: Date.now(), finished };
+      if (shown.length) void jobDone(goal, shown, finished);
     };
     const fail = (text: string) => {
       stopGuide();
@@ -877,7 +938,8 @@ export default function App() {
     // The app you named comes to the front first (opened if it was closed, restored if minimized):
     // he can only point at what is on screen.
     setGuide({ say: "Getting things ready…", step: "wait", target: null, n: 0 });
-    const brought = await guidePrepare(goal);
+    // Carrying on a job you are in the middle of: the program is already where you want it, so it isn't pulled to the front again.
+    const brought = resume ? null : await guidePrepare(goal);
     if (!alive()) return;
     if (brought) {
       showPop(`${brought} is ready`, 2200, true);
@@ -886,6 +948,7 @@ export default function App() {
     setGuideFrom(await cursorPosition());
     let misses = 0;
     let quiet = 0;
+    let missed: string | null = null;
     for (let n = 1; n <= 40 && alive(); ) {
       keepEars();
       // Out of the screenshot (the note would be read as part of the page), back once it's taken.
@@ -894,7 +957,7 @@ export default function App() {
       await pause(60);
       let s;
       try {
-        s = await aiGuide(goal, shown);
+        s = await aiGuide(goal, shown, missed);
       } catch (e) {
         return alive() ? fail(String(e)) : undefined;
       }
@@ -903,6 +966,7 @@ export default function App() {
       const target = s.target;
       setGuide({ say: s.say, step: s.step, target, n: target ? n : 0, debug: s.debug });
       if (s.step === "done") {
+        record(true);
         say(s.say);
         stageRef.current?.play("celebrate", true);
         window.setTimeout(() => guideRun.current === id && stopGuide(), 6000);
@@ -911,11 +975,15 @@ export default function App() {
       say(s.say);
       if (!target) {
         // Nothing to point at yet (a page loading, something to open first): look again shortly.
-        if (++misses >= 8) return stopGuide("I can't find the next step — ask me again when you're ready.");
-        await pause(5000);
+        // A click or type step that found nothing is a miss he is told about, so the next look picks differently.
+        missed = s.step === "click" || s.step === "type" ? s.say : null;
+        if (++misses >= 8) return record(false), stopGuide("I can't find the next step — ask me again when you're ready.");
+        await pause(2500);
         continue;
       }
       misses = 0;
+      missed = null;
+      const before = await guideSignature().catch(() => null); // what the page looks like before your click
       // Wait for your click on it (and, for a text box, for you to finish typing).
       const [l, t, r, b] = target.phys;
       const inside = (x: number, y: number) => x >= l - 24 && x <= r + 24 && y >= t - 24 && y <= b + 24;
@@ -960,19 +1028,39 @@ export default function App() {
         // Nobody touched anything for a minute: look again once or twice, then stop.
         const m = await guideMouse().catch(() => null);
         quiet = m && m.idle_ms > 50_000 ? quiet + 1 : 0;
-        if (quiet >= 3) return stopGuide("Still there? I'll stop pointing — ask me again anytime.");
+        if (quiet >= 3) return record(false), stopGuide("Still there? I'll stop pointing — ask me again anytime.");
         continue;
       }
       if (outcome === "clicked") {
         // The same step for the third time is going in circles: the job is most likely done.
         const key = `${s.say}|${s.debug.picked}`;
         seen[key] = (seen[key] ?? 0) + 1;
-        if (seen[key] >= 3) return stopGuide("That looks done — we're going in circles, so I'll stop.");
+        if (seen[key] >= 3) return record(true), stopGuide("That looks done — we're going in circles, so I'll stop.");
         shown.push(s.say);
+        lastGuide.current = { goal, shown, at: Date.now(), finished: false };
         n++;
       }
-      await pause(outcome === "clicked" ? 1500 : 1200); // let the page react before looking again
+      // Look again once the page has reacted and stopped moving (at most 3 s), not after a fixed wait.
+      // A click that changes nothing is not waited on for long.
+      if (before) {
+        const t0 = Date.now();
+        let last = before;
+        let changed = false;
+        let steady = 0;
+        while (alive() && Date.now() - t0 < 3000) {
+          await pause(250); // each look captures the screen: not more often than this
+          const now = await guideSignature().catch(() => null);
+          if (!now) break;
+          if (differs(before, now)) changed = true;
+          steady = still(last, now) ? steady + 1 : 0;
+          last = now;
+          if (changed && steady >= 2) break;
+          if (!changed && Date.now() - t0 > 1000) break;
+        }
+        diag(`guide: settled after ${Date.now() - t0} ms (${changed ? "the screen changed" : "nothing changed"})`);
+      } else await pause(1200);
     }
+    if (alive()) record(false);
     if (alive()) stopGuide("That's as far as I'll go — ask me again if you need more.");
   };
 
@@ -992,11 +1080,31 @@ export default function App() {
     try {
       // 1. Bond's own understanding: instant, no AI call.
       const own = understand(question);
+      if (guideToResume(question)) return await runGuide(question);
       // What he understood on his own is a sure example for the brain to learn from.
       if (own?.kind === "draft") return await runDraft(question);
+      if (own?.kind === "remind") {
+        const r = addReminder(own.at, own.text);
+        void recordOwn(question, { intent: "task" });
+        return confirm(`I'll remind you ${whenText(r.at)} ✓`);
+      }
       if (own?.kind === "goal") {
+        if (own.tomorrow) {
+          const day = tomorrowOf();
+          saveGoals([...loadGoals(day), own.text], day);
+          return confirm("I'll remind you tomorrow ✓");
+        }
         saveGoals([own.text]);
         return confirm("Focus for today set ✓");
+      }
+      if (own?.kind === "plan") {
+        const day = dayId();
+        const added = parsePlan(own.text);
+        const have = loadPlan(day);
+        if (added.length) savePlan(day, { ...have, items: [...have.items, ...added].slice(0, MAX_ITEMS) });
+        const hours = dayBounds(loadProfile());
+        const s = fit(loadPlan(day).items, { now: Math.max(minutesNow(), hours.start), end: hours.end });
+        return answer(question, planSummary(s), [], true, s.notes);
       }
       if (own?.kind === "idea") {
         addIdea(own.text);
@@ -1042,6 +1150,9 @@ export default function App() {
           return await lookAtScreen(question, "help");
         case "guide":
           return await runGuide(question);
+        case "write":
+          // The model judged he's being asked to write something: a draft, ready to put in the box.
+          return await runDraft(question);
         case "task":
           // Clicking and typing for you is an Advanced action; otherwise Bond points the way instead.
           if (r.needs_screen) return settingsRef.current.advancedActions ? await lookAtScreen(question, "task") : await runGuide(question);
@@ -1211,14 +1322,26 @@ export default function App() {
       clearTimeout(askTimer.current);
       manualUntil.current = Date.now() + 10 * 60_000;
       wake(10 * 60_000);
+      if (d.need) {
+        // He lacks a fact (what the channel is about): ask once, remember the answer, then write.
+        setAsk({ step: "draftneed", question, need: d.need });
+        return;
+      }
       setAsk({ step: "draft", question, subject: d.subject, message: d.message, usedScreen: d.used_screen });
       stageRef.current?.play("nod", true);
-      addChat(question, d.message, "draft", d.subject);
     } catch (e) {
       setAsk({ step: "error", question, error: String(e) });
       stageRef.current?.play("annoyed", true);
       autoClose();
     }
+  };
+
+  /** The answer to "what is the channel about?": he keeps it with the job, then writes. */
+  const answerNeed = async (answer: string) => {
+    const cur = askRef.current;
+    if (cur?.step !== "draftneed") return;
+    await jobNote(`${cur.need} ${answer}`);
+    await runDraft(cur.question, true);
   };
 
   const putDraft = async (text: string) => {
@@ -1256,6 +1379,19 @@ export default function App() {
     askTimer.current = window.setTimeout(() => void closeAsk(), ms);
   };
 
+  /** Say any reminder that has come due: a card, and out loud when he reads answers aloud. */
+  const reminderTick = async () => {
+    if (askRef.current || stageRef.current?.busy === true || coachBreakRef.current()) return;
+    const due = takeDue();
+    if (!due.length) return;
+    const now = Date.now();
+    const lines = due.map((r) => (now - r.at > LATE_MS ? `${r.text} (it was due at ${new Date(r.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })})` : r.text));
+    const text = lines.join("\n");
+    expRef.current = "";
+    await showGoalCard({ step: "answer", question: "Reminder", answer: text, done: [] }, 30_000);
+    if (settingsRef.current.speakAnswers && ctxRef.current !== "meeting") talkBack(`Reminder: ${due.map((r) => r.text).join(". ")}`);
+  };
+
   /** On the idle tick, at most every 20 s: the one thing about goals that is due, if any. */
   const goalTick = async () => {
     const now = Date.now();
@@ -1289,6 +1425,19 @@ export default function App() {
 
     if (!goals.length) return;
     const judge = makeJudge(goals);
+
+    // 2b. A goal is set (maybe last night): once a day say so, and once an hour has gone by without it.
+    if (st.goalNudge && naturalPause(moment) && canNudge(state, now)) {
+      if (stalled(today, judge, state, d)) {
+        const ms = tally(today, judge);
+        saveState(recordNudge({ ...state, stalledDay: dayId(d) }, now));
+        return void showGoalCard({ step: "goalnudge", text: stallText(goals[0], ms.on + ms.off + ms.other) }, 30_000);
+      }
+      if (state.startedDay !== dayId(d)) {
+        patchState({ startedDay: dayId(d) });
+        return void showGoalCard({ step: "goalnudge", text: startText(goals[0]) }, 30_000);
+      }
+    }
 
     // 3. About ten minutes off-goal in a row.
     if (st.goalNudge && canNudge(state, now) && driftMoment(moment)) {
@@ -1324,6 +1473,12 @@ export default function App() {
   };
 
   const skipFocus = () => void closeAsk();
+
+  /** "Drop it": today's first goal goes away (tomorrow's are untouched). */
+  const dropFocus = () => {
+    saveGoals(loadGoals().slice(1));
+    confirm("Dropped ✓");
+  };
 
   const driftOk = () => {
     const key = goalCheck.current.drift?.topKey;
@@ -1464,7 +1619,7 @@ export default function App() {
       />
       {pop && (
         <div ref={heyRef} className="hey-pos" aria-hidden>
-          <span key={pop.n} className={pop.note ? "hey note" : "hey"}>
+          <span key={pop.n} className={pop.note === "long" ? "hey note long" : pop.note ? "hey note" : "hey"}>
             {pop.text}
           </span>
         </div>
@@ -1508,6 +1663,8 @@ export default function App() {
           onGoalSet={(text) => void setFocus(text)}
           onGoalSkip={skipFocus}
           onDriftBack={() => void closeAsk()}
+          onGoalDrop={dropFocus}
+          onNeedAnswer={(t) => void answerNeed(t)}
           onDriftOk={driftOk}
           onDriftSnooze={driftSnooze}
           onReviewOpen={openReview}

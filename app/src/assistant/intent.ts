@@ -14,12 +14,13 @@
 //   "help, I'm stuck"                   → look at the screen and help
 //   "include yourself in the screenshot" → he shows up in captures for 5 minutes
 
-import { goalFrom } from "./goals.ts";
+import { goalForTomorrow, goalFrom } from "./goals.ts";
+import { parseReminder } from "./remind.ts";
 
 export type Action =
   | { do: "open_app"; name: string }
-  | { do: "open_url"; url: string }
-  | { do: "web_search"; query: string }
+  | { do: "open_url"; url: string; browser?: string }
+  | { do: "web_search"; query: string; browser?: string }
   | { do: "open_folder"; name: string }
   | { do: "media"; key: string }
   | { do: "set_volume"; percent: number }
@@ -27,6 +28,7 @@ export type Action =
   | { do: "lock_screen" }
   | { do: "set_wallpaper"; color: string }
   | { do: "system_status" }
+  | { do: "system_specs" }
   | { do: "top_processes" }
   | { do: "free_memory" }
   | { do: "clipboard_get" }
@@ -43,7 +45,11 @@ export type Intent =
   /** A message to write for you: "write me a message to my manager…", "what should I reply". */
   | { kind: "draft"; request: string }
   /** Today's focus: "goal: finish micrograd". */
-  | { kind: "goal"; text: string }
+  | { kind: "goal"; text: string; tomorrow?: boolean }
+  /** "plan my day: …" (text empty: just read today's plan out). */
+  | { kind: "plan"; text: string }
+  /** "remind me in 10 minutes to stretch": Bond keeps it and says it when it is time. */
+  | { kind: "remind"; at: number; text: string }
   | { kind: "do"; actions: Action[] }
   | { kind: "screen"; mode: ScreenMode }
   | { kind: "clipboard" }
@@ -109,25 +115,91 @@ const DRAFT = new RegExp(
     // "write … in the chatgpt box", "type … into slack": wherever it says where the text goes
     String.raw`^(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:write|draft|compose|type)\s+(?:me\s+)?.{0,80}?\b(?:in|into|on)\s+(?:the\s+|my\s+)?(?:chat ?gpt|claude|gemini|copilot|slack|gmail|outlook|whatsapp|teams|linkedin|message box|text ?box|compose box|box|field)\b`,
     String.raw`^(?:please\s+)?(?:what|how)\s+(?:should|do|can|could)\s+i\s+(?:reply|respond|say|write|answer)\b`,
+    // Said in a longer sentence, or with other words for it: "I'm confused what should I type to the terminal",
+    // "what am I supposed to answer", "can you give me what I should reply". The answer is text to put in a box, not clicks.
+    String.raw`\bwhat\s+(?:should|do)\s+i\s+(?:reply|respond|answer)\b`,
+    // "type/enter/prompt" only when it ends there, or names where ("to the terminal"): not "what do I type to exit vim", never a password.
+    String.raw`\bwhat\s+(?:should|do)\s+i\s+(?:type|enter|prompt)(?:\s+(?:here|there|now))?\s*\??$`,
+    String.raw`\bwhat\s+(?:should|do)\s+i\s+(?:type|enter|prompt)\s+(?:in|into|to)\s+(?:the|this|that|my)\s+(?!password|pass\b|pin\b|passcode|card)\w+(?:\s+\w+){0,3}\s*\??$`,
+    String.raw`\bwhat\s+(?:am|are)\s+i\s+(?:supposed|meant|expected)\s+to\s+(?:reply|respond|answer|type|prompt|enter|write|say|give)\b`,
+    String.raw`\bwhat\s+(?:should|to)\s+(?:i\s+)?(?:reply|respond|answer)\s+(?:to|in|on)\b`,
     String.raw`^(?:please\s+)?(?:help me\s+)?(?:reply|respond)\s+(?:to|with|saying)\b`,
   ].join("|"),
   "i",
 );
 
+/**
+ * "Now what next?", "I'm already on Cloudflare, what now", "I did that": said in the middle of a guided job,
+ * it means "carry on", not a new job. Only used while a guide is under way.
+ */
+const GUIDE_FOLLOW_UP = new RegExp(
+  [
+    String.raw`^(?:(?:ok(?:ay)?|so|and|well|now|then|alright|right)[,.]?\s+)*(?:what(?:'s| is)?\s+(?:next|now)|now what|what next|what do i do (?:now|next)|what should i do (?:now|next)|then what|where (?:to|do i go) (?:next|now))\b`,
+    String.raw`^(?:(?:ok(?:ay)?|so|and|well|now|then|alright|right)[,.]?\s+)*(?:next(?: step)?|continue|carry on|keep going|go on)$`,
+    String.raw`\b(?:i(?:'m| am)(?: already)?|already i(?:'m| am)|i(?:'ve| have)(?: already)?) (?:in|on|at|done|did|clicked|opened|finished|completed|logged in|signed in)\b.*\b(?:now what|what(?:'s| is) next|what next|next)\b`,
+    String.raw`\b(?:as for|like|from) the (?:instruction|task|job|thing) (?:i|that i) (?:have )?(?:given|gave|told|asked)\b`,
+    String.raw`^(?:i|we)(?:'ve| have)? (?:did|done|finished|completed) (?:that|it|this|the step)\b`,
+  ].join("|"),
+  "i",
+);
+
+export const isGuideFollowUp = (said: string): boolean => GUIDE_FOLLOW_UP.test(said.trim().replace(/[.!?]+$/, ""));
+
 /** Words after "close"/"end" that are not a program ("close this tab"). */
-const NOT_A_PROGRAM = /^(this|it|that|them|tab|window|all|everything|the call|call|meeting|this tab|this window|the tab|the window|everything else)$/i;
+const NOT_A_PROGRAM = /^(this|it|that|them|tab|tabs|window|windows|apps|programs|all windows|all tabs|all apps|all programs|every window|every tab|all|everything|the call|call|meeting|this tab|this window|the tab|the window|everything else)$/i;
+
+/**
+ * What speech puts in front of a request: fillers, and "Hey Bond" misheard ("Hey Bon,", "Won't help me…",
+ * "They bond, open…"). Left in, "And help me connect to Wi-Fi" missed every rule that starts at "help me".
+ */
+const LEAD_NOISE = new RegExp(
+  [
+    String.raw`^(?:(?:and|so|okay|ok|um+|uh+|hmm+|well|hey|hi|please|bond|bon)\b[,.!]?\s+)+`,
+    String.raw`^(?:won'?t|they bond|say bond|ow)[,.]?\s+(?=(?:help|show|open|walk|guide|take|where|how|can|could|please)\b)`,
+  ].join("|"),
+  "i",
+);
+
+/** Jobs done by clicking around in Windows: guided, never a guessed command. */
+const GUIDE_JOB = new RegExp(
+  [
+    // Removing a program: Settings shows exactly what goes ("delete an app called Hey Clicky from my laptop").
+    // (Not a developer's package: "npm uninstall lodash", "how do I uninstall a pip package" are questions for the brain.)
+    String.raw`^(?:(?:please\s+)?help me\s+|how (?:do|can) i\s+|i (?:want|need) to\s+)?uninstall\s+(?!.*\b(?:npm|pip|package|module|library|crate|extension|dependency)\b)`,
+    String.raw`\b(?:delete|remove|get rid of)\s+(?:the\s+|an?\s+|this\s+|that\s+|my\s+)?(?:app|application|program|software|game)\b`,
+    // "Show me the SelfGlance icon on my desktop", "where is the Wi-Fi button".
+    String.raw`^show me (?:where )?(?:the |my )?.{2,40}\b(?:icon|button|setting|settings|option|menu|tab)\b`,
+    String.raw`^show me (?:where )?(?:the |my )?.{2,40}\b(?:on|in) (?:my |the )?(?:desktop|taskbar|start menu)\b`,
+    String.raw`^where(?:'s| is| are| do i find| can i find)\s+(?:the\s+|my\s+)?.{2,40}\b(?:icon|button|setting|settings|option|menu|switch|toggle)\b`,
+    // Windows settings jobs, asked as "how do I …" or "help me …".
+    String.raw`^(?:how (?:do|can|should) i|help me|show me how to|i want to|i need to)\b.*\b(?:wi-?fi|bluetooth|(?:at|on|from|being|during) start ?up|start ?up (?:apps?|programs?)|dark mode|light mode|night light|wallpaper|desktop background|screen resolution|text size|default (?:browser|app)|taskbar|start menu|notifications?)\b`,
+  ].join("|"),
+  "i",
+);
 
 export function understand(input: string): Intent {
-  const raw = input.trim().replace(/[ \t]+/g, " ");
+  // Speech drops the "sh" of a first "show" ("Ow me the Self Glance icon", owner's log 2026-10-30).
+  const raw = input.trim().replace(/[ \t]+/g, " ").replace(LEAD_NOISE, "").replace(/^ow me\b/i, "show me");
   const t = raw.replace(/[.!]+$/, "");
   let m: RegExpMatchArray | null;
 
   // Remember an idea (an explicit prefix only; the AI catches the rest).
   if ((m = t.match(/^(?:(?:new |project |app )?idea|save (?:this |an |my )?idea|add (?:an |this )?idea)\s*[:\-–]?\s+(.+)$/is))) return { kind: "idea", text: m[1] };
 
+  // The day's plan: "plan my day: three videos, research a channel", "add to my plan: study at 5pm", "what's my plan".
+  if ((m = t.match(/^(?:please )?(?:plan|schedule|organi[sz]e)\s+(?:out\s+)?(?:my|the|this)\s+(?:day|today)\b\s*[:,\-–]?\s*(.*)$/is))) return { kind: "plan", text: m[1].trim() };
+  if ((m = t.match(/^(?:add|put)\s+(?:this\s+|that\s+)?(?:to|on|in|into)\s+(?:my\s+|today'?s\s+)(?:plan|schedule|day)\s*[:\-–]?\s*(.+)$/is))) return { kind: "plan", text: m[1].trim() };
+  if (/^(?:what(?:'s| is)|show|read(?: out)?|tell me)\s+(?:me\s+)?(?:my\s+|today'?s\s+)(?:plan|schedule)(?:\s+(?:for\s+)?today)?\??$/i.test(t)) return { kind: "plan", text: "" };
+
   // Today's focus.
   const goal = goalFrom(t);
   if (goal) return { kind: "goal", text: goal };
+  const next = goalForTomorrow(t);
+  if (next) return { kind: "goal", text: next, tomorrow: true };
+
+  // A reminder or a timer.
+  const reminder = parseReminder(t);
+  if (reminder) return { kind: "remind", ...reminder };
 
   // A message to write (checked before the AI: it is a different kind of answer, a draft to use).
   if (DRAFT.test(t)) return { kind: "draft", request: raw };
@@ -135,6 +207,9 @@ export function understand(input: string): Intent {
   // Being in a screenshot or recording: hidden unless you ask (checked first: "don't show yourself in it").
   if (HIDE_FROM_PICTURE.test(t)) return { kind: "capture", show: false };
   if (SHOW_IN_PICTURE.test(t)) return { kind: "capture", show: true };
+
+  // Uninstalling, finding a button, a Windows setting: Bond points the way (guide mode opens the right Settings page).
+  if (GUIDE_JOB.test(t)) return { kind: "screen", mode: "guide" };
 
   // Clearing out screenshots: Bond shows them (with previews) and asks twice before anything goes.
   if (/^(?:delete|remove|clear|clean up|get rid of|empty)\s+(?:all\s+)?(?:of\s+)?(?:my\s+|the\s+)?screen\s?shots?(?:\s+folder)?(?:\s+(?:images?|pictures?|files?))?$/i.test(t))
@@ -146,6 +221,17 @@ export function understand(input: string): Intent {
   // Do: open / search / media / desktop / lock.
   if ((m = t.match(/^play (.+?) on youtube$/i))) return { kind: "do", actions: [{ do: "open_url", url: `https://www.youtube.com/results?search_query=${encodeURIComponent(m[1])}` }] };
   if ((m = t.match(/^search youtube for (.+)$/i))) return { kind: "do", actions: [{ do: "open_url", url: `https://www.youtube.com/results?search_query=${encodeURIComponent(m[1])}` }] };
+  // A search in a named browser: "search standing desks in brave", "in firefox, google x", "open brave and search x".
+  const BR = String.raw`(brave|google chrome|chrome|microsoft edge|edge|firefox|opera|vivaldi)(?:\s+browser)?`;
+  const inBrowser =
+    t.match(new RegExp(String.raw`^(?:search|google|look up|find)\s+(?:for\s+)?(.+?)\s+(?:in|on|using|with|via)\s+(?:the\s+)?${BR}$`, "i")) ??
+    t.match(new RegExp(String.raw`^(?:in|on|using|with)\s+(?:the\s+)?${BR},?\s+(?:search|google|look up|find)\s+(?:for\s+)?(.+)$`, "i")) ??
+    t.match(new RegExp(String.raw`^(?:open|launch|start)\s+(?:the\s+)?${BR}\s+(?:and|then)\s+(?:search|google|look up)\s+(?:for\s+)?(.+)$`, "i"));
+  if (inBrowser) {
+    const [, a, b] = inBrowser;
+    const named = new RegExp(`^${BR}$`, "i").test(a);
+    return { kind: "do", actions: [{ do: "web_search", query: named ? b : a, browser: (named ? a : b).toLowerCase().replace(/^google /, "").replace(/^microsoft /, "") }] };
+  }
   if ((m = t.match(/^(?:search|google|look up)\s+(?:for\s+)?(.+)$/i))) return { kind: "do", actions: [{ do: "web_search", query: m[1] }] };
   if ((m = t.match(/^(?:open|launch|start|run)\s+(?:the\s+|my\s+)?(.+?)(?:\s+app)?$/i)) && !NOT_A_PROGRAM.test(m[1]) && !/^(the |this |that )?(command|script|it again)$/i.test(m[1])) {
     const target = m[1];
@@ -165,11 +251,17 @@ export function understand(input: string): Intent {
     return { kind: "do", actions: [{ do: "free_memory" }] };
   if (/\bwhy is (my |the )?(laptop|pc|computer|it|everything) (so |running )?(slow|hot|lagging|laggy|loud|hanging)\b|\bwhat'?s (using|eating|hogging|slowing)\b|\b(top|heavy|busy) (processes|apps|programs)\b|^what'?s (running|slow)\??$/i.test(t))
     return { kind: "do", actions: [{ do: "top_processes" }] };
+  // What it is made of ("my laptop specs", "which gpu do I have"), not how it is doing.
+  if (/^(?:what(?:'?s| is| are)|show( me)?|tell me|check)?\s*(?:my|this|the)\s+(?:laptop|pc|computer|system|machine)(?:'?s)?\s+(?:specs?|specifications?|configuration|config|hardware|details)\??$|^(?:what|which)\s+(?:gpu|graphics card|processor|cpu)\s+(?:do i have|does (?:my|this) (?:laptop|pc|computer) have)\??$|^(?:laptop|pc|system) (?:specs?|specifications?)\??$/i.test(t))
+    return { kind: "do", actions: [{ do: "system_specs" }] };
   if (/^(how'?s|how is|check|show( me)?|what'?s|what is)( my| the)? (battery|laptop|pc|computer|system)( status| health| doing| life| level| percentage)?\??$|^(battery|system status|status)\??$|^how much (battery|ram|memory|disk space|storage|space)( do i have| is)?( left| free| used)?\??$|^(how much )?(free )?(disk|storage) space( left| do i have)?\??$/i.test(t))
     return { kind: "do", actions: [{ do: "system_status" }] };
   // Closing asks the app nicely (it may ask about unsaved work); killing ends it at once.
   if (/^(?:please\s+)?(?:close|quit|exit)\s+(?:it|this|that|this app|that app|the app|this one|that one)(?:\s+please)?[.!]?$/i.test(t))
     return { kind: "do", actions: [{ do: "close_app", name: "it" }] };
+  // "close all the notepad windows", "shut every chrome window": the program, whole.
+  if ((m = t.match(/^(?:please\s+)?(?:close|quit|exit|shut)\s+(?:all|every|each)\s+(?:of\s+)?(?:the\s+|my\s+)?(.+?)(?:\s+(?:app|program|window|instance)s?)?(?:\s+please)?[.!]?$/i)) && !NOT_A_PROGRAM.test(m[1]) && m[1].split(/\s+/).length <= 3)
+    return { kind: "do", actions: [{ do: "close_app", name: m[1] }] };
   if ((m = t.match(/^(?:close|quit|exit)\s+(?:the\s+)?(?:app\s+|program\s+)?(.+?)(?:\s+(?:app|program|window))?(?:\s+please)?[.!]?$/i)) && !NOT_A_PROGRAM.test(m[1]) && m[1].split(/\s+/).length <= 3)
     return { kind: "do", actions: [{ do: "close_app", name: m[1] }] };
   if ((m = t.match(/^(?:kill|force[- ]?quit|force[- ]?close|end task(?: for)?|end)\s+(?:the\s+)?(?:app\s+|program\s+|process\s+)?(.+?)(?:\s+(?:app|program|process|completely))?$/i)) && !NOT_A_PROGRAM.test(m[1]) && m[1].split(/\s+/).length <= 3)

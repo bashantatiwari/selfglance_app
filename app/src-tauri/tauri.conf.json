@@ -47,6 +47,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Bashanta Tiwari",
+    "copyright": "Copyright 2026 Bashanta Tiwari",
+    "category": "Productivity",
+    "shortDescription": "Bond, a desktop guide that shows you the next click.",
+    "longDescription": "SelfGlance is a Windows desktop guide. Bond reads the window in front of you, points at the next thing to click, and helps with what the job leaves behind. Everything runs on your laptop: no account, no cloud.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

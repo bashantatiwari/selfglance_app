@@ -66,6 +66,51 @@ pub fn status() -> String {
     lines.join("\n")
 }
 
+/// The graphics card(s), asked of Windows with a fixed command (no user text goes into it).
+#[cfg(target_os = "windows")]
+fn graphics_cards() -> Vec<String> {
+    use std::os::windows::process::CommandExt;
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "(Get-CimInstance Win32_VideoController).Name"])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output();
+    match out {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn graphics_cards() -> Vec<String> {
+    Vec::new()
+}
+
+/// "What are my laptop's specs?": what it is made of, which does not change (unlike `status`).
+pub fn specs() -> String {
+    let mut sys = System::new();
+    sys.refresh_memory();
+    sys.refresh_cpu_all();
+    let mut lines = Vec::new();
+    if let Some(cpu) = sys.cpus().first() {
+        lines.push(format!("Processor  {} ({} cores)", cpu.brand().trim(), System::physical_core_count().unwrap_or(sys.cpus().len())));
+    }
+    lines.push(format!("Memory  {:.0} GB RAM", sys.total_memory() as f64 / GB));
+    let gpus = graphics_cards();
+    if !gpus.is_empty() {
+        lines.push(format!("Graphics  {}", gpus.join(", ")));
+    }
+    let disks = Disks::new_with_refreshed_list();
+    let total: u64 = disks.list().iter().filter(|d| !d.is_removable()).map(|d| d.total_space()).sum();
+    if total > 0 {
+        lines.push(format!("Storage  {:.0} GB in total", total as f64 / GB));
+    }
+    let os = System::long_os_version().or_else(System::name).unwrap_or_default();
+    if !os.is_empty() {
+        lines.push(format!("System  {os} (build {})", System::kernel_version().unwrap_or_default()));
+    }
+    lines.join("\n")
+}
+
 /// A program as people think of it: all processes with the same name added together.
 struct Group {
     name: String,
@@ -367,6 +412,34 @@ pub fn top_windows() -> Vec<Win> {
     Vec::new()
 }
 
+/// A window's class name ("Progman" for the desktop, "Shell_TrayWnd" for the taskbar).
+#[cfg(target_os = "windows")]
+pub fn window_class(hwnd: usize) -> String {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetClassNameW;
+    let mut class = [0u16; 128];
+    let len = unsafe { GetClassNameW(hwnd as *mut core::ffi::c_void, class.as_mut_ptr(), class.len() as i32) }.max(0) as usize;
+    String::from_utf16_lossy(&class[..len])
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn window_class(_hwnd: usize) -> String {
+    String::new()
+}
+
+/// The title of one window, by handle (empty if it has none or is gone).
+#[cfg(target_os = "windows")]
+pub fn window_title(hwnd: usize) -> String {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW;
+    let mut buf = [0u16; 512];
+    let n = unsafe { GetWindowTextW(hwnd as *mut core::ffi::c_void, buf.as_mut_ptr(), buf.len() as i32) };
+    String::from_utf16_lossy(&buf[..n.max(0) as usize])
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn window_title(_hwnd: usize) -> String {
+    String::new()
+}
+
 /// What is open, for Bond's instructions: "Windows Terminal (in front), OBS Studio (minimized)".
 pub fn open_windows_summary() -> String {
     let mut seen = Vec::new();
@@ -495,6 +568,15 @@ const NOT_A_PROGRAM: &[&str] = &["code", "host", "service", "helper", "setup", "
 pub async fn guide_prepare(goal: String) -> Option<String> {
     tauri::async_runtime::spawn_blocking(move || {
         let g = goal.to_lowercase();
+        // 0. A Windows job with its own Settings page: open that page instead of walking Start → Settings → … by
+        //    sight, where a small model gets lost (it once pointed at a desktop icon to uninstall an app).
+        //    Opening a page changes nothing; every choice on it stays the user's.
+        if let Some((uri, shown)) = settings_page_for(&g) {
+            if crate::agent::open_target(uri).is_ok() {
+                focus_app_wait("systemsettings", Duration::from_secs(6));
+                return Some(shown.to_string());
+            }
+        }
         let words: Vec<&str> = g.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
         // 1. Already open: the window whose program is named in the goal.
         for w in top_windows() {
@@ -524,6 +606,33 @@ pub async fn guide_prepare(goal: String) -> Option<String> {
     .await
     .ok()
     .flatten()
+}
+
+/// The Settings page a guide goal is about, as (ms-settings URI, what to call it). Lower-case goal in.
+pub(crate) fn settings_page_for(goal: &str) -> Option<(&'static str, &'static str)> {
+    let has = |words: &[&str]| words.iter().any(|w| goal.contains(w));
+    let program = has(&["app", "program", "software", "game"]);
+    // "stop Opera from being startup at Windows", "don't open Discord when I turn on the laptop".
+    let starts = has(&["startup", "start up", "start-up", "when windows starts", "when i turn on", "when i start my", "on boot", "at boot"]);
+    if starts && (has(&["stop", "disable", "prevent", "don't", "dont", "turn off", "remove", "from opening", "from starting", "from running"]) || has(&["startup app", "startup program"])) {
+        return Some(("ms-settings:startupapps", "Startup apps"));
+    }
+    if has(&["uninstall"]) || (program && has(&["remove ", "delete ", "get rid of"])) {
+        return Some(("ms-settings:appsfeatures", "Installed apps"));
+    }
+    const PAGES: &[(&[&str], &str, &str)] = &[
+        (&["dark mode", "light mode", "dark theme", "accent colo"], "ms-settings:colors", "Colors"),
+        (&["night light"], "ms-settings:nightlight", "Night light"),
+        (&["wallpaper", "desktop background"], "ms-settings:personalization-background", "Background"),
+        (&["wi-fi", "wifi", "wireless network"], "ms-settings:network-wifi", "Wi-Fi"),
+        (&["bluetooth", "headphones", "earbuds"], "ms-settings:bluetooth", "Bluetooth & devices"),
+        (&["default browser", "default app"], "ms-settings:defaultapps", "Default apps"),
+        (&["resolution", "text size", "display scal", "screen scal"], "ms-settings:display", "Display"),
+        (&["storage", "disk space", "space left"], "ms-settings:storagesense", "Storage"),
+        (&["windows update", "update windows"], "ms-settings:windowsupdate", "Windows Update"),
+        (&["sound settings", "sound output", "audio output", "output device"], "ms-settings:sound", "Sound"),
+    ];
+    PAGES.iter().find(|(words, _, _)| has(words)).map(|(_, uri, shown)| (*uri, *shown))
 }
 
 /// Put the program's front window (its question, if it is asking) in front of you.
@@ -616,6 +725,23 @@ pub fn spawn_battery_watch(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guide_goals_open_their_settings_page() {
+        let page = |g: &str| settings_page_for(&g.to_lowercase()).map(|(uri, _)| uri);
+        assert_eq!(page("I want to delete an app called Hey Clicky from my laptop"), Some("ms-settings:appsfeatures"));
+        assert_eq!(page("help me uninstall OBS"), Some("ms-settings:appsfeatures"));
+        assert_eq!(page("stop Discord from opening at startup"), Some("ms-settings:startupapps"));
+        assert_eq!(page("How do I stop Opera fr from being startup at Windows when open?"), Some("ms-settings:startupapps"));
+        assert_eq!(page("And help me connect to a Wi-Fi network."), Some("ms-settings:network-wifi"));
+        assert_eq!(page("give me startup ideas"), None);
+        assert_eq!(page("show me how to turn on dark mode"), Some("ms-settings:colors"));
+        assert_eq!(page("Help me connect to a Wi-Fi network"), Some("ms-settings:network-wifi"));
+        assert_eq!(page("where do I change my default browser"), Some("ms-settings:defaultapps"));
+        assert_eq!(page("help me create a free Cloudflare account"), None);
+        assert_eq!(page("delete the zip files in my downloads"), None);
+        assert_eq!(page("help me post a video story on Facebook"), None);
+    }
     /// A real Notepad opened and closed politely: cargo test --lib system::tests::close_live -- --ignored --nocapture
     #[test]
     #[ignore]

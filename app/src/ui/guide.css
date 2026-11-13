@@ -25,14 +25,45 @@
   }
 }
 
+/* The cursor flies in an arc: across and down are two nested moves with different curves. */
+.guide-fly-x,
+.guide-fly-y {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.guide-fly-x {
+  transition: transform 600ms cubic-bezier(0.3, 0, 0.2, 1);
+}
+
+.guide-fly-y {
+  transition: transform 600ms cubic-bezier(0.6, 0, 0.15, 1);
+}
+
 /* The cursor itself: an arrow whose tip sits exactly on its position. */
 .guide-cursor {
   pointer-events: none;
+  display: block;
   width: 18px;
   height: 22px;
   margin: -1px 0 0 -1px;
   filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.45));
-  transition: transform 800ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: guide-land 420ms 450ms ease-out both;
+}
+
+/* A small bounce as it arrives. */
+@keyframes guide-land {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.35);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 .guide-tip {
@@ -93,6 +124,8 @@
 @media (prefers-reduced-motion: reduce) {
   .guide-ring,
   .guide-cursor,
+  .guide-fly-x,
+  .guide-fly-y,
   .guide-tip {
     animation: none;
     transition: none;

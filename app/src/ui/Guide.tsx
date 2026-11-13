@@ -25,9 +25,15 @@ export function Guide(props: { view: GuideView; origin: { x: number; y: number }
   const t = view.target;
   // The cursor starts where your real one is, then glides to the target.
   const [pos, setPos] = useState(origin ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  // A short hop is quick, a long one takes longer (but never more than a second).
+  const [flight, setFlight] = useState(600);
   useEffect(() => {
     if (!t) return;
-    const id = requestAnimationFrame(() => setPos({ x: t.x + t.w / 2, y: t.y + t.h / 2 }));
+    const to = { x: t.x + t.w / 2, y: t.y + t.h / 2 };
+    const id = requestAnimationFrame(() => {
+      setFlight(Math.round(Math.min(1000, 380 + Math.hypot(pos.x - to.x, pos.y - to.y) * 0.45)));
+      setPos(to);
+    });
     return () => cancelAnimationFrame(id);
   }, [t?.x, t?.y, t?.w, t?.h]);
 
@@ -52,9 +58,14 @@ export function Guide(props: { view: GuideView; origin: { x: number; y: number }
       {t && (
         <>
           <div className="guide-ring" style={{ transform: `translate(${t.x}px, ${t.y}px)`, width: t.w, height: t.h }} />
-          <svg className="guide-cursor" viewBox="0 0 30 36" style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }} aria-hidden>
-            <path d="M3 2 L3 29 L10 22.5 L15 33 L20 30.8 L15 20.5 L25 20 Z" fill="#fff" stroke="#1a2230" strokeWidth="2.2" strokeLinejoin="round" />
-          </svg>
+          {/* Across and down move on different curves, so the cursor flies in an arc rather than a straight line. */}
+          <div className="guide-fly-x" style={{ transform: `translateX(${pos.x}px)`, transitionDuration: `${flight}ms` }}>
+            <div className="guide-fly-y" style={{ transform: `translateY(${pos.y}px)`, transitionDuration: `${flight}ms` }}>
+              <svg key={`${t.x},${t.y}`} className="guide-cursor" viewBox="0 0 30 36" aria-hidden>
+                <path d="M3 2 L3 29 L10 22.5 L15 33 L20 30.8 L15 20.5 L25 20 Z" fill="#fff" stroke="#1a2230" strokeWidth="2.2" strokeLinejoin="round" />
+              </svg>
+            </div>
+          </div>
         </>
       )}
       <div ref={props.tipRef} className="guide-tip" role="status" style={{ transform: `translate(${left}px, ${top}px)` }}>

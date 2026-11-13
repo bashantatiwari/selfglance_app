@@ -30,6 +30,8 @@ const ACTIVE_IF_IDLE_UNDER = 60; // s: counts as "using the laptop"
 const NATURAL_BREAK = 300; // s: away this long on your own = a break taken
 const AWAY_DURING_BREAK = 40; // s: idle this long during a break = you went for it
 const BACK_IF_IDLE_UNDER = 5; // s: input again = you're back
+const MAX_TICK_MS = 60_000;
+const LOG_EVERY_MS = 5 * 60_000;
 const OFFER_FOR_MS = 3 * 60_000;
 const NUDGE_EVERY_MS = 5 * 60_000;
 const SOFT_DEFER_MAX_MIN = 20; // a video can delay the break by at most this much
@@ -37,7 +39,8 @@ const SOFT_DEFER_MAX_MIN = 20; // a video can delay the break by at most this mu
 /** "hard" = never interrupt (meeting, game); "soft" = wait a bit (a video); null = go. */
 export type Blocker = () => "hard" | "soft" | null;
 
-const glassesKey = () => `selfglance.water.${new Date().toISOString().slice(0, 10)}`;
+/** The local day: toISOString() is UTC, which rolled the count over at 5:45 in the morning in Nepal, not at midnight. */
+const glassesKey = (d = new Date()) => `selfglance.water.${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 export function glassesToday(): number {
   try {
@@ -47,9 +50,10 @@ export function glassesToday(): number {
   }
 }
 
-function addGlass() {
+/** One more glass (or one less, to correct a wrong tap); never below zero. */
+export function addGlass(by = 1) {
   try {
-    localStorage.setItem(glassesKey(), String(glassesToday() + 1));
+    localStorage.setItem(glassesKey(), String(Math.max(0, glassesToday() + by)));
   } catch {
     /* storage unavailable: the count just won't persist */
   }
@@ -64,12 +68,19 @@ export class BreakCoach {
   private quietUntil = 0;
 
   private enabled = true;
+  private lastLog = 0;
 
-  constructor(
-    private events: BreakEvents,
-    private blocker: Blocker = () => null,
-    private everyMin = BREAK_EVERY_MIN,
-  ) {}
+  private events: BreakEvents;
+  private blocker: Blocker;
+  private everyMin: number;
+  private log: (line: string) => void;
+
+  constructor(events: BreakEvents, blocker: Blocker = () => null, everyMin = BREAK_EVERY_MIN, log: (line: string) => void = () => {}) {
+    this.events = events;
+    this.blocker = blocker;
+    this.everyMin = everyMin;
+    this.log = log;
+  }
 
   /** Apply settings from the dashboard. */
   configure(opts: { everyMin: number; enabled: boolean }) {
@@ -88,7 +99,8 @@ export class BreakCoach {
   /** Feed with seconds since the last keyboard/mouse input (pass 0 while a video plays: watching is screen time). */
   onIdle(idleSec: number) {
     const now = Date.now();
-    const dt = Math.min(10_000, now - this.lastTick);
+    // Ticks come every ~2 s; a long gap (the webview was throttled) is still time at the laptop.
+    const dt = Math.min(MAX_TICK_MS, now - this.lastTick);
     this.lastTick = now;
 
     switch (this.phase) {
@@ -98,7 +110,11 @@ export class BreakCoach {
         if (this.enabled && this.activeMs >= this.everyMin * 60_000 && now >= this.quietUntil) {
           const block = this.blocker();
           const overdue = this.activeMs >= (this.everyMin + SOFT_DEFER_MAX_MIN) * 60_000;
-          if (block === null || (block === "soft" && overdue)) this.startNow();
+          if (block === null || (block === "soft" && overdue)) {
+            this.startNow();
+          } else this.note(now, `break due but held back (${block}), active ${Math.round(this.activeMs / 60_000)} min`);
+        } else {
+          this.note(now, `break timer ${Math.round(this.activeMs / 60_000)}/${this.everyMin} min active${this.enabled ? "" : " (breaks are off)"}, idle ${idleSec}s`);
         }
         break;
       case "offering":
@@ -125,6 +141,7 @@ export class BreakCoach {
 
   startNow() {
     if (this.phase !== "idle") return;
+    this.log("break starting");
     this.setPhase("arriving");
     this.events.start();
   }
@@ -162,10 +179,19 @@ export class BreakCoach {
   }
 
   private finish(how: BreakEnd) {
-    addGlass();
+    // Only the bottle counts as a glass. Walking away is a break taken, not proof of water; the Today
+    // page lets you add the glass you had while you were up.
+    if (how === "drank") addGlass();
     this.activeMs = 0;
     this.phase = "idle";
     this.events.complete(how);
+  }
+
+  /** At most one line every few minutes, so the log shows why a break did or didn't come. */
+  private note(now: number, line: string) {
+    if (now - this.lastLog <= LOG_EVERY_MS) return;
+    this.lastLog = now;
+    this.log(line);
   }
 
   private setPhase(phase: BreakPhase) {

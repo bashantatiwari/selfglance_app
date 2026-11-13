@@ -33,7 +33,7 @@ export interface Outcome {
 }
 
 export interface Route {
-  intent: "log" | "idea" | "task" | "screen" | "help" | "guide" | "chat" | string;
+  intent: "idea" | "task" | "screen" | "help" | "guide" | "write" | "chat" | string;
   text: string;
   reply: string;
   needs_screen: boolean;
@@ -54,7 +54,12 @@ export const aiText = (system: string, prompt: string) => invoke<string>("ai_tex
 /** Let the AI classify a command Bond couldn't place himself (text only, no screenshot). */
 /** `spoken`: it came from the microphone, so words may be misheard. */
 /** Get his brain ready for a request that's coming (loaded, instructions already read). */
-export const aiPrime = () => (inTauri ? invoke<void>("ai_prime").catch(() => {}) : Promise.resolve());
+/** Bond's own voice, ready before the answer is (loading it after the text shows left a 5-8 s silence). */
+export const voiceWarm = () => (inTauri && loadSettings().voice === "bond" && loadSettings().speakAnswers ? invoke<void>("voice_warm").catch(() => {}) : Promise.resolve());
+export const aiPrime = () => {
+  void voiceWarm();
+  return inTauri ? invoke<void>("ai_prime").catch(() => {}) : Promise.resolve();
+};
 export const routeCommand = (text: string, spoken = false) => invoke<Route>("ai_route", { text, spoken });
 
 /** Look at the screen now: explain it, help when stuck, or do a task on it. */
@@ -69,7 +74,13 @@ export interface Draft {
   subject: string;
   message: string;
   used_screen: boolean;
+  /** A question to ask before writing (the draft needs a fact he doesn't have). Then `message` is empty. */
+  need: string;
 }
+/** A guided job ended: he remembers it for a few hours, so "now write the bio for it" knows what "it" is. */
+export const jobDone = (goal: string, steps: string[], finished: boolean) => (inTauri ? invoke<void>("job_done", { goal, steps, finished }).catch(() => {}) : Promise.resolve());
+/** Something you told him about the latest job (an answer to his question). */
+export const jobNote = (note: string) => (inTauri ? invoke<void>("job_note", { note }).catch(() => {}) : Promise.resolve());
 export const aiDraft = (request: string) => invoke<Draft>("ai_draft", { request });
 /** Remember the window you're in, so a draft can go back there. */
 export const draftRememberTarget = () => (inTauri ? invoke<void>("draft_remember_target").catch(() => {}) : Promise.resolve());
@@ -78,8 +89,19 @@ export const draftWrite = (text: string) => invoke<{ pasted: boolean; note: stri
 export const copyText = (text: string) => invoke<void>("copy_text", { text });
 
 /** What Bond remembers about you (memory.json), and forgetting it. */
+/** Settings → About you: the line the brain gets about you with every request ("" forgets it). */
+export const memoryProfile = (text: string) => (inTauri ? invoke<void>("memory_profile", { text }).catch(() => {}) : Promise.resolve());
 export const memoryList = () => (inTauri ? invoke<string[]>("memory_list").catch(() => []) : Promise.resolve([]));
 export const memoryForget = (fact: string | null) => invoke<void>("memory_forget", { fact });
+/** How much Bond keeps (Settings → Memory), forgetting what was talked about, and the keep-history switch. */
+export interface MemoryUsage {
+  facts: number;
+  conversations: number;
+  bytes: number;
+}
+export const memoryUsage = () => (inTauri ? invoke<MemoryUsage>("memory_usage").catch(() => null) : Promise.resolve(null));
+export const memoryForgetConversations = () => invoke<void>("memory_forget_conversations");
+export const memoryKeep = (on: boolean) => (inTauri ? invoke<void>("memory_keep", { on }).catch(() => {}) : Promise.resolve());
 
 /** Run actions Bond understood on his own. */
 export const runActions = (actions: Action[]) => invoke<Outcome>("agent_run", { actions });
@@ -272,10 +294,12 @@ function play(b64: string, token: number): Promise<void> {
 async function bondVoice(text: string, token: number) {
   const { voiceId, voiceSpeed } = loadSettings();
   const parts = sentences(text);
+  const t0 = Date.now();
   let next = voiceSay(parts[0], voiceId, voiceSpeed);
   for (let i = 0; i < parts.length; i++) {
     const wav = await next;
     if (token !== speakToken) return;
+    if (i === 0) diag(`voice: first sound ready ${Date.now() - t0} ms after the answer (${parts[0].length} characters)`);
     if (i + 1 < parts.length) next = voiceSay(parts[i + 1], voiceId, voiceSpeed);
     await play(wav, token);
   }
@@ -361,11 +385,15 @@ export interface GuideStep {
 }
 
 /** The next step towards `goal` from a fresh look at the screen. Nothing is clicked. `done`: steps already shown. */
-export const aiGuide = (goal: string, done: string[]) => invoke<GuideStep>("ai_guide", { goal, done });
+/** `missed`: the last hint, when it pointed at nothing (he is told, so he doesn't say it again). */
+export const aiGuide = (goal: string, done: string[], missed: string | null = null) => invoke<GuideStep>("ai_guide", { goal, done, missed });
 
 /** Tell his log how a step went (what you clicked after he pointed), so he can learn from it. */
 export const guideOutcome = (goal: string, say: string, picked: string, shown: number, outcome: "followed" | "elsewhere" | "timeout", at: { x: number; y: number } | null) =>
   inTauri ? invoke<void>("guide_outcome", { goal, say, picked, shown, outcome, x: at?.x ?? null, y: at?.y ?? null }).catch(() => {}) : Promise.resolve();
+
+/** A coarse picture of the screen plus the window title: compared before and after a click to see the page change. */
+export const guideSignature = () => invoke<{ title: string; cells: number[] }>("guide_signature");
 
 /** The real mouse, in physical screen pixels, and how long the user has been idle. */
 export const guideMouse = () => invoke<{ x: number; y: number; down: boolean; idle_ms: number }>("guide_mouse");

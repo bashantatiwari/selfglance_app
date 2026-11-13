@@ -69,7 +69,7 @@ export interface Settings {
   goalNudge: boolean;
   /** Goals: on Sunday morning, look back on the week. */
   goalReview: boolean;
-  /** Keep what you ask Bond and his answers, so you can find them again (dashboard → Chats). */
+  /** Keep what you ask Bond and his answers, so you can find them again (Settings → Memory). */
   keepChats: boolean;
 }
 

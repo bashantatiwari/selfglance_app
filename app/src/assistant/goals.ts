@@ -9,6 +9,7 @@
 
 import type { Segment } from "../companion/tracker";
 import { catOf, durOf, fmt } from "../dashboard/analyze.ts";
+import { aimWords, CREATOR_TOOLS, isCreator, loadProfile, mentions, type Profile } from "./profile.ts";
 
 export type Fit = "on" | "off" | "neutral";
 /** A verdict can also be "unsure": the rules can't tell, so the brain may be asked. */
@@ -58,7 +59,12 @@ export const loadGoals = (d = new Date()): string[] => {
   const v = read<unknown>(`selfglance.goal.${dayId(d)}`, []);
   return Array.isArray(v) ? cleanGoals(v.filter((x): x is string => typeof x === "string")) : [];
 };
-export const saveGoals = (goals: string[], d = new Date()) => write(`selfglance.goal.${dayId(d)}`, cleanGoals(goals));
+export const saveGoals = (goals: string[], d = new Date()) => {
+  const clean = cleanGoals(goals);
+  write(`selfglance.goal.${dayId(d)}`, clean);
+  // Setting today's goal today is starting: no "Ready to start?" for it (that is for goals saved the day before).
+  if (clean.length && dayId(d) === dayId()) patchState({ startedDay: dayId() });
+};
 
 /** Your corrections: "this is on-goal", "this is off-goal". Kept until you remove them. */
 export const loadFixes = (): Record<string, Fit> => read("selfglance.goalfix", {});
@@ -83,6 +89,10 @@ export interface GoalState {
   nudges?: number[];
   /** The Sunday whose review was shown. */
   reviewed?: string;
+  /** Day the "ready to start?" card was shown for goals set the day before. */
+  startedDay?: string;
+  /** Day Bond said an hour passed with nothing on the goal. */
+  stalledDay?: string;
   /** When the brain was last asked about unclear items (ms). */
   judgedAt?: number;
 }
@@ -122,6 +132,13 @@ const tokens = (text: string) => text.toLowerCase().match(WORD) ?? [];
 /** Everything needed to judge a stretch for one day's goals. */
 export interface Judge {
   words: string[];
+  /** Words that show something is about your aim (Settings → About you). */
+  aim: string[];
+  /** You make videos: your editing tools and YouTube Studio are work. */
+  creator: boolean;
+  /** Today's focus is your aim's kind of work, or making content: those then count as on-goal, not just "not off". */
+  aimFocus: boolean;
+  contentFocus: boolean;
   /** Identifies the goals in the brain's cache. */
   goalsKey: string;
   fixes: Record<string, Fit>;
@@ -132,8 +149,19 @@ export const keyOf = (s: Pick<Segment, "app" | "label">) => `${s.app}|${s.label}
 const goalsKeyOf = (goals: string[]) => goals.map((g) => g.toLowerCase()).join("|");
 export const cacheKey = (j: Pick<Judge, "goalsKey">, key: string) => `${j.goalsKey}§${key}`;
 
-export function makeJudge(goals: string[], fixes = loadFixes(), cache = loadCache()): Judge {
-  return { words: goalWords(goals), goalsKey: goalsKeyOf(goals), fixes, cache };
+export function makeJudge(goals: string[], fixes = loadFixes(), cache = loadCache(), profile: Profile = loadProfile()): Judge {
+  const aim = aimWords(profile);
+  const focus = goals.join(" ");
+  return {
+    words: goalWords(goals),
+    aim,
+    creator: isCreator(profile),
+    aimFocus: mentions(focus, aim),
+    contentFocus: /\b(video|content|youtube|edit|script|thumbnail|channel|upload|record|film|shorts|reel)/i.test(focus),
+    goalsKey: goalsKeyOf(goals),
+    fixes,
+    cache,
+  };
 }
 
 export function verdict(s: Segment, j: Judge): Verdict {
@@ -144,9 +172,14 @@ export function verdict(s: Segment, j: Judge): Verdict {
     const t = tokens(`${s.label} ${s.app}`);
     if (j.words.some((w) => t.some((x) => x.startsWith(w) || (x.length >= 4 && w.startsWith(x))))) return "on";
   }
-  if (EVERYDAY.test(`${s.label} ${s.app}`)) return "neutral";
+  const text = `${s.label} ${s.app}`;
+  // What you told Bond about yourself: a creator's tools are work, and so is anything about your aim (a PyTorch
+  // video is not a distraction for someone headed for AI); on-goal when today's focus is that kind of work.
+  if (j.creator && CREATOR_TOOLS.test(text)) return j.contentFocus ? "on" : "neutral";
+  if (EVERYDAY.test(text)) return "neutral";
   const cat = catOf(s);
   if (cat === "meetings") return "neutral";
+  if (j.aim.length && mentions(text, j.aim)) return j.aimFocus ? "on" : "neutral";
   if (cat === "entertainment") return "off";
   return j.cache[cacheKey(j, key)] ?? "unsure";
 }
@@ -244,6 +277,21 @@ export function driftMoment(m: { idleSec: number; ctx: string; busy: boolean; in
   return m.idleSec >= 3 && m.idleSec < 90;
 }
 
+/** Minutes of laptop use with nothing on the goal before Bond says so (once a day). */
+export const STALL_MIN = 60;
+
+export const tomorrowOf = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+
+/** An hour or more at the laptop and not a minute on the goal: the "you never started" case. */
+export function stalled(segs: Segment[], j: Judge, st: GoalState, now = new Date()): boolean {
+  if (st.stalledDay === dayId(now)) return false;
+  const t = tally(segs, j);
+  return t.on === 0 && t.on + t.off + t.other >= STALL_MIN * MIN;
+}
+
+export const startText = (goal: string) => `Your focus today: ${goal}. Ready to start?`;
+export const stallText = (goal: string, ms: number) => `You've been on the laptop ${Math.round(ms / MIN)} minutes and none of it was ${goal}. Want to start now?`;
+
 /** The sentence on the nudge card. */
 export function driftText(goal: string, d: Drift): string {
   const min = Math.round(d.ms / MIN);
@@ -263,6 +311,17 @@ export function goalFrom(said: string): string | null {
   const m =
     t.match(/^(?:set )?(?:my |today'?s |the )?(?:goal|focus)(?: for today| today)?\s*[:\-–]\s*(.+)$/is) ??
     t.match(/^(?:today )?(?:my |today'?s )?(?:goal|focus)(?: for today| today)? (?:is|will be)\s+(.+)$/is);
+  return m ? m[1].trim() : null;
+}
+
+/** A goal for the next day: "goal for tomorrow: study diffusion transformers", "tomorrow I want to learn X". */
+export function goalForTomorrow(said: string): string | null {
+  const t = said.trim().replace(/[.!]+$/, "");
+  const m =
+    t.match(/^(?:set )?(?:my |a |the )?(?:goal|focus)\s+for\s+tomorrow\s*(?:is|will be|[:\-–])\s*(.+)$/is) ??
+    t.match(/^tomorrow(?:'s)?\s+(?:goal|focus)\s*(?:is|will be|[:\-–])\s*(.+)$/is) ??
+    t.match(/^(?:remind me|i want|i['’]?d like|i plan|i(?:'|’)m going) (?:tomorrow )?to\s+((?:study|learn|read|practi[cs]e|finish|build|revise|understand|watch)\b.+?)\s+tomorrow$/is) ??
+    t.match(/^tomorrow,?\s+(?:i want to|i['’]?d like to|i plan to)\s+(.+)$/is);
   return m ? m[1].trim() : null;
 }
 

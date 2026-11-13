@@ -406,15 +406,26 @@ nav button.on::before {
   padding: 2px 0;
 }
 
-.cups i {
+.cups i,
+.cups button {
   width: 22px;
   height: 30px;
+  padding: 0;
   border: var(--bw) solid var(--bd);
   border-radius: 3px 3px 9px 9px;
   background: var(--surface);
 }
 
-.cups i.full {
+.cups button {
+  cursor: pointer;
+}
+
+.cups button:hover:not(.full) {
+  background: var(--hover);
+}
+
+.cups i.full,
+.cups button.full {
   background: var(--accent);
 }
 
@@ -1849,4 +1860,606 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   overflow-wrap: anywhere;
   user-select: text;
   line-height: 1.5;
+}
+
+/* ---- Settings: choices, glasses, models, keys ---- */
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 14px 0;
+}
+
+.choice > .s-label {
+  flex: 0 0 150px;
+  font-weight: 700;
+}
+
+.choice.off {
+  opacity: 0.45;
+}
+
+.choice .tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+}
+
+.choice .tabs button small {
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.cup-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cup-pick button {
+  width: 22px;
+  height: 30px;
+  padding: 0;
+  border: var(--bw) solid var(--bd);
+  border-radius: 3px 3px 9px 9px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: transform 90ms ease;
+}
+
+.cup-pick button.full {
+  background: var(--pop);
+}
+
+.cup-pick button:hover {
+  transform: translateY(-2px);
+}
+
+.cup-pick + p {
+  margin: 8px 0 0;
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.model-row b {
+  display: block;
+  font-size: 16px;
+}
+
+.model-row small {
+  display: block;
+  margin-top: 2px;
+}
+
+.model-list {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.model-list li {
+  display: grid;
+  grid-template-columns: 1.3fr 1.2fr auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 9px 0;
+  border-bottom: 1.5px dashed var(--border);
+}
+
+.model-list li:last-child {
+  border-bottom: 0;
+}
+
+.keys {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+
+.keys li {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.keys .kbds {
+  flex: 0 0 150px;
+  white-space: nowrap;
+}
+
+.keys kbd {
+  display: inline-block;
+  min-width: 34px;
+  padding: 3px 9px;
+  border: var(--bw) solid var(--bd);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 2px 2px 0 var(--shadow-c);
+  font: inherit;
+  font-weight: 800;
+  text-align: center;
+}
+
+.keys .kbds {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---- Ideas: cards that open in place ---- */
+.idea-cards {
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+
+.idea-cards > li {
+  border: var(--bw) solid var(--bd);
+  border-radius: var(--r-m);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.idea-cards > li.open {
+  box-shadow: var(--shadow-2);
+}
+
+.idea-cards > li.done .idea-title {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.idea-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.idea-head {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.idea-title {
+  font-weight: 700;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.idea-head small {
+  color: var(--muted);
+}
+
+.idea-row .chev {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 140ms ease;
+  pointer-events: none;
+}
+
+.idea-cards > li.open .chev {
+  transform: rotate(180deg);
+}
+
+.idea-open {
+  display: grid;
+  gap: 12px;
+  padding: 2px 16px 16px 44px;
+}
+
+.idea-open label {
+  display: grid;
+  gap: 5px;
+}
+
+.idea-open label > span {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.idea-open textarea {
+  width: 100%;
+  padding: 9px 11px;
+  border: var(--bw) solid var(--bd);
+  border-radius: var(--r-s);
+  background: var(--page);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.idea-open textarea:focus {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.idea-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.idea-foot .saved {
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.idea-foot .saved.on {
+  opacity: 1;
+}
+
+/* ---- Goals: calmer page ---- */
+.goal-big {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 14px 0 10px;
+}
+
+.goal-big b {
+  font-size: 40px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+details.fold > summary {
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 16px;
+  list-style: none;
+}
+
+details.fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.fold > summary::before {
+  content: "+";
+  display: inline-block;
+  width: 22px;
+  font-weight: 900;
+}
+
+details.fold[open] > summary::before {
+  content: "–";
+}
+
+/* ---- Activity: forgetting ---- */
+.btn.danger {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.detail .btn.danger {
+  margin: 14px 0 4px;
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .choice,
+  .keys li {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .idea-open {
+    padding-left: 16px;
+  }
+}
+
+/* ---- Sidebar: the brand is the collapse control ---- */
+button.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 6px;
+  border: var(--bw) solid transparent;
+  border-radius: 12px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.brand:hover {
+  background: var(--hover);
+}
+
+img.logo {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  object-fit: contain;
+  flex: none;
+}
+
+@media (min-width: 901px) {
+  .app.collapsed button.brand {
+    justify-content: center;
+    padding: 4px 0;
+  }
+}
+
+/* ---- Ideas: the whole row opens and closes ---- */
+.idea-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 0;
+}
+
+.idea-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.idea-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---- Activity: the bin on a row ---- */
+td .icon-btn.danger {
+  opacity: 0.55;
+}
+
+tr:hover td .icon-btn.danger,
+td .icon-btn.danger:focus-visible {
+  opacity: 1;
+}
+
+/* --- Plan ------------------------------------------------------------------------------------------- */
+.plan-add {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.plan-add .capture-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.plan-rows input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.plan-notes {
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+
+/* The item whose time it is now. */
+.plan-rows li.now {
+  border: var(--bw) solid var(--bd);
+  background: var(--surface);
+  box-shadow: 3px 3px 0 var(--shadow-c);
+}
+
+.plan-asks {
+  margin-top: 18px;
+}
+
+.plan-asks .section-head {
+  margin-bottom: 8px;
+}
+
+.plan-asks h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.plan-done {
+  margin-top: 10px;
+}
+
+/* --- Buddy (Settings) ------------------------------------------------------------------------------- */
+.buddy-now {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+/* A little desk to see the sticker on, like the real desktop. */
+.buddy-stage {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 12px;
+  border: var(--bw) solid var(--bd);
+  border-radius: var(--r-s);
+  background: linear-gradient(160deg, #9cc7ff 0%, #4f8fea 55%, #2b5fc4 100%);
+  overflow: hidden;
+}
+
+.buddy-stage img {
+  max-width: 100%;
+  object-fit: contain;
+  transform-origin: 50% 100%;
+  animation: buddy-breathe 2.6s ease-in-out infinite;
+}
+
+@keyframes buddy-breathe {
+  50% {
+    transform: scale(0.988, 1.022) rotate(0.8deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .buddy-stage img {
+    animation: none;
+  }
+}
+
+.buddy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.buddy-actions label.btn {
+  cursor: pointer;
+}
+
+.buddy-styles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.buddy-style {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px;
+  border: var(--bw) solid var(--bd);
+  border-radius: var(--r-s);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.buddy-style.on {
+  background: var(--pop);
+  color: var(--pop-ink);
+  box-shadow: 3px 3px 0 var(--shadow-c);
+}
+
+.buddy-style:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.buddy-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 110px;
+  border-radius: 8px;
+  background: linear-gradient(160deg, #9cc7ff, #2b5fc4);
+}
+
+.buddy-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.buddy-name,
+.buddy-size {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 650;
+}
+
+.buddy-name input {
+  flex: 1;
+  min-width: 0;
+  max-width: 280px;
+}
+
+.buddy-error {
+  color: var(--danger, #c0392b);
+  font-weight: 650;
+}
+
+.plan-hint {
+  margin: 14px 0 0;
+}
+
+/* --- About you (Settings) --------------------------------------------------------------------------- */
+.group-body.about {
+  display: grid;
+  gap: 16px;
+}
+
+.about-field {
+  display: grid;
+  gap: 5px;
+}
+
+.about-label {
+  font-weight: 750;
+}
+
+.about-field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: var(--bw) solid var(--bd);
+  border-radius: var(--r-s);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  resize: vertical;
+}
+
+.about-hours {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.about-hours input {
+  padding: 6px 8px;
+  border: var(--bw) solid var(--bd);
+  border-radius: var(--r-s);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.about-field .tabs {
+  justify-self: start;
+}
+
+.about-saved {
+  color: var(--accent);
 }

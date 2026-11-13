@@ -54,8 +54,8 @@ pub enum Action {
     /// Switch to a program that is already open (restoring it if it is minimized).
     FocusApp { name: String },
     MinimizeApp { #[serde(default)] name: String },
-    OpenUrl { url: String },
-    WebSearch { query: String },
+    OpenUrl { url: String, #[serde(default)] browser: Option<String> },
+    WebSearch { query: String, #[serde(default)] browser: Option<String> },
     OpenFolder { name: String },
     Media { key: String },
     SetVolume { percent: f64 },
@@ -63,6 +63,7 @@ pub enum Action {
     LockScreen,
     SetWallpaper { color: String },
     SystemStatus,
+    SystemSpecs,
     TopProcesses,
     FreeMemory,
     ClipboardGet,
@@ -743,6 +744,79 @@ fn describe_path(p: &Path) -> String {
     }
 }
 
+/// Lower-case letters and digits only, so "Hey Clicky", "HeyClicky" and "hey-clicky" are the same name.
+fn squash(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
+}
+
+/// Does `name` answer to what the user called it? Spaces and case don't matter, and a name longer than
+/// what was said still counts ("Clicky" in "HeyClicky Update").
+fn name_matches(name: &str, query: &str) -> bool {
+    let (n, q) = (squash(name), squash(query));
+    q.len() >= 3 && (n.contains(&q) || (n.len() >= 4 && q.contains(&n)))
+}
+
+/// Installed and running programs that match `query`, with where each lives. Empty when nothing matches
+/// (and off Windows).
+#[cfg(target_os = "windows")]
+fn find_programs(query: &str) -> String {
+    use std::os::windows::process::CommandExt;
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct Item {
+        #[serde(rename = "Name")]
+        name: String,
+        #[serde(rename = "Where")]
+        place: String,
+        #[serde(rename = "Running")]
+        running: bool,
+    }
+    // Installed programs are in the registry's uninstall lists (per machine and per user); a running one has a path.
+    const SCRIPT: &str = r#"
+$k='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*','HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+$a=@(Get-ItemProperty $k -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName } | ForEach-Object { [pscustomobject]@{Name=$_.DisplayName;Where=$_.InstallLocation;Running=$false} })
+$b=@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path } | ForEach-Object { [pscustomobject]@{Name=$_.ProcessName;Where=$_.Path;Running=$true} })
+ConvertTo-Json -Compress -InputObject @($a+$b)
+"#;
+    let Ok(out) = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .creation_flags(0x0800_0000)
+        .output()
+    else {
+        return String::new();
+    };
+    let items: Vec<Item> = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap_or_default();
+    let mut lines: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for it in items.iter().filter(|i| name_matches(&i.name, query)) {
+        if !seen.insert((squash(&it.name), it.running)) {
+            continue;
+        }
+        let place = it.place.trim();
+        lines.push(match (it.running, place.is_empty()) {
+            (true, _) => format!("{} is running, from {place}", it.name),
+            (false, true) => format!("{} is installed", it.name),
+            (false, false) => format!("{} is installed in {place}", it.name),
+        });
+    }
+    // The Start menu's own list catches Store apps, which the registry does not have.
+    if let Some((name, _)) = find_app(&squash(query)).filter(|(n, _)| name_matches(n, query)) {
+        if !lines.iter().any(|l| squash(l).contains(&squash(&name))) {
+            lines.push(format!("{name} is in the Start menu"));
+        }
+    }
+    if !lines.is_empty() {
+        lines.push("To remove an installed program: Settings > Apps > Installed apps.".into());
+    }
+    lines.truncate(9);
+    lines.join("\n")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn find_programs(_query: &str) -> String {
+    String::new()
+}
+
 /// Files whose names contain every word of `query` (or match a * ? pattern), newest first.
 fn find_files(app: &AppHandle, query: &str, folder_name: Option<&str>) -> Result<String, String> {
     let home = app.path().home_dir().map_err(|e| e.to_string())?;
@@ -816,19 +890,19 @@ fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Resul
         }
         Action::FocusApp { name } => crate::system::focus_app(&name).map(|t| Effect::line(format!("Brought {t} to the front"), 800)),
         Action::MinimizeApp { name } => crate::system::minimize_app(&name).map(|n| Effect::line(format!("Minimized {n}"), 400)),
-        Action::OpenUrl { url } => {
+        Action::OpenUrl { url, browser } => {
             let url = clean_url(&url)?;
-            open_target(&url)?;
-            Ok(Effect::line(format!("Opened {}", short(&url)), 1500))
+            let in_ = open_url_in(browser.as_deref(), &url)?;
+            Ok(Effect::line(format!("Opened {}{in_}", short(&url)), 1500))
         }
-        Action::WebSearch { query } => {
+        Action::WebSearch { query, browser } => {
             let query = query.trim();
             if query.is_empty() {
                 return Err("Nothing to search for.".into());
             }
             let url = reqwest::Url::parse_with_params("https://www.google.com/search", &[("q", query)]).map_err(|e| e.to_string())?;
-            open_target(url.as_str())?;
-            Ok(Effect::line(format!("Searched for “{query}”"), 1500))
+            let in_ = open_url_in(browser.as_deref(), url.as_str())?;
+            Ok(Effect::line(format!("Searched for “{query}”{in_}"), 1500))
         }
         Action::OpenFolder { name } => {
             let (label, path) = folder(app, &name)?;
@@ -885,6 +959,7 @@ fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Resul
             Ok(Effect::line(format!("Wallpaper set to {}", color.trim()), 300))
         }
         Action::SystemStatus => Ok(Effect::info(crate::system::status())),
+        Action::SystemSpecs => Ok(Effect::info(crate::system::specs())),
         Action::TopProcesses => Ok(Effect::info(crate::system::top_processes())),
         Action::FreeMemory => {
             let before = crate::system::available_memory();
@@ -905,7 +980,18 @@ fn perform(app: &AppHandle, action: Action, shot: Option<ShotGeometry>) -> Resul
             crate::system::clipboard_set(&text)?;
             Ok(Effect::line("Copied to the clipboard", 0))
         }
-        Action::FindFiles { query, folder } => Ok(Effect::info(find_files(app, &query, folder.as_deref())?)),
+        Action::FindFiles { query, folder } => {
+            let files = find_files(app, &query, folder.as_deref());
+            // A program is not always a file in the home folder: look among installed and running programs too.
+            let programs = if folder.as_deref().map(str::trim).unwrap_or("").is_empty() { find_programs(&query) } else { String::new() };
+            match (files, programs.is_empty()) {
+                (Ok(f), true) => Ok(Effect::info(f)),
+                (Ok(f), false) if f.starts_with("Nothing called") => Ok(Effect::info(programs)),
+                (Ok(f), false) => Ok(Effect::info(format!("{programs}\n\n{f}"))),
+                (Err(_), false) => Ok(Effect::info(programs)),
+                (Err(e), true) => Err(e),
+            }
+        }
         Action::Click { x, y, double } => {
             let g = shot.ok_or("Clicking needs a look at the screen first.")?;
             // The model reads positions on a 0-1000 grid.
@@ -1158,8 +1244,50 @@ fn folder(app: &AppHandle, name: &str) -> Result<(String, std::path::PathBuf), S
     Ok((label.to_string(), dir.map_err(|e| e.to_string())?))
 }
 
+/// The browsers he can be told to use ("search in Brave"): the name, and where each lives.
+fn browser_key(name: &str) -> Option<&'static str> {
+    let n = name.trim().to_lowercase();
+    ["brave", "chrome", "edge", "firefox", "opera", "vivaldi"].into_iter().find(|k| n.contains(k))
+}
+
+/// Where a browser is installed on this PC, if it is.
+fn browser_path(key: &str) -> Option<(&'static str, std::path::PathBuf)> {
+    let (label, files): (&'static str, &[&str]) = match key {
+        "brave" => ("Brave", &[r"%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe", r"%ProgramFiles(x86)%\BraveSoftware\Brave-Browser\Application\brave.exe", r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe"]),
+        "chrome" => ("Chrome", &[r"%ProgramFiles%\Google\Chrome\Application\chrome.exe", r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe", r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"]),
+        "edge" => ("Edge", &[r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe", r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"]),
+        "firefox" => ("Firefox", &[r"%ProgramFiles%\Mozilla Firefox\firefox.exe", r"%ProgramFiles(x86)%\Mozilla Firefox\firefox.exe"]),
+        "opera" => ("Opera", &[r"%LOCALAPPDATA%\Programs\Opera\opera.exe", r"%ProgramFiles%\Opera\opera.exe"]),
+        "vivaldi" => ("Vivaldi", &[r"%LOCALAPPDATA%\Vivaldi\Application\vivaldi.exe", r"%ProgramFiles%\Vivaldi\Application\vivaldi.exe"]),
+        _ => return None,
+    };
+    files.iter().find_map(|f| {
+        let mut p = f.to_string();
+        for var in ["ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"] {
+            if let Ok(v) = std::env::var(var) {
+                p = p.replace(&format!("%{var}%"), &v);
+            }
+        }
+        let path = std::path::PathBuf::from(p);
+        path.exists().then_some((label, path))
+    })
+}
+
+/// Open a web address in the default browser, or in the one the user named. The text to add to the
+/// confirmation (" in Brave"), empty for the default browser.
+fn open_url_in(browser: Option<&str>, url: &str) -> Result<String, String> {
+    let Some(name) = browser.map(str::trim).filter(|b| !b.is_empty()) else {
+        open_target(url)?;
+        return Ok(String::new());
+    };
+    let key = browser_key(name).ok_or_else(|| format!("I don't know the browser “{name}”. I can use Brave, Chrome, Edge, Firefox, Opera or Vivaldi."))?;
+    let (label, exe) = browser_path(key).ok_or_else(|| format!("I couldn't find {key} on this laptop."))?;
+    std::process::Command::new(exe).arg(url).spawn().map_err(|e| format!("Couldn't start {label}: {e}"))?;
+    Ok(format!(" in {label}"))
+}
+
 /// Open a file, folder or URL with its default handler, without going through a shell.
-fn open_target(target: &str) -> Result<(), String> {
+pub(crate) fn open_target(target: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut cmd = std::process::Command::new("explorer");
     #[cfg(target_os = "macos")]
@@ -1287,7 +1415,7 @@ const SITES: &[(&str, &str)] = &[
 pub fn start_app(name: &str) -> Result<String, String> {
     let wanted = name.trim().to_lowercase();
     let wanted = ALIASES.iter().find(|(a, _)| *a == wanted).map(|(_, b)| b.to_string()).unwrap_or(wanted);
-    let (display, target) = find_app(&wanted).ok_or_else(|| format!("I couldn't find an app called “{name}”."))?;
+    let (display, target) = find_app(&wanted).ok_or_else(|| not_found(name))?;
     open_target(&target)?;
     Ok(display)
 }
@@ -1307,7 +1435,66 @@ fn open_app(name: &str) -> Result<String, String> {
         open_target(url)?;
         return Ok(title_case(site));
     }
-    Err(format!("I couldn't find an app called “{name}”."))
+    Err(not_found(name))
+}
+
+/// "I couldn't find …", with the apps it may have been, since speech mishears names ("Jed" for Zed).
+fn not_found(name: &str) -> String {
+    let close = {
+        let mut cache = APPS.lock().unwrap();
+        let apps = cache.get_or_insert_with(list_apps);
+        sounds_like(name, apps.iter().map(|(n, _)| n.as_str()))
+    };
+    match close.as_slice() {
+        [] => format!("I couldn't find an app called “{name}”."),
+        [one] => format!("I couldn't find an app called “{name}”. Did you mean {one}? Say “open {one}”."),
+        [a, b, ..] => format!("I couldn't find an app called “{name}”. Did you mean {a} or {b}?"),
+    }
+}
+
+/// Letters speech recognition swaps for each other: a swap inside a group costs half.
+const SOUND_GROUPS: &[&str] = &["jzsgcx", "bpv", "dt", "kcqg", "mn", "iye", "ou", "fv", "wv"];
+
+/// App names within a small, sound-aware edit distance of what was heard, closest first (at most 2).
+fn sounds_like<'a>(heard: &str, names: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let squash = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+    let h: Vec<char> = squash(heard).chars().collect();
+    if h.len() < 2 {
+        return Vec::new();
+    }
+    let cost = |a: char, b: char| {
+        if a == b {
+            0.0
+        } else if SOUND_GROUPS.iter().any(|g| g.contains(a) && g.contains(b)) {
+            0.5
+        } else {
+            1.0
+        }
+    };
+    let dist = |w: &[char]| {
+        let mut prev: Vec<f32> = (0..=w.len()).map(|j| j as f32).collect();
+        for (i, &a) in h.iter().enumerate() {
+            let mut cur = vec![i as f32 + 1.0; w.len() + 1];
+            for (j, &b) in w.iter().enumerate() {
+                cur[j + 1] = (prev[j] + cost(a, b)).min(prev[j + 1] + 1.0).min(cur[j] + 1.0);
+            }
+            prev = cur;
+        }
+        prev[w.len()]
+    };
+    let allowed = (h.len() as f32 / 4.0).max(1.0);
+    let mut found: Vec<(f32, String)> = Vec::new();
+    for name in names {
+        // The whole name, and its first word ("Zed" in "Zed Preview").
+        let whole: Vec<char> = squash(name).chars().collect();
+        let first: Vec<char> = squash(name.split_whitespace().next().unwrap_or("")).chars().collect();
+        let d = dist(&whole).min(if first.is_empty() { f32::MAX } else { dist(&first) });
+        if d <= allowed && !found.iter().any(|(_, n)| n == name) {
+            found.push((d, name.to_string()));
+        }
+    }
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    found.into_iter().take(2).map(|(_, n)| n).collect()
 }
 
 fn title_case(s: &str) -> String {
@@ -1456,6 +1643,37 @@ pub fn release_focus(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browsers_are_recognised_by_name_and_nothing_else_is_launched() {
+        assert_eq!(browser_key("Brave"), Some("brave"));
+        assert_eq!(browser_key("google chrome"), Some("chrome"));
+        assert_eq!(browser_key("Microsoft Edge"), Some("edge"));
+        assert_eq!(browser_key("msedge"), Some("edge"));
+        assert_eq!(browser_key("firefox"), Some("firefox"));
+        assert_eq!(browser_key("powershell"), None);
+        assert!(open_url_in(Some("cmd.exe /c calc"), "https://example.com").is_err());
+        assert!(browser_path("not-a-browser").is_none());
+    }
+
+    #[test]
+    fn a_misheard_app_name_suggests_the_one_it_sounds_like() {
+        let apps = ["Zed", "Zoom", "OBS Studio", "SelfGlance", "Google Chrome", "Notepad"];
+        assert_eq!(sounds_like("Jed", apps.iter().copied()), vec!["Zed"]);
+        assert_eq!(sounds_like("Self Glans", apps.iter().copied()), vec!["SelfGlance"]);
+        assert_eq!(sounds_like("OBS", apps.iter().copied()), vec!["OBS Studio"]);
+        assert!(sounds_like("Jebra Studio", apps.iter().copied()).is_empty(), "nothing close: no guess");
+        assert!(sounds_like("x", apps.iter().copied()).is_empty());
+    }
+
+    #[test]
+    fn names_match_without_spaces_or_case() {
+        assert!(name_matches("HeyClicky", "Hey Clicky"));
+        assert!(name_matches("HeyClicky Update", "hey clicky"));
+        assert!(!name_matches("Chrome", "Hey Clicky"));
+        assert!(!name_matches("Office 16 Click-to-Run Component", "Hey Clicky"));
+        assert!(!name_matches("ab", "ab"));
+    }
 
     #[test]
     fn wildcards() {

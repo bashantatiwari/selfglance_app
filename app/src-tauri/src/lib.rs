@@ -9,7 +9,7 @@
 //   4. Activity: which app/window is in front (and whether it's fullscreen), so the
 //      companion can watch videos with you, stay quiet while you code, and get out
 //      of the way in meetings and games. Read locally, never stored or sent anywhere.
-//   5. Hotkeys (Ctrl+Alt+G summon, Ctrl+Alt+Space ask Bond, hold Ctrl+Alt+V to talk to
+//   5. Hotkeys (Ctrl+Alt+G summon, Win+Alt ask Bond, hold Ctrl+Alt to talk to
 //      him) and the tray menu. His own voice and ears (voice.rs) run on this laptop.
 //   6. AI (ai.rs): Bond's own brain on this laptop (brain.rs). No cloud, no account, no API
 //      key: nothing you say or show leaves it. Daily summary and "ask Bond". What he learns from you
@@ -32,6 +32,7 @@ mod brain;
 mod capture;
 mod experience;
 mod goals;
+mod hotkeys;
 mod memory;
 mod notice;
 mod policy;
@@ -213,6 +214,25 @@ fn summon(app: &AppHandle) {
     let _ = app.emit("summon", x);
 }
 
+/// "Learn more" links in the dashboard: only these sites, only after a click, in your own browser.
+const LINK_SITES: &[&str] = &["huggingface.co", "github.com", "qwen.ai"];
+
+#[tauri::command]
+fn open_link(url: String) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "That isn't a web address.".to_string())?;
+    let host = parsed.host_str().unwrap_or("");
+    if parsed.scheme() != "https" || !LINK_SITES.iter().any(|s| host == *s || host.ends_with(&format!(".{s}"))) {
+        return Err("Bond only opens his own \"learn more\" pages.".into());
+    }
+    agent::open_target(parsed.as_str())
+}
+
+/// Dashboard: bring a water break now, to see what it does.
+#[tauri::command]
+fn break_now(app: AppHandle) {
+    let _ = app.emit("break-now", ());
+}
+
 fn hotkey_mods() -> Modifiers {
     #[cfg(target_os = "macos")]
     return Modifiers::SUPER | Modifiers::ALT;
@@ -224,14 +244,7 @@ fn summon_shortcut() -> Shortcut {
     Shortcut::new(Some(hotkey_mods()), Code::KeyG)
 }
 
-fn ask_shortcut() -> Shortcut {
-    Shortcut::new(Some(hotkey_mods()), Code::Space)
-}
-
-/// Hold to talk to Bond.
-fn talk_shortcut() -> Shortcut {
-    Shortcut::new(Some(hotkey_mods()), Code::KeyV)
-}
+// Talking (hold Ctrl+Alt) and typing (Win+Alt) have no letter in them, so hotkeys.rs watches the keyboard for them.
 
 /// Open the "Ask Bond" box: the overlay takes keyboard focus so you can type.
 fn open_ask(app: &AppHandle) {
@@ -299,7 +312,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let dash = MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>)?;
     let demo = MenuItem::with_id(app, "demo", "Show me what you can do", true, None::<&str>)?;
     let play = MenuItem::with_id(app, "summon", "Play with me  (Ctrl+Alt+G)", true, None::<&str>)?;
-    let ask = MenuItem::with_id(app, "ask", "Ask Bond  (Ctrl+Alt+Space)", true, None::<&str>)?;
+    let ask = MenuItem::with_id(app, "ask", "Ask Bond  (Win+Alt)", true, None::<&str>)?;
     let brk = MenuItem::with_id(app, "test-break", "Take a break now", true, None::<&str>)?;
     let snooze = MenuItem::with_id(app, "snooze", "Quiet for 1 hour", true, None::<&str>)?;
     let shots = MenuItem::with_id(app, "capture", "Show Bond in screenshots (5 min)", true, None::<&str>)?;
@@ -337,8 +350,6 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 pub fn run() {
     let regions = Arc::new(HitRegions::default());
     let summon_key = summon_shortcut();
-    let ask_key = ask_shortcut();
-    let talk_key = talk_shortcut();
 
     tauri::Builder::default()
         // Must be registered first. Launching SelfGlance again while it already runs
@@ -350,21 +361,11 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    // Talking: listen while the keys are held.
-                    if shortcut == &talk_key {
-                        match event.state() {
-                            ShortcutState::Pressed => voice::start(app.clone(), false),
-                            ShortcutState::Released => voice::stop(),
-                        }
-                        return;
-                    }
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
                     if shortcut == &summon_key {
                         summon(app);
-                    } else if shortcut == &ask_key {
-                        open_ask(app);
                     }
                 })
                 .build(),
@@ -413,6 +414,9 @@ pub fn run() {
             ai::ai_screen,
             ai::ai_guide,
             ai::guide_mouse,
+            ai::guide_signature,
+            open_link,
+            break_now,
             ai::guide_outcome,
             agent::agent_run,
             agent::agent_approve,
@@ -449,10 +453,17 @@ pub fn run() {
             voice::voice_status,
             voice::voice_install,
             voice::voice_say,
+            voice::voice_warm,
             voice::voice_listen,
             diag::diag_log,
             memory::memory_list,
+            memory::memory_profile,
+            memory::job_done,
+            memory::job_note,
             memory::memory_forget,
+            memory::memory_usage,
+            memory::memory_forget_conversations,
+            memory::memory_keep,
             wake::wake_install,
             wake::wake_status,
             wake::wake_set,
@@ -479,6 +490,7 @@ pub fn run() {
             agent::preload_apps();
             draft::spawn_foreground_watch();
             diag::init(app.handle());
+            diag::log_panics();
             ai::forget_old_keys();
             memory::init(app.handle());
             diag::log("SelfGlance started");
@@ -486,11 +498,12 @@ pub fn run() {
             experience::init(app.handle());
             notice::spawn_clipboard_watch(app.handle().clone());
             voice::init(app.handle());
+            hotkeys::spawn(app.handle().clone());
             system::spawn_battery_watch(app.handle().clone());
             // Another app may already own the shortcut; the tray item still works then, and
             // Bond says which one is taken (once the overlay is up to show it).
             let mut taken = Vec::new();
-            for (key, name) in [(summon_shortcut(), "Ctrl+Alt+G"), (ask_shortcut(), "Ctrl+Alt+Space"), (talk_shortcut(), "Ctrl+Alt+V")] {
+            for (key, name) in [(summon_shortcut(), "Ctrl+Alt+G")] {
                 if let Err(err) = app.global_shortcut().register(key) {
                     eprintln!("hotkey {name} unavailable: {err}");
                     taken.push(name);

@@ -94,6 +94,67 @@ pub fn describe(map: &ScreenMap, max_chars: usize) -> String {
     out
 }
 
+/// What a guide step reads: the controls and the words, with no header chatter and no repeats. Every button's
+/// words are also on the screen as text, so a line of text that is just a control's name (or part of one) is
+/// left out; that alone is often a third of what was sent. The brain reads about 900 tokens a second, so this is time.
+pub fn describe_for_guide(map: &ScreenMap, max_chars: usize) -> String {
+    use std::collections::HashSet;
+    let mut out = String::new();
+    let mut names: Vec<String> = Vec::new();
+    // The taskbar on one short line, first: the window's list is cut at a budget, and Start must never be cut.
+    let bar: Vec<String> = map.elements.iter().filter(|e| e.kind == "taskbar").map(|e| format!("[{}] {}", e.id, e.name)).collect();
+    if !bar.is_empty() {
+        out.push_str(&format!("Taskbar buttons: {}\n", bar.join(", ")));
+    }
+    if map.elements.iter().any(|e| e.kind != "taskbar") {
+        out.push_str("Controls [id] kind \"name\":\n");
+        // What is listed is cut at a budget, and the page's own buttons come last in reading order, after the
+        // window's frame. So the frame's noise goes first: caption buttons, the same control repeated (seven
+        // "Close tab" buttons), and the dozens of items of context menus that are not open.
+        let mut listed: HashSet<(String, String)> = HashSet::new();
+        let mut menu_items = 0;
+        for e in map.elements.iter().filter(|e| e.kind != "taskbar") {
+            let low = e.name.to_lowercase();
+            if matches!(low.as_str(), "minimize" | "maximize" | "restore" | "restore down" | "system") {
+                continue;
+            }
+            if !listed.insert((e.kind.to_string(), low.clone())) {
+                continue;
+            }
+            if e.kind == "menu item" {
+                menu_items += 1;
+                if menu_items > 10 {
+                    continue;
+                }
+            }
+            let name: String = e.name.chars().take(if e.kind == "tab" { 32 } else { 50 }).collect();
+            let line = format!("[{}] {} \"{}\"\n", e.id, e.kind, name);
+            if out.len() + line.len() > max_chars * 2 / 3 {
+                break;
+            }
+            out.push_str(&line);
+            names.push(name.to_lowercase());
+        }
+    }
+    if !map.lines.is_empty() {
+        out.push_str("Other text on the screen, top to bottom:\n");
+        for l in &map.lines {
+            let t = l.text.trim();
+            let low = t.to_lowercase();
+            if t.chars().count() < 3 || names.iter().any(|n| n.contains(&low)) {
+                continue;
+            }
+            if out.len() + t.len() + 1 > max_chars {
+                out.push_str("…\n");
+                break;
+            }
+            out.push_str(t);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Centre of element `id` from the last look.
 pub fn element_center(id: usize) -> Result<(i32, i32), String> {
     let guard = LAST.lock().unwrap();
@@ -216,15 +277,29 @@ pub fn ocr(img: &image::RgbaImage, ox: f64, oy: f64) -> Result<Vec<Line>, String
     }
     // Top to bottom, then left to right (OCR returns lines in its own order).
     let pos = |l: &Line| l.words.first().map_or((0.0, 0.0), |w| (w.y, w.x));
-    lines.sort_by(|a, b| {
-        let ((ay, ax), (by, bx)) = (pos(a), pos(b));
-        if (ay - by).abs() > 6.0 {
-            ay.total_cmp(&by)
-        } else {
-            ax.total_cmp(&bx)
-        }
-    });
+    reading_order(&mut lines, 6.0, |l| pos(l));
     Ok(lines)
+}
+
+/// Top to bottom, then left to right. Items within `tol` of the row's first item share a row. Sorting
+/// with "close enough counts as equal" directly is not a valid order (a~b, b~c, but not a~c), and the
+/// sort panics on it; so the rows are formed first and each row is sorted by x.
+pub(crate) fn reading_order<T>(items: &mut Vec<T>, tol: f64, key: impl Fn(&T) -> (f64, f64)) {
+    items.sort_by(|a, b| key(a).0.total_cmp(&key(b).0));
+    let mut rows: Vec<Vec<T>> = Vec::new();
+    let mut top = f64::NAN;
+    for it in items.drain(..) {
+        let y = key(&it).0;
+        if rows.is_empty() || (y - top).abs() > tol {
+            top = y;
+            rows.push(Vec::new());
+        }
+        rows.last_mut().unwrap().push(it);
+    }
+    for mut row in rows {
+        row.sort_by(|a, b| key(a).1.total_cmp(&key(b).1));
+        items.extend(row);
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -236,6 +311,10 @@ pub fn ocr(_img: &image::RgbaImage, _ox: f64, _oy: f64) -> Result<Vec<Line>, Str
 
 /// The window you're using: the one in front, or the one you were in before Bond took the
 /// keyboard.
+///
+/// The desktop, the Start menu and the system flyouts (Wi-Fi, notifications) are what you are using when
+/// they are in front, so they are read as they are. Reading the window behind them instead had the guide
+/// telling you to close your terminal while you were looking at the desktop.
 #[cfg(target_os = "windows")]
 pub fn user_window() -> usize {
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
@@ -243,12 +322,17 @@ pub fn user_window() -> usize {
         let hwnd = GetForegroundWindow();
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, &mut pid);
-        if pid == std::process::id() {
-            // Bond has the focus (you clicked his note): the window you were using is the one
-            // in front of the others that isn't minimized.
+        let class = crate::system::window_class(hwnd as usize);
+        if matches!(class.as_str(), "Progman" | "WorkerW") {
+            return desktop_icons_window().unwrap_or(hwnd as usize);
+        }
+        if pid == std::process::id() || matches!(class.as_str(), "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
+            // Bond has the focus (you clicked his note), or the taskbar has it (you clicked a pinned program):
+            // the window you were using is the one in front of the others that isn't minimized.
+            // Nothing open (everything minimized, as after Win+D): the desktop is what you see.
             match crate::system::top_windows().into_iter().find(|w| !w.minimized) {
                 Some(w) => w.hwnd,
-                None => crate::agent::previous_foreground(),
+                None => desktop_icons_window().unwrap_or_else(crate::agent::previous_foreground),
             }
         } else {
             hwnd as usize
@@ -256,10 +340,31 @@ pub fn user_window() -> usize {
     }
 }
 
+/// The window that holds the desktop's icons: Progman, or the WorkerW it moves to when the wallpaper changes.
+#[cfg(target_os = "windows")]
+fn desktop_icons_window() -> Option<usize> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowExW;
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let (progman, workerw, defview) = (wide("Progman"), wide("WorkerW"), wide("SHELLDLL_DefView"));
+    unsafe {
+        let p = FindWindowExW(std::ptr::null_mut(), std::ptr::null_mut(), progman.as_ptr(), std::ptr::null());
+        if !p.is_null() && !FindWindowExW(p, std::ptr::null_mut(), defview.as_ptr(), std::ptr::null()).is_null() {
+            return Some(p as usize);
+        }
+        let mut w = FindWindowExW(std::ptr::null_mut(), std::ptr::null_mut(), workerw.as_ptr(), std::ptr::null());
+        while !w.is_null() {
+            if !FindWindowExW(w, std::ptr::null_mut(), defview.as_ptr(), std::ptr::null()).is_null() {
+                return Some(w as usize);
+            }
+            w = FindWindowExW(std::ptr::null_mut(), w, workerw.as_ptr(), std::ptr::null());
+        }
+    }
+    None
+}
+
 #[cfg(target_os = "windows")]
 pub fn elements(max: usize) -> Result<Vec<Element>, String> {
-    use uiautomation::types::{ControlType, TreeScope, UIProperty};
-    use uiautomation::variants::Variant;
+    use uiautomation::types::ControlType;
     use uiautomation::UIAutomation;
 
     const KINDS: &[(ControlType, &str)] = &[
@@ -276,14 +381,53 @@ pub fn elements(max: usize) -> Result<Vec<Element>, String> {
         (ControlType::TreeItem, "tree item"),
     ];
     let e = |e: uiautomation::Error| format!("Couldn't read the window's controls: {e}");
-    let hwnd = user_window();
-    if hwnd == 0 {
-        return Ok(Vec::new());
-    }
     let ua = UIAutomation::new().map_err(e)?;
+    let hwnd = user_window();
+    let mut out = if hwnd == 0 { Vec::new() } else { controls_of(&ua, hwnd, KINDS, max.saturating_sub(TASKBAR_MAX))? };
+    // The taskbar is always on screen, and "click Start" or "open the Wi-Fi menu" is on it: its buttons are always
+    // listed (after the window's, so they never crowd them out). They were missing, and he pointed at the window's Close.
+    if let Some(tray) = taskbar_window() {
+        let mut bar = controls_of(&ua, tray, &[(ControlType::Button, "taskbar")], TASKBAR_MAX).unwrap_or_default();
+        for b in &mut bar {
+            b.name = taskbar_name(&b.name);
+        }
+        out.extend(bar.into_iter().filter(|b| !b.name.is_empty()));
+    }
+    for (i, el) in out.iter_mut().enumerate() {
+        el.id = i + 1;
+    }
+    Ok(out)
+}
+
+/// At most this many taskbar buttons are listed.
+#[cfg(target_os = "windows")]
+const TASKBAR_MAX: usize = 24;
+
+/// "Google Chrome pinned", "Terminal - 2 running windows" → "Google Chrome", "Terminal"; a name of several lines
+/// ("Network Internet-Wifi", then its status) → its first line.
+fn taskbar_name(name: &str) -> String {
+    let first = name.lines().next().unwrap_or("").trim();
+    let first = first.split(" - ").next().unwrap_or(first).trim();
+    first.strip_suffix(" pinned").unwrap_or(first).trim().to_string()
+}
+
+#[cfg(target_os = "windows")]
+fn taskbar_window() -> Option<usize> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
+    let class: Vec<u16> = "Shell_TrayWnd".encode_utf16().chain(Some(0)).collect();
+    let h = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
+    (!h.is_null()).then_some(h as usize)
+}
+
+/// The visible, enabled, named controls of one window, of the kinds given, in reading order (ids not set yet).
+#[cfg(target_os = "windows")]
+fn controls_of(ua: &uiautomation::UIAutomation, hwnd: usize, kinds: &[(uiautomation::types::ControlType, &'static str)], max: usize) -> Result<Vec<Element>, String> {
+    use uiautomation::types::{TreeScope, UIProperty};
+    use uiautomation::variants::Variant;
+    let e = |e: uiautomation::Error| format!("Couldn't read the window's controls: {e}");
     let root = ua.element_from_handle((hwnd as isize).into()).map_err(e)?;
     let mut condition = None;
-    for (kind, _) in KINDS {
+    for (kind, _) in kinds {
         let c = ua.create_property_condition(UIProperty::ControlType, Variant::from(*kind as i32), None).map_err(e)?;
         condition = Some(match condition {
             None => c,
@@ -308,7 +452,7 @@ pub fn elements(max: usize) -> Result<Vec<Element>, String> {
             continue;
         }
         let Ok(ct) = el.get_cached_control_type() else { continue };
-        let Some((_, kind)) = KINDS.iter().find(|(k, _)| *k == ct) else { continue };
+        let Some((_, kind)) = kinds.iter().find(|(k, _)| *k == ct) else { continue };
         let name: String = el.get_cached_name().unwrap_or_default().split_whitespace().collect::<Vec<_>>().join(" ");
         if name.is_empty() && *kind != "field" {
             continue; // nothing to tell it by
@@ -319,12 +463,8 @@ pub fn elements(max: usize) -> Result<Vec<Element>, String> {
         }
         out.push(Element { id: 0, kind, name: name.chars().take(80).collect(), rect });
     }
-    // Reading order; then number them.
-    out.sort_by(|a, b| if (a.rect.1 - b.rect.1).abs() > 8 { a.rect.1.cmp(&b.rect.1) } else { a.rect.0.cmp(&b.rect.0) });
+    reading_order(&mut out, 8.0, |e| (e.rect.1 as f64, e.rect.0 as f64));
     out.truncate(max);
-    for (i, el) in out.iter_mut().enumerate() {
-        el.id = i + 1;
-    }
     Ok(out)
 }
 
@@ -336,6 +476,41 @@ pub fn elements(_max: usize) -> Result<Vec<Element>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn el(id: usize, kind: &'static str, name: &str) -> Element {
+        Element { id, kind, name: name.into(), rect: (0, 0, 10, 10) }
+    }
+
+    #[test]
+    fn the_guides_screen_text_drops_noise_repeats_and_what_the_controls_already_say() {
+        let mut elements = vec![el(1, "button", "Minimize"), el(2, "button", "Close tab"), el(3, "button", "Close tab"), el(4, "button", "Log in")];
+        for i in 0..15 {
+            elements.push(el(10 + i, "menu item", &format!("Hidden item {i}")));
+        }
+        elements.push(el(40, "button", "Start building for free"));
+        let lines = ["Log in", "Everything we learned from powering the Internet", "ok"]
+            .iter()
+            .map(|t| Line { text: t.to_string(), words: vec![] })
+            .collect();
+        let text = describe_for_guide(&ScreenMap { lines, elements }, 3400);
+        assert!(!text.contains("Minimize"), "caption buttons are noise");
+        assert_eq!(text.matches("Close tab").count(), 1, "a repeated control is listed once");
+        assert!(text.contains("[4] button \"Log in\"") && text.contains("[40] button \"Start building for free\""), "the page's own buttons reach the list: {text}");
+        assert_eq!(text.matches("menu item").count(), 10, "context-menu items are capped");
+        assert_eq!(text.matches("Log in").count(), 1, "text that is only a control's name is not repeated");
+        assert!(text.contains("Everything we learned") && !text.contains("\nok\n"), "real text stays, scraps go");
+    }
+
+    #[test]
+    fn reading_order_survives_a_busy_page_and_reads_rows_left_to_right() {
+        // Many items whose heights drift by a few pixels: the old "close enough is equal" comparison panicked on these.
+        let mut v: Vec<(f64, f64)> = (0..400).map(|i| (((i * 7) % 50) as f64, ((i * 13) % 97) as f64)).collect();
+        super::reading_order(&mut v, 8.0, |p| *p);
+        assert_eq!(v.len(), 400);
+        let mut rows = vec![(10.0, 300.0), (12.0, 20.0), (40.0, 5.0), (9.0, 100.0)];
+        super::reading_order(&mut rows, 8.0, |p| *p);
+        assert_eq!(rows, vec![(12.0, 20.0), (9.0, 100.0), (10.0, 300.0), (40.0, 5.0)]);
+    }
 
     fn line(words: &[(&str, f64)]) -> Line {
         Line {
@@ -403,5 +578,35 @@ mod tests {
         let t = std::time::Instant::now();
         let els = elements(150).unwrap();
         println!("UI Automation: {} controls in {:.2}s", els.len(), t.elapsed().as_secs_f64());
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod desktop_live {
+    /// What UI Automation sees on the desktop: cargo test --lib desktop_live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn desktop_icons_are_readable() {
+        use uiautomation::types::{ControlType, TreeScope, UIProperty};
+        use uiautomation::variants::Variant;
+        use uiautomation::UIAutomation;
+        let hwnd = super::desktop_icons_window().expect("no desktop window");
+        println!("desktop window class {}", crate::system::window_class(hwnd));
+        let ua = UIAutomation::new().unwrap();
+        let root = ua.element_from_handle((hwnd as isize).into()).unwrap();
+        let cond = ua.create_property_condition(UIProperty::ControlType, Variant::from(ControlType::ListItem as i32), None).unwrap();
+        let found = root.find_all(TreeScope::Descendants, &cond).unwrap();
+        for el in &found {
+            println!("{:?} offscreen={:?} enabled={:?} rect={:?}", el.get_name(), el.is_offscreen(), el.is_enabled(), el.get_bounding_rectangle().map(|r| (r.get_left(), r.get_top())));
+        }
+        let tray = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW("Shell_TrayWnd".encode_utf16().chain(Some(0)).collect::<Vec<u16>>().as_ptr(), std::ptr::null()) };
+        let troot = ua.element_from_handle((tray as isize).into()).unwrap();
+        let all = troot.find_all(TreeScope::Descendants, &ua.create_true_condition().unwrap()).unwrap();
+        for el in all.iter().take(60) {
+            let n = el.get_name().unwrap_or_default();
+            if !n.is_empty() {
+                println!("tray: {:?} {:?} offscreen={:?}", el.get_control_type(), n, el.is_offscreen());
+            }
+        }
     }
 }

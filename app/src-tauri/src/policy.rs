@@ -126,10 +126,21 @@ fn short(s: &str) -> String {
 /// The whole plan is refused if any step is, so it never runs half of something.
 pub fn vet(actions: Vec<Action>, user: &str) -> Result<Vec<Action>, String> {
     let adv = advanced();
+    // "Close all the Notepad windows" once came back as three Ctrl+W presses, which close tabs and windows
+    // of whatever is in front. Closing a program is close_app, which names it.
+    let closes = actions.iter().filter(|a| matches!(a, Action::Hotkey { keys } if keys.to_lowercase().replace(' ', "") == "ctrl+w")).count();
+    if closes > 1 {
+        return Err("I won't press Ctrl+W several times: it would close whatever is in front. Tell me which program to close.".into());
+    }
     for a in &actions {
         match a {
-            Action::OpenUrl { url } if !url_ok(url, user) => return Err(format!("I only open web addresses you asked for, so I didn't open {}.", short(url))),
-            Action::WebSearch { query } if !search_ok(query, user) => return Err(format!("I only search for words you said, so I didn't search for “{}”.", short(query))),
+            // A guessed uninstall command removes the wrong thing or nothing at all, and says it worked either way
+            // (it once tried to remove "Heclicky" for "Hey Clicky"). Windows Settings shows exactly what goes.
+            Action::RunCommand { command, .. } if uninstalls(command) => {
+                return Err("I don't uninstall programs with a command: say “help me uninstall …” and I'll walk you through Windows Settings, where you can see exactly what will be removed.".into())
+            }
+            Action::OpenUrl { url, .. } if !url_ok(url, user) => return Err(format!("I only open web addresses you asked for, so I didn't open {}.", short(url))),
+            Action::WebSearch { query, .. } if !search_ok(query, user) => return Err(format!("I only search for words you said, so I didn't search for “{}”.", short(query))),
             Action::Hotkey { keys } if !adv && !safe_hotkey(keys) => return Err(format!("I only press shortcuts that every app shares, so I didn't press {}.", short(keys))),
             a if !adv && needs_advanced(a) => return Err("That needs “Advanced actions”, which are off. You can turn them on in Settings → Bond.".into()),
             _ => {}
@@ -138,12 +149,37 @@ pub fn vet(actions: Vec<Action>, user: &str) -> Result<Vec<Action>, String> {
     Ok(actions)
 }
 
+/// Does a command uninstall software?
+fn uninstalls(command: &str) -> bool {
+    let c = command.to_lowercase();
+    ["remove-appxpackage", "remove-appxprovisionedpackage", "uninstall-package", "winget uninstall", "winget remove", "choco uninstall", "scoop uninstall", "msiexec /x", "msiexec.exe /x", "uninstallstring", "uninstall.exe", "unins000"]
+        .iter()
+        .any(|k| c.contains(k))
+        || (c.contains("wmic") && c.contains("uninstall"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn uninstall_commands_are_refused_even_with_advanced_actions() {
+        let said = "I want to delete an app called Hey Clicky from my laptop";
+        let cmd = r#"{"do":"run_command","command":"Get-AppxPackage -AllUsers | Where-Object { $_.DisplayName -eq 'Heclicky' } | ForEach-Object { Remove-AppxPackage $_.PackageFullName }","why":"x"}"#;
+        assert!(vet(vec![act(cmd)], said).unwrap_err().contains("walk you through Windows Settings"));
+        assert!(uninstalls("winget uninstall --id Zed.Zed"));
+        assert!(!uninstalls("Get-AppxPackage | Select Name"));
+    }
+
     fn act(json: &str) -> Action {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn repeated_ctrl_w_is_refused() {
+        let plan = vec![act(r#"{"do":"hotkey","keys":"ctrl+w"}"#), act(r#"{"do":"hotkey","keys":"Ctrl + W"}"#)];
+        assert!(vet(plan, "close all the notepad windows").is_err());
+        assert!(vet(vec![act(r#"{"do":"hotkey","keys":"ctrl+w"}"#)], "close this tab").is_ok());
     }
 
     #[test]

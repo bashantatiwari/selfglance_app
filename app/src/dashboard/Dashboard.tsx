@@ -3,8 +3,8 @@
 //             top things + a few insights, and the day in words (AI).
 //   Activity  What exactly did I spend time on? One searchable list (projects, videos,
 //             sites, apps) and the session-by-session log.
-//   Goals     The day's focus, how it's going toward it, and the week in review.
-//   Chats     What you asked Bond and his answers, to search and copy.
+//   Plan      Today's plan (yours and Bond's fitted together), the focus, how it is going, and the week in review.
+//   Memory    (in Settings) what Bond keeps, its size, and how to empty it.
 //   Ideas     Project ideas you told Bond ("idea: …") or added here.
 //   Settings  Water breaks, Bond, his brain, voice and privacy, each explained.
 // Everything is computed locally from the diary the overlay records.
@@ -22,7 +22,11 @@ import {
   speak,
   voiceInstall,
   memoryForget,
+  memoryForgetConversations,
+  memoryKeep,
   memoryList,
+  memoryUsage,
+  type MemoryUsage,
   wakeEnrollCancel,
   wakeEnrollRecord,
   wakeEnrollSave,
@@ -36,19 +40,22 @@ import {
   type BrainStatus,
   type LearnStats,
 } from "../ai";
-import { analyzeDay, CATS, catName, clock, fmt, insights, type Cat, type DayStats, type Item, type Kind } from "./analyze";
-import { loadDay, type Segment } from "../companion/tracker";
-import { glassesToday } from "../break/BreakCoach";
+import { analyzeDay, CATS, catName, clock, fmt, insights, kindOf, type Cat, type DayStats, type Item, type Kind } from "./analyze";
+import { forgetSegments, loadDay, LOG_EVENT, restoreSegments, type Segment } from "../companion/tracker";
+import { addGlass, glassesToday } from "../break/BreakCoach";
+import { BuddyPanel } from "./Buddy";
+import { AboutYouPanel } from "./AboutYou";
+import { hasProfile, loadProfile } from "../assistant/profile";
+import { loadBuddy } from "../stage/buddy";
 import { loadSettings, saveSettings, type Settings, effective } from "../settings";
-import Chats from "./Chats";
 import Goals, { GoalTile } from "./Goals";
 import Ideas from "./Ideas";
-import { Avatar, KindBadge, Toasts, Toggle } from "./ui";
+import { Avatar, KindBadge, toast, Toasts, Toggle } from "./ui";
 import "./dashboard.css";
 import "./design.css";
 import "./neo.css";
 
-type Page = "today" | "activity" | "goals" | "chats" | "ideas" | "settings";
+type Page = "today" | "activity" | "goals" | "ideas" | "settings";
 type NavGroup = "analyse" | "personal" | "prefs";
 const NAV_GROUPS: { id: NavGroup; name: string }[] = [
   { id: "analyse", name: "Analyse" },
@@ -58,8 +65,7 @@ const NAV_GROUPS: { id: NavGroup; name: string }[] = [
 const PAGES: { id: Page; name: string; group: NavGroup; icon: ReactNode }[] = [
   { id: "today", name: "Today", group: "analyse", icon: <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" /> },
   { id: "activity", name: "Activity", group: "analyse", icon: <path d="M4 6h16M4 12h10M4 18h13" /> },
-  { id: "goals", name: "Goals", group: "personal", icon: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zM12 12.5a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z" /> },
-  { id: "chats", name: "Chats", group: "personal", icon: <path d="M4 5h16v11H9l-5 4zM8 9h8M8 12.5h5" /> },
+  { id: "goals", name: "Plan", group: "personal", icon: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zM12 12.5a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z" /> },
   { id: "ideas", name: "Ideas", group: "personal", icon: <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" /> },
   { id: "settings", name: "Settings", group: "prefs", icon: <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z" /> },
 ];
@@ -86,12 +92,14 @@ function useSegments(offset: number) {
   useEffect(() => {
     const read = () => setSegs(loadDay(dayDate(offset)));
     read();
-    if (offset !== 0) return;
+    window.addEventListener(LOG_EVENT, read);
+    if (offset !== 0) return () => window.removeEventListener(LOG_EVENT, read);
     const t = window.setInterval(read, 3000);
     window.addEventListener("focus", read);
     return () => {
       clearInterval(t);
       window.removeEventListener("focus", read);
+      window.removeEventListener(LOG_EVENT, read);
     };
   }, [offset]);
   return segs;
@@ -130,7 +138,7 @@ function Tooltip() {
 // --- Shell -----------------------------------------------------------------------------
 export default function Dashboard() {
   const [page, setPage] = useState<Page>("today");
-  // Bond can open the dashboard on a page ("time for your journal").
+  // Bond can open the dashboard on a page ("open my goals").
   useEffect(() => {
     const un = onTauriEvent<Page>("dashboard-page", (p) => PAGES.some((n) => n.id === p) && setPage(p));
     return () => void un.then((u) => u());
@@ -184,15 +192,10 @@ export default function Dashboard() {
   return (
     <div className={`app${collapsed ? " collapsed" : ""}`}>
       <aside className="side">
-        <div className="brand">
-          <span className="logo" aria-hidden />
+        <button className="brand" onClick={toggleSide} aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"} aria-expanded={!collapsed} title={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}>
+          <img className="logo" src="/bond-icon.png" alt="" />
           <span className="brand-name">SelfGlance</span>
-          <button className="side-toggle" onClick={toggleSide} aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"} aria-expanded={!collapsed} title={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}>
-            <svg viewBox="0 0 24 24" aria-hidden>
-              <path d={collapsed ? "M9 6l6 6-6 6" : "M15 6l-6 6 6 6"} />
-            </svg>
-          </button>
-        </div>
+        </button>
         <nav aria-label="Main">
           {NAV_GROUPS.map((g) => (
             <div className="nav-group" key={g.id}>
@@ -217,7 +220,6 @@ export default function Dashboard() {
         {page === "today" && <Today stats={stats} segs={viewed} prev={prev} offset={offset} picker={dayPicker} go={open} />}
         {page === "activity" && <Activity stats={stats} offset={offset} picker={dayPicker} />}
         {page === "goals" && <Goals />}
-        {page === "chats" && <Chats />}
         {page === "ideas" && <Ideas />}
         {page === "settings" && <SettingsPage />}
       </main>
@@ -288,6 +290,7 @@ function Section(props: { title: string; right?: ReactNode; children: ReactNode;
 // --- Today -----------------------------------------------------------------------------
 function Today({ stats, segs, prev, offset, picker, go }: { stats: DayStats; segs: Segment[]; prev: DayStats | null; offset: number; picker: ReactNode; go: (p: Page) => void }) {
   const goal = loadSettings().waterGoal;
+  const [, bumpWater] = useState(0); // the glass count lives in storage; a tap re-reads it
   const notes = insights(stats, prev).slice(0, 3);
   const sub = dayDate(offset).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
   if (stats.total === 0) {
@@ -341,9 +344,19 @@ function Today({ stats, segs, prev, offset, picker, go }: { stats: DayStats; seg
           <h2 className="tile-label">Hydration</h2>
           {offset === 0 ? (
             <>
-              <div className="cups" role="img" aria-label={`${glasses} of ${goal} glasses of water`}>
+              {/* Tap a glass to set today's count (tap the last full one to take it back): Bond only counts the bottle. */}
+              <div className="cups" role="group" aria-label={`${glasses} of ${goal} glasses of water`}>
                 {Array.from({ length: cups }, (_, n) => (
-                  <i key={n} className={n < glasses ? "full" : ""} />
+                  <button
+                    key={n}
+                    className={n < glasses ? "full" : ""}
+                    aria-label={n + 1 === glasses ? `Take back glass ${n + 1}` : `${n + 1} glasses`}
+                    title={n + 1 === glasses ? "Take this one back" : `I've had ${n + 1}`}
+                    onClick={() => {
+                      addGlass((n + 1 === glasses ? n : n + 1) - glasses);
+                      bumpWater((v) => v + 1);
+                    }}
+                  />
                 ))}
               </div>
               <p className="tile-value">
@@ -404,55 +417,10 @@ function Today({ stats, segs, prev, offset, picker, go }: { stats: DayStats; seg
           )}
         </Section>
 
-        <BondTile full={offset !== 0} go={go} />
       </div>
 
       <DaySummary stats={stats} />
     </>
-  );
-}
-
-/** Bond, as a tile: whether he's listening, which brain answers, and a way to ask him now. */
-function BondTile({ full, go }: { full: boolean; go: (p: Page) => void }) {
-  const [s, setS] = useState(() => effective(loadSettings()));
-  useEffect(() => {
-    const read = () => setS(effective(loadSettings()));
-    window.addEventListener("focus", read);
-    const t = window.setInterval(read, 4000);
-    return () => {
-      window.removeEventListener("focus", read);
-      clearInterval(t);
-    };
-  }, []);
-  const brain = "Brain on this laptop";
-  return (
-    <section className={`tile t-bond ${full ? "full" : ""}`}>
-      <div className="bond-head">
-        <svg viewBox="0 0 24 24" aria-hidden>
-          <rect x="4" y="6" width="16" height="13" rx="4" />
-          <circle cx="9.2" cy="12.2" r="1.3" />
-          <circle cx="14.8" cy="12.2" r="1.3" />
-          <path d="M12 6V3.5M10.5 16.2h3" />
-        </svg>
-        <div>
-          <h2 className="tile-label">Bond</h2>
-          <b className="bond-state">
-            <i className={s.wakeWord ? "live" : ""} aria-hidden />
-            {s.wakeWord ? "Listening for “Hey Bond”" : "“Hey Bond” is off"}
-          </b>
-          <small>{brain}</small>
-        </div>
-      </div>
-      <p className="muted small">Try: “goal: finish the micrograd tutorial” or “idea: an app that sorts my downloads”.</p>
-      <div className="tile-actions">
-        <button className="btn" onClick={() => void invoke("ask_bond").catch(() => {})} disabled={!inTauri} title={inTauri ? "Open Bond's ask box" : "Only in the desktop app"}>
-          Ask Bond
-        </button>
-        <button className="btn ghost" onClick={() => go("settings")}>
-          Bond settings
-        </button>
-      </div>
-    </section>
   );
 }
 
@@ -636,6 +604,14 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   const match = (s: string) => s.toLowerCase().includes(q.toLowerCase());
+  const day = dayDate(offset);
+  /** Forget stretches of this day's record; Undo puts them back. */
+  const forget = (what: string, test: (s: Segment) => boolean) => {
+    const gone = forgetSegments(day, test);
+    if (!gone.length) return;
+    setPicked(null);
+    toast(`Forgot ${what}`, { label: "Undo", run: () => restoreSegments(day, gone) });
+  };
   const head = <PageHead title="Activity" sub={`${dayName(offset)} · everything you spent time on`} right={picker} />;
   if (stats.total === 0)
     return (
@@ -696,6 +672,7 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
                   {th("time", "Time", "num")}
                   <th className="share">Share of day</th>
                   {th("sessions", "Sessions", "num", "A session is a stretch on the same thing without a 2-minute gap")}
+                  <th aria-label="Forget" />
                 </tr>
               </thead>
               <tbody>
@@ -735,11 +712,27 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
                       </div>
                     </td>
                     <td className="num">{i.sessions}</td>
+                    <td className="num">
+                      <button
+                        className="icon-btn danger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          forget(`“${i.label}”`, (s) => kindOf(s) === i.kind && s.label === i.label);
+                        }}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        aria-label={`Forget ${i.label}`}
+                        title="Forget this"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden>
+                          <path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13" />
+                        </svg>
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="muted empty-row">
+                    <td colSpan={6} className="muted empty-row">
                       Nothing matches{q ? ` “${q}”` : ""}. Try another tab or clear the search.
                     </td>
                   </tr>
@@ -792,6 +785,9 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
                   “{sel.label}” also shows up as a <b>{twin.kind}</b> ({twin.app}, {fmt(twin.ms)}). The {sel.kind.toLowerCase()} and the {twin.kind.toLowerCase()} are tracked separately.
                 </p>
               )}
+              <button className="btn ghost danger" onClick={() => forget(`“${sel.label}”`, (s) => kindOf(s) === sel.kind && s.label === sel.label)}>
+                Forget this from {dayName(offset).toLowerCase()}
+              </button>
               <h4>Sessions</h4>
               <ul className="detail-sessions">
                 {stats.sessions
@@ -818,6 +814,7 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
                 <th className="num">Length</th>
                 <th>What</th>
                 <th>Category</th>
+                <th aria-label="Forget" />
               </tr>
             </thead>
             <tbody>
@@ -844,11 +841,23 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
                       {catName(x.cat)}
                     </span>
                   </td>
+                  <td className="num">
+                    <button
+                      className="icon-btn danger"
+                      onClick={() => forget("that session", (s) => s.label === x.label && s.app === x.app && s.start >= x.start - 1000 && s.end <= x.end + 1000)}
+                      aria-label={`Forget this session of ${x.label}`}
+                      title="Forget this session"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden>
+                        <path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13" />
+                      </svg>
+                    </button>
+                  </td>
                 </tr>
               ))}
               {sessions.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="muted empty-row">
+                  <td colSpan={5} className="muted empty-row">
                     No sessions of 30 seconds or more{q ? ` match “${q}”` : ""}.
                   </td>
                 </tr>
@@ -863,12 +872,15 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
 
 // --- Settings --------------------------------------------------------------------------
 const SECTIONS = [
+  { id: "about", name: "About you", hint: "What Bond should know" },
   { id: "wellness", name: "Wellness", hint: "Water breaks" },
   { id: "assistant", name: "Bond", hint: "How he behaves" },
+  { id: "buddy", name: "Buddy", hint: "Your own character" },
   { id: "ai", name: "Bond's brain", hint: "Runs on this laptop" },
   { id: "voice", name: "Voice", hint: "Speaking and “Hey Bond”" },
   { id: "suggest", name: "Suggestions", hint: "When he speaks up" },
-  { id: "learning", name: "Learning & memory", hint: "What he keeps" },
+  { id: "memory", name: "Memory", hint: "What he keeps, empty it" },
+  { id: "learning", name: "Learning", hint: "Labs: what worked" },
   { id: "privacy", name: "Privacy", hint: "What's stored, what's sent" },
 ] as const;
 type SecId = (typeof SECTIONS)[number]["id"];
@@ -876,7 +888,8 @@ type SecId = (typeof SECTIONS)[number]["id"];
 function SettingsPage() {
   const [s, setS] = useState<Settings>(loadSettings);
   const [saved, setSaved] = useState(false);
-  const [sec, setSec] = useState<SecId>("wellness");
+  // Until you've told him about yourself, that is where Settings opens.
+  const [sec, setSec] = useState<SecId>(() => (hasProfile(loadProfile()) ? "wellness" : "about"));
   useEffect(() => {
     if (!s.labs && (sec === "suggest" || sec === "learning")) setSec("wellness");
   }, [s.labs, sec]);
@@ -903,11 +916,14 @@ function SettingsPage() {
         </div>
         <div className="settings-body">
         {sec === "wellness" && (
-          <Group title="Water breaks" desc="Bond brings water after a stretch of active laptop use. Stepping away on your own counts as a break.">
+          <Group title="Water breaks">
         <Toggle label="Bring me water breaks" checked={s.breaksOn} onChange={(v) => update({ breaksOn: v })} />
-        <Slider label="Break every" unit="min of use" min={10} max={120} step={5} value={s.breakEveryMin} disabled={!s.breaksOn} onChange={(v) => update({ breakEveryMin: v })} />
-        <Slider label="“Later” waits" unit="min" min={5} max={30} step={5} value={s.snoozeMin} disabled={!s.breaksOn} onChange={(v) => update({ snoozeMin: v })} />
-        <Slider label="Daily water goal" unit="glasses" min={4} max={15} step={1} value={s.waterGoal} onChange={(v) => update({ waterGoal: v })} />
+        <Choice label="Break every" unit="min" options={[15, 30, 45, 60, 90]} value={s.breakEveryMin} disabled={!s.breaksOn} onChange={(v) => update({ breakEveryMin: v })} />
+        <Choice label="“Later” waits" unit="min" options={[5, 10, 15, 30]} value={s.snoozeMin} disabled={!s.breaksOn} onChange={(v) => update({ snoozeMin: v })} />
+        <CupPicker goal={s.waterGoal} onChange={(v) => update({ waterGoal: v })} />
+        <button className="btn ghost" disabled={!s.breaksOn || !inTauri} onClick={() => void invoke("break_now").catch(() => {})} title="Bring the bottle now, to see what a break looks like">
+          Show me a break now
+        </button>
       </Group>
         )}
         {sec === "assistant" && (
@@ -946,10 +962,7 @@ function SettingsPage() {
       </Group>
         )}
         {sec === "ai" && (
-          <Group
-        title="Bond's brain"
-        desc="What powers “Ask Bond”, the screen, guide mode and “Your day in words”. It runs on this laptop: nothing you ask or show him leaves your computer, and there is no account or key to set up."
-      >
+          <Group title="Bond's brain">
         <LocalBrain />
       </Group>
         )}
@@ -958,14 +971,41 @@ function SettingsPage() {
             <i aria-hidden />
             {s.labs && s.wakeWord
               ? "The microphone is open right now, listening for “Hey Bond”. What isn't for him is dropped as it's heard; nothing is recorded or sent."
-              : "The microphone is closed. It opens only while you hold Ctrl+Alt+V and talk."}
+              : "The microphone is closed. It opens only while you hold Ctrl+Alt and talk."}
           </div>
         )}
         {sec === "voice" && (
-          <Group
-        title="Voice"
-        desc="Bond's own voice and ears run on this laptop: hold Ctrl+Alt+V and talk to him (or click the mic in the Ask box), and he answers out loud. The microphone is only open while you talk."
-      >
+          <Group title="Talking to Bond">
+        <ul className="keys">
+          <li>
+            <span className="kbds">
+              <kbd>Ctrl</kbd>+<kbd>Alt</kbd>
+            </span>
+            <span>
+              <b>Hold and talk.</b> He listens as long as you hold, up to 30 seconds, so you can speak slowly or stop to think.
+            </span>
+          </li>
+          <li>
+            <span className="kbds">
+              <kbd>Win</kbd>+<kbd>Alt</kbd>
+            </span>
+            <span>
+              <b>Tap to type.</b> Opens the ask box.
+            </span>
+          </li>
+          <li>
+            <span className="kbds">
+              <kbd>Mic</kbd>
+            </span>
+            <span>
+              <b>Mic in the ask box.</b> Ends after 2 seconds of quiet.
+            </span>
+          </li>
+        </ul>
+      </Group>
+        )}
+        {sec === "voice" && (
+          <Group title="His voice">
         <div className="tabs" role="radiogroup" aria-label="Voice">
           {(
             [
@@ -979,6 +1019,11 @@ function SettingsPage() {
           ))}
         </div>
         <LocalVoice voiceId={s.voiceId} speed={s.voiceSpeed} onChange={update} />
+      </Group>
+        )}
+        {sec === "voice" && (
+          <Group title="On this laptop">
+        <VoiceModels />
       </Group>
         )}
         {sec === "voice" && s.labs && (
@@ -1034,14 +1079,9 @@ function SettingsPage() {
         <Learned />
       </Group>
         )}
-        {sec === "learning" && (
-          <Group
-        title="What Bond remembers about you"
-        desc="Things you've told him about yourself (“call me Alex”), used in every conversation. He also keeps the last few minutes of what you talked about, so “close it” or “yes, run it” make sense. All on this computer."
-      >
-        <Memories />
-      </Group>
-        )}
+        {sec === "about" && <AboutYouPanel />}
+        {sec === "buddy" && <BuddyPanel />}
+        {sec === "memory" && <MemoryPanel s={s} update={update} />}
         {sec === "privacy" && <PrivacyPanel s={s} go={setSec} />}
         </div>
       </div>
@@ -1064,7 +1104,7 @@ function PrivacyPanel({ s: saved, go }: { s: Settings; go: (id: SecId) => void }
       title: "Microphone",
       state: s.wakeWord ? "Open: listening for “Hey Bond”" : "Closed",
       calm: !s.wakeWord,
-      text: s.wakeWord ? "What isn't for him is dropped as it's heard. Nothing is recorded or sent." : "It opens only while you hold Ctrl+Alt+V and talk.",
+      text: s.wakeWord ? "What isn't for him is dropped as it's heard. Nothing is recorded or sent." : "It opens only while you hold Ctrl+Alt and talk.",
       to: "voice",
     },
     {
@@ -1080,6 +1120,13 @@ function PrivacyPanel({ s: saved, go }: { s: Settings; go: (id: SecId) => void }
       calm: !s.learnFromMe,
       text: s.learnFromMe ? "He keeps what you ask and what worked, on this computer, so he can adapt." : "Nothing new is kept.",
       to: "learning",
+    },
+    {
+      title: "Buddy photo",
+      state: loadBuddy() ? "A sticker of your photo is kept" : "None",
+      calm: true,
+      text: "Only the finished sticker is kept, on this laptop; the photo you picked is not copied or sent. “Back to Bond the robot” deletes it.",
+      to: "buddy",
     },
   ];
   return (
@@ -1122,15 +1169,53 @@ function PrivacyPanel({ s: saved, go }: { s: Settings; go: (id: SecId) => void }
   );
 }
 
-function Group(props: { title: string; desc: string; children: ReactNode }) {
+function Group(props: { title: string; desc?: string; children: ReactNode }) {
   return (
     <section className="group">
       <div className="group-info">
         <h2>{props.title}</h2>
-        <p className="muted">{props.desc}</p>
+        {props.desc && <p className="muted">{props.desc}</p>}
       </div>
       <div className="group-body">{props.children}</div>
     </section>
+  );
+}
+
+/** A few ready-made choices (a segmented control): quicker than a slider for numbers people pick from a short list. */
+function Choice(props: { label: string; unit: string; options: number[]; value: number; disabled?: boolean; onChange: (v: number) => void }) {
+  // A value saved earlier that isn't one of the presets still shows, as its own choice.
+  const opts = props.options.includes(props.value) ? props.options : [...props.options, props.value].sort((a, b) => a - b);
+  return (
+    <div className={`choice ${props.disabled ? "off" : ""}`}>
+      <span className="s-label">{props.label}</span>
+      <div className="tabs" role="radiogroup" aria-label={props.label}>
+        {opts.map((o) => (
+          <button key={o} role="radio" aria-checked={o === props.value} className={o === props.value ? "on" : ""} disabled={props.disabled} onClick={() => props.onChange(o)}>
+            {o} <small>{props.unit}</small>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** The daily water goal as a row of glasses: tap the one you're aiming for. */
+function CupPicker(props: { goal: number; onChange: (v: number) => void }) {
+  const glasses = glassesToday();
+  return (
+    <div className="choice">
+      <span className="s-label">Daily water goal</span>
+      <div>
+        <div className="cup-pick" role="radiogroup" aria-label="Glasses of water a day">
+          {Array.from({ length: 15 }, (_, n) => (
+            <button key={n} role="radio" aria-checked={n + 1 === props.goal} className={n < props.goal ? "full" : ""} aria-label={`${n + 1} glasses`} onClick={() => props.onChange(Math.max(4, n + 1))} />
+          ))}
+        </div>
+        <p className="small muted">
+          <b>{props.goal}</b> glasses a day · {glasses} so far today
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -1171,6 +1256,15 @@ function Autostart() {
 
 const gb = (bytes: number) => (bytes / 1024 ** 3).toFixed(bytes > 1024 ** 3 ? 1 : 2);
 
+/** A "Learn more" link: opens in your own browser, only on a click, only for pages Bond ships with. */
+function LearnMore(props: { url: string; label?: string }) {
+  return (
+    <button className="linkish" onClick={() => void invoke("open_link", { url: props.url }).catch(() => {})}>
+      {props.label ?? "Learn more"} ↗
+    </button>
+  );
+}
+
 /** Download / status of the brain that runs on this laptop. */
 function LocalBrain() {
   const [st, setSt] = useState<BrainStatus | null>(null);
@@ -1198,9 +1292,13 @@ function LocalBrain() {
   if (!st.supported) return <p className="small muted">Bond's own brain runs on Windows for now.</p>;
   if (st.installed)
     return (
-      <p className="small good">
-        ✓ {st.model} is on this laptop{st.running ? " and awake" : ""}. It wakes when you ask and sleeps after 10 idle minutes to free your GPU. {msg}
-      </p>
+      <div className="model-row">
+        <div>
+          <b>{st.model}</b>
+          <small className="muted">{st.running ? "Awake" : "Asleep until you ask"} · on this laptop</small>
+        </div>
+        <LearnMore url="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF" />
+      </div>
     );
   const pct = progress && progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
   return (
@@ -1222,6 +1320,36 @@ function LocalBrain() {
         </button>
       )}
       {msg && <p className="small muted">{msg}</p>}
+    </>
+  );
+}
+
+/** The speech models Bond carries, what each is for, and whether it is installed. */
+function VoiceModels() {
+  const [v, setV] = useState<VoiceStatus | null>(null);
+  const [w, setW] = useState<WakeStatus | null>(null);
+  useEffect(() => {
+    void voiceStatus().then(setV);
+    void wakeStatus().then(setW);
+  }, []);
+  const rows: { job: string; name: string; on: boolean | null }[] = [
+    { job: "Speaking", name: "Kokoro v1.0", on: v ? v.installed : null },
+    { job: "Listening", name: "Parakeet TDT 0.6B", on: v ? v.installed : null },
+    { job: "Your voice (“Hey Bond”)", name: "TitaNet small", on: w ? w.installed : null },
+  ];
+  return (
+    <>
+      <ul className="model-list">
+        {rows.map((r) => (
+          <li key={r.job}>
+            <span>{r.job}</span>
+            <b>{r.name}</b>
+            <small className={r.on ? "good" : "muted"}>{r.on === null ? "…" : r.on ? "✓ installed" : "not downloaded"}</small>
+          </li>
+        ))}
+      </ul>
+      <p className="small muted">All three run on this laptop. Nothing you say is recorded or sent anywhere.</p>
+      <LearnMore url="https://github.com/k2-fsa/sherpa-onnx" label="About the speech engine" />
     </>
   );
 }
@@ -1257,7 +1385,7 @@ function LocalVoice(props: { voiceId: number; speed: number; onChange: (p: Parti
     setSt((x) => (x ? { ...x, installing: true } : x));
     try {
       await voiceInstall();
-      setMsg("Ready. Hold Ctrl+Alt+V and say hi.");
+      setMsg("Ready. Hold Ctrl+Alt and say hi.");
     } catch (e) {
       setMsg(`${e} You can try again; the download continues where it stopped.`);
     }
@@ -1295,7 +1423,7 @@ function LocalVoice(props: { voiceId: number; speed: number; onChange: (p: Parti
             </option>
           ))}
         </select>
-        <button className="btn ghost" onClick={() => void speak("Hi, I'm Bond. Hold Control, Alt and V whenever you want to talk to me.")}>
+        <button className="btn ghost" onClick={() => void speak("Hi, I'm Bond. Hold Control and Alt whenever you want to talk to me.")}>
           ▶ Preview
         </button>
       </label>
@@ -1449,6 +1577,124 @@ function HeyBond(props: { s: Settings; onChange: (p: Partial<Settings>) => void 
 }
 
 /** The facts Bond keeps about you; forget any or all. */
+/** Keys Settings → Memory leaves alone when it empties Bond: how the app looks and where he sits. */
+const KEEP_KEYS = ["selfglance.settings", "selfglance.sidebar", "selfglance.character", "selfglance.homeX"];
+
+const kb = (bytes: number) => (bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
+
+/** What the app itself has stored for you (activity, goals, ideas, notes): the number is the text's size. */
+function storedHere(): number {
+  let n = 0;
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith("selfglance.") && !KEEP_KEYS.includes(k)) n += k.length + (localStorage.getItem(k)?.length ?? 0);
+  } catch {
+    /* storage unavailable */
+  }
+  return n;
+}
+
+/** What Bond keeps, how much room it takes, and the two ways to empty it. */
+function MemoryPanel({ s, update }: { s: Settings; update: (p: Partial<Settings>) => void }) {
+  const [use, setUse] = useState<MemoryUsage | null>(null);
+  const [here, setHere] = useState(storedHere);
+  const [ask, setAsk] = useState<"" | "talk" | "all">("");
+  const [typed, setTyped] = useState("");
+  const [done, setDone] = useState("");
+  const refresh = () => {
+    void memoryUsage().then(setUse);
+    setHere(storedHere());
+  };
+  useEffect(() => {
+    refresh();
+    const t = window.setInterval(refresh, 5000);
+    return () => clearInterval(t);
+  }, []);
+  const sure = typed.trim().toLowerCase() === "delete";
+  const close = () => {
+    setAsk("");
+    setTyped("");
+  };
+  const forgetTalk = async () => {
+    await memoryForgetConversations().catch(() => {});
+    close();
+    setDone("Bond forgot what you talked about.");
+    refresh();
+  };
+  const emptyAll = async () => {
+    await memoryForget(null).catch(() => {});
+    await forgetLearned().catch(() => {});
+    await wakeForgetVoice().catch(() => {});
+    try {
+      for (const k of Object.keys(localStorage)) if (k.startsWith("selfglance.") && !KEEP_KEYS.includes(k)) localStorage.removeItem(k);
+    } catch {
+      /* storage unavailable */
+    }
+    window.location.reload(); // every page starts from empty
+  };
+  return (
+    <>
+      <Group title="What Bond keeps" desc="So a talk can go on tomorrow, Bond saves the last few things you asked and what he said, a little each. It's a small file on this computer and the oldest go first.">
+        <Toggle
+          label="Keep my conversations"
+          hint="Off: nothing new is saved. He still follows the talk you're having right now."
+          checked={s.keepChats}
+          onChange={(v) => {
+            update({ keepChats: v });
+            void memoryKeep(v);
+          }}
+        />
+        <ul className="kept">
+          <li>
+            <b>Conversations</b> {use ? `${use.conversations} of the last 40 saved` : "…"}
+          </li>
+          <li>
+            <b>Things about you</b> {use ? use.facts : "…"} (listed below)
+          </li>
+          <li>
+            <b>Memory files</b> {use ? kb(use.bytes) : "…"}
+          </li>
+          <li>
+            <b>Activity, goals, ideas, notes</b> {kb(here)} in the app
+          </li>
+        </ul>
+        {done && <p className="small muted">{done}</p>}
+        {ask === "" && (
+          <div className="key-row">
+            <button className="btn ghost" onClick={() => { setDone(""); setAsk("talk"); }}>
+              Forget conversations
+            </button>
+            <button className="btn ghost danger" onClick={() => { setDone(""); setAsk("all"); }}>
+              Empty Bond completely
+            </button>
+          </div>
+        )}
+        {ask !== "" && (
+          <div className="memory-sure">
+            <p className="small">
+              {ask === "talk"
+                ? "This deletes everything Bond saved from your talks. What he knows about you stays."
+                : "This deletes everything Bond has: conversations, what he knows about you, what he learned, your voice match, and your activity, goals, ideas and notes. Settings stay. It can't be undone."}
+            </p>
+            <p className="small muted">Type “delete” to confirm.</p>
+            <div className="key-row">
+              <input className="capture-input" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="delete" aria-label="Type delete to confirm" autoFocus />
+              <button className="btn danger" disabled={!sure} onClick={() => void (ask === "talk" ? forgetTalk() : emptyAll())}>
+                {ask === "talk" ? "Forget conversations" : "Empty Bond"}
+              </button>
+              <button className="btn ghost" onClick={close}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </Group>
+      <Group title="Picked up in conversation" desc="Things you've told him in passing (“call me Alex”), used in every conversation. What you want him to always know goes in About you.">
+        <Memories />
+      </Group>
+    </>
+  );
+}
+
 function Memories() {
   const [facts, setFacts] = useState<string[] | null>(null);
   const refresh = () => void memoryList().then(setFacts);

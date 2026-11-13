@@ -168,3 +168,25 @@ test("a week with no goals says how to start, nothing more", () => {
   assert.equal(r.usable, false);
   assert.equal(r.suggestions.length, 1);
 });
+
+test("guide settling: a changed page is noticed, a still one is steady", async () => {
+  const { changedShare, differs, still } = await import("../src/assistant/settle.ts");
+  const a = { title: "Claude", cells: new Array(1296).fill(100) };
+  const same = { title: "Claude", cells: new Array(1296).fill(101) };
+  const tab = { title: "ElevenLabs", cells: new Array(1296).fill(100) };
+  const page = { title: "Claude", cells: [...new Array(400).fill(220), ...new Array(896).fill(100)] };
+  assert.equal(changedShare(a.cells, same.cells), 0);
+  assert.ok(!differs(a, same) && still(a, same));
+  assert.ok(differs(a, tab), "a new tab title counts as a change");
+  assert.ok(differs(a, page) && !still(a, page));
+});
+
+test("a goal can be set for tomorrow, in a few phrasings", async () => {
+  const { goalForTomorrow, stalled, makeJudge, tomorrowOf, dayId } = await import("../src/assistant/goals.ts");
+  assert.equal(goalForTomorrow("goal for tomorrow: study diffusion transformers"), "study diffusion transformers");
+  assert.equal(goalForTomorrow("tomorrow I want to study diffusion transformers"), "study diffusion transformers");
+  assert.equal(goalForTomorrow("remind me to study diffusion transformers tomorrow"), "study diffusion transformers");
+  assert.equal(goalForTomorrow("goal: study diffusion transformers"), null);
+  assert.equal(dayId(tomorrowOf(new Date(2026, 9, 31))), "2026-11-01");
+  void stalled; void makeJudge;
+});

@@ -30,6 +30,21 @@ pub fn log(line: &str) {
     }
 }
 
+/// Write every panic to the log (message, file and line, thread) before anything else happens to it.
+pub fn log_panics() {
+    std::panic::set_hook(Box::new(|info| {
+        let place = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_else(|| "unknown place".into());
+        let what = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "no message".into());
+        let thread = std::thread::current();
+        log(&format!("PANIC in thread {} at {place}: {what}", thread.name().unwrap_or("unnamed")));
+    }));
+}
+
 /// From the overlay: what it did with an event.
 #[tauri::command]
 pub fn diag_log(line: String) {
