@@ -66,6 +66,23 @@ export function AboutYouPanel() {
           </div>
           <small className="muted">The tone of his replies.</small>
         </div>
+        <div className="about-field">
+          <span className="about-label">Weekends</span>
+          <div className="tabs" role="radiogroup" aria-label="Weekends">
+            {(
+              [
+                ["same", "Like any day"],
+                ["projects", "For my projects"],
+                ["off", "Days off"],
+              ] as const
+            ).map(([id, name]) => (
+              <button key={id} role="radio" aria-checked={p.weekends === id} className={p.weekends === id ? "on" : ""} onClick={() => commit({ ...p, weekends: id })}>
+                {name}
+              </button>
+            ))}
+          </div>
+          <small className="muted">For projects: your side projects come first on Saturday and Sunday. Days off: Bond says nothing about drifting then.</small>
+        </div>
       </div>
     </section>
   );

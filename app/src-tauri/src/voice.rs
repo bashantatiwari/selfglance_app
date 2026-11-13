@@ -29,6 +29,9 @@ const TTS_ARCHIVE: &str = "tts-models/kokoro-multi-lang-v1_0.tar.bz2";
 const TTS_DIR: &str = "kokoro-multi-lang-v1_0";
 const ASR_ARCHIVE: &str = "asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2";
 const ASR_DIR: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
+/// The archives' SHA-256, as GitHub publishes them for these releases (brain.rs `download` checks them).
+const TTS_SHA: &str = "60703707bc05ccd48d60e1eb723f38b07d6e474795a0b6a588d7220400e0f7a4";
+const ASR_SHA: &str = "6fc4426b54aa549a0019b8a75b8dea59164e71790a37ac56a045ad57f915f714";
 
 const TTS_MODEL: &str = "model.onnx";
 const TTS_THREADS: i32 = 8;
@@ -128,12 +131,12 @@ pub async fn voice_install(app: AppHandle) -> Result<(), String> {
 async fn install(app: &AppHandle) -> Result<(), String> {
     let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(20)).build().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(dir()?).map_err(|e| e.to_string())?;
-    for (archive, folder, what) in [(TTS_ARCHIVE, TTS_DIR, "Bond's voice"), (ASR_ARCHIVE, ASR_DIR, "Bond's ears")] {
+    for (archive, folder, what, sha) in [(TTS_ARCHIVE, TTS_DIR, "Bond's voice", TTS_SHA), (ASR_ARCHIVE, ASR_DIR, "Bond's ears", ASR_SHA)] {
         if dir()?.join(folder).exists() {
             continue;
         }
         let file = dir()?.join(archive.rsplit('/').next().unwrap_or("model.tar.bz2"));
-        crate::brain::download(app, &http, &format!("{RELEASES}/{archive}"), &file, what).await?;
+        crate::brain::download(app, &http, &format!("{RELEASES}/{archive}"), &file, what, sha).await?;
         let (f, target) = (file.clone(), dir()?.to_path_buf());
         tauri::async_runtime::spawn_blocking(move || untar(&f, &target)).await.map_err(|e| e.to_string())??;
         let _ = std::fs::remove_file(&file);

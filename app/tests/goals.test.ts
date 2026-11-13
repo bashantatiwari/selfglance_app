@@ -182,7 +182,7 @@ test("a goal can be set for tomorrow, in a few phrasings", async () => {
 test("with no goal for the day, the day is judged against what you told Bond about yourself", async () => {
   const { makeStandingJudge, standingGoals, standingDriftText, verdict, evening, aimTime } = await import("../src/assistant/goals.ts");
   const { EMPTY_PROFILE } = await import("../src/assistant/profile.ts");
-  const me = { ...EMPTY_PROFILE, name: "Alex", now: "data analyst", aim: "AI Engineer", projects: "tech explainer videos (YouTube)", end: "21:00" };
+  const me = { ...EMPTY_PROFILE, name: "Alex", now: "data analyst", aim: "AI Engineer", projects: "tech explainer videos (YouTube)", end: "21:00", weekends: "projects" as const };
   const seg = (ctx: string, label: string, app = "Brave", min = 12, at = 0) => ({ start: at, end: at + min * 60_000, ctx, label, app }) as never;
   const j = makeStandingJudge(me, {}, {});
   assert.equal(verdict(seg("watching", "Let's build GPT from scratch - Andrej Karpathy"), j), "on", "about the aim");
@@ -195,6 +195,8 @@ test("with no goal for the day, the day is judged against what you told Bond abo
   assert.match(standingGoals(me, new Date(2026, 10, 16))[0], /AI Engineer/);
   assert.match(standingGoals(me, new Date(2026, 10, 14))[0], /videos/);
   assert.deepEqual(standingGoals(EMPTY_PROFILE), []);
+  assert.match(standingGoals({ ...me, weekends: "same" }, new Date(2026, 10, 14))[0], /AI Engineer/, "a weekend like any day");
+  assert.deepEqual(standingGoals({ ...me, weekends: "off" }, new Date(2026, 10, 14)), [], "a weekend off: nothing to drift from");
   assert.match(standingDriftText(me, { ms: 14 * 60_000, since: 0, top: "Roblox Studio", topKey: "x" }), /14 minutes went to “Roblox Studio”/);
 
   // the end of the day: 21:00
@@ -210,7 +212,9 @@ test("with no goal for the day, the day is judged against what you told Bond abo
   assert.equal(evening(mon(20, 20), end, none, me, { study: "2026-11-16" }), null, "said once a day");
   assert.equal(evening(mon(21, 5), end, none, me, {})?.kind, "close");
   assert.equal(evening(mon(21, 5), end, none, me, { close: "2026-11-16" }), null);
-  assert.equal(evening(new Date(2026, 10, 14, 20, 20), end, none, me, {}), null, "no study call at the weekend");
+  assert.equal(evening(new Date(2026, 10, 14, 20, 20), end, none, me, {}), null, "no study call on a project weekend");
+  assert.equal(evening(new Date(2026, 10, 14, 20, 20), end, none, { ...me, weekends: "same" }, {})?.kind, "study", "a weekend like any day has one");
+  assert.equal(evening(new Date(2026, 10, 14, 21, 5), end, none, { ...me, weekends: "off" }, {}), null, "nothing at all on a day off");
 });
 
 test("follow-through: a lesson watched is asked about from the next day, one a day", async () => {

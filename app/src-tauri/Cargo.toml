@@ -41,6 +41,7 @@ sherpa-onnx = "1.13.8"
 cpal = "0.18.2"
 bzip2 = "0.6.1"
 tar = "0.4.46"
+sha2 = "0.10"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

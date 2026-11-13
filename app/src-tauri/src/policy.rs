@@ -49,8 +49,27 @@ pub(crate) const SAFE_HOTKEYS: &[&str] = &[
 ];
 
 fn safe_hotkey(keys: &str) -> bool {
-    let k: String = keys.to_lowercase().split('+').map(str::trim).collect::<Vec<_>>().join("+");
-    SAFE_HOTKEYS.contains(&k.as_str())
+    SAFE_HOTKEYS.contains(&combo(keys).as_str())
+}
+
+fn combo(keys: &str) -> String {
+    keys.to_lowercase().split('+').map(str::trim).collect::<Vec<_>>().join("+")
+}
+
+/// Windows-key shortcuts an AI plan may press even with Advanced actions on: arranging windows, the desktop,
+/// the clipboard history and a screenshot. Never Win+R, Win+X or the like: those open a way to run anything,
+/// and typing into them would get round the approval card that commands need.
+const WIN_ALLOWED: &[&str] = &["win+d", "win+e", "win+up", "win+down", "win+left", "win+right", "win+shift+s", "win+v", "win+tab"];
+
+fn win_ok(keys: &str) -> bool {
+    let k = combo(keys);
+    let parts: Vec<&str> = k.split('+').collect();
+    let win = parts.iter().any(|p| matches!(*p, "win" | "windows" | "meta" | "super" | "cmd" | "command"));
+    if !win {
+        return true;
+    }
+    let normal: Vec<&str> = parts.iter().map(|p| if matches!(*p, "windows" | "meta" | "super" | "cmd" | "command") { "win" } else { p }).collect();
+    WIN_ALLOWED.contains(&normal.join("+").as_str())
 }
 
 /// The lower-case words of some text (letters and digits).
@@ -142,6 +161,7 @@ pub fn vet(actions: Vec<Action>, user: &str) -> Result<Vec<Action>, String> {
             Action::OpenUrl { url, .. } if !url_ok(url, user) => return Err(format!("I only open web addresses you asked for, so I didn't open {}.", short(url))),
             Action::WebSearch { query, .. } if !search_ok(query, user) => return Err(format!("I only search for words you said, so I didn't search for “{}”.", short(query))),
             Action::Hotkey { keys } if !adv && !safe_hotkey(keys) => return Err(format!("I only press shortcuts that every app shares, so I didn't press {}.", short(keys))),
+            Action::Hotkey { keys } if !win_ok(keys) => return Err(format!("I don't press {} for a plan: it opens a way to run things without your approval.", short(keys))),
             a if !adv && needs_advanced(a) => return Err("That needs “Advanced actions”, which are off. You can turn them on in Settings → Bond.".into()),
             _ => {}
         }
@@ -243,7 +263,13 @@ mod tests {
         assert!(vet(vec![act(r#"{"do":"open_app","name":"notepad"}"#), act(r#"{"do":"type_text","text":"x"}"#)], said).is_err());
         agent_set_advanced(true);
         assert!(vet(vec![act(r#"{"do":"run_command","command":"dir","why":"x"}"#)], said).is_ok());
-        assert!(vet(vec![act(r#"{"do":"hotkey","keys":"win+r"}"#)], said).is_ok());
+        // Even then, never a shortcut that opens a way round the approval card (Win+R, type, Enter).
+        for k in ["win+r", "Win + X", "meta+r", "super+r"] {
+            assert!(vet(vec![act(&format!(r#"{{"do":"hotkey","keys":"{k}"}}"#))], said).is_err(), "{k}");
+        }
+        for k in ["win+d", "Win+Shift+S", "ctrl+shift+esc", "alt+f"] {
+            assert!(vet(vec![act(&format!(r#"{{"do":"hotkey","keys":"{k}"}}"#))], said).is_ok(), "{k}");
+        }
         // Even then, an address with something extra in it is refused.
         assert!(vet(vec![act(r#"{"do":"open_url","url":"https://evil.example/?d=secret+words+here"}"#)], said).is_err());
         agent_set_advanced(false);

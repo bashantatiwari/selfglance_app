@@ -137,17 +137,17 @@ async fn install(app: &AppHandle) -> Result<(), String> {
     let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(20)).build().map_err(|e| e.to_string())?;
     let models = dir()?.join("models");
     std::fs::create_dir_all(&models).map_err(|e| e.to_string())?;
-    for file in [MODEL_FILE, MMPROJ_FILE] {
+    for (file, sha) in [(MODEL_FILE, SHA_MODEL), (MMPROJ_FILE, SHA_MMPROJ)] {
         let dest = models.join(file);
         if !dest.exists() {
-            download(app, &http, &format!("{MODEL_REPO}/{file}"), &dest, "Bond's brain").await?;
+            download(app, &http, &format!("{MODEL_REPO}/{file}"), &dest, "Bond's brain", sha).await?;
         }
     }
     if !server_exe()?.exists() {
         let target = engine_dir()?;
         std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
         let zip_path = dir()?.join("engine.zip");
-        download(app, &http, &engine_archive(), &zip_path, "Engine").await?;
+        download(app, &http, &engine_archive(), &zip_path, "Engine", SHA_ENGINE).await?;
         let (zp, t) = (zip_path.clone(), target.clone());
         tauri::async_runtime::spawn_blocking(move || unzip(&zp, &t)).await.map_err(|e| e.to_string())??;
         let _ = std::fs::remove_file(&zip_path);
@@ -158,8 +158,34 @@ async fn install(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Stream a file to disk, resuming a partial download.
-pub(crate) async fn download(app: &AppHandle, http: &reqwest::Client, url: &str, dest: &Path, what: &str) -> Result<(), String> {
+// The exact files Bond downloads, by SHA-256: a download that doesn't match is thrown away, never run. The
+// engine and voice archives match the digests GitHub publishes for those releases, and the model files the
+// hashes Hugging Face lists for them (checked 2026-11-14); the wake word archive and the voice-match model have
+// no published digest, so theirs were taken from fresh downloads of the same pinned URLs.
+pub(crate) const SHA_ENGINE: &str = "bdd6157fe43e78aef87d4813fc35ab02e3f1a7c8327c9d970f120e5d18034491";
+const SHA_MODEL: &str = "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4";
+const SHA_MMPROJ: &str = "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864";
+
+/// SHA-256 of a file, as lower-case hex.
+pub(crate) fn sha256_file(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Stream a file to disk, resuming a partial download, and keep it only if it is exactly the file expected
+/// (`sha256`). A damaged or swapped download is deleted, so the next try starts clean.
+pub(crate) async fn download(app: &AppHandle, http: &reqwest::Client, url: &str, dest: &Path, what: &str, sha256: &str) -> Result<(), String> {
     use std::io::Write;
     let part = dest.with_extension("part");
     let have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
@@ -169,6 +195,10 @@ pub(crate) async fn download(app: &AppHandle, http: &reqwest::Client, url: &str,
     }
     let mut res = req.send().await.map_err(|e| format!("Download failed: {e}"))?;
     let status = res.status();
+    // 416: the part already holds the whole file (an earlier try finished but was not checked). Check it now.
+    if status.as_u16() == 416 && have > 0 {
+        return keep_if_right(&part, dest, sha256, what);
+    }
     if !status.is_success() {
         return Err(format!("Download failed ({status}) for {url}"));
     }
@@ -194,7 +224,38 @@ pub(crate) async fn download(app: &AppHandle, http: &reqwest::Client, url: &str,
     out.flush().map_err(|e| e.to_string())?;
     drop(out);
     let _ = app.emit("brain-progress", Progress { what: what.into(), done, total });
-    std::fs::rename(&part, dest).map_err(|e| e.to_string())
+    let (p, d, s, w) = (part.clone(), dest.to_path_buf(), sha256.to_string(), what.to_string());
+    tauri::async_runtime::spawn_blocking(move || keep_if_right(&p, &d, &s, &w)).await.map_err(|e| e.to_string())?
+}
+
+/// The finished part becomes the file only when its hash is the one expected; otherwise it is deleted.
+fn keep_if_right(part: &Path, dest: &Path, sha256: &str, what: &str) -> Result<(), String> {
+    let got = sha256_file(part)?;
+    if !got.eq_ignore_ascii_case(sha256) {
+        let _ = std::fs::remove_file(part);
+        crate::diag::log(&format!("download: {what} did not match its checksum (got {got}), deleted"));
+        return Err(format!("The download of {what} was damaged or isn't the expected file, so I deleted it. Try again."));
+    }
+    std::fs::rename(part, dest).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod download_tests {
+    #[test]
+    fn a_file_is_kept_only_when_its_checksum_matches() {
+        let dir = std::env::temp_dir().join(format!("bond-dl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (part, dest) = (dir.join("x.part"), dir.join("x.bin"));
+        std::fs::write(&part, b"abc").unwrap();
+        // sha256("abc")
+        let right = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert!(super::keep_if_right(&part, &dest, &"0".repeat(64), "test").is_err());
+        assert!(!part.exists(), "a wrong file is deleted");
+        std::fs::write(&part, b"abc").unwrap();
+        assert!(super::keep_if_right(&part, &dest, right, "test").is_ok());
+        assert!(dest.exists() && !part.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 /// Unpack an archive flat into `target` (the release zips keep everything at the top level).
@@ -219,6 +280,9 @@ fn unzip(zip_path: &Path, target: &Path) -> Result<(), String> {
 struct Server {
     child: Child,
     port: u16,
+    /// A key made up at each start: the engine answers only requests that carry it, so another program on this
+    /// laptop can't use Bond's brain (or read what is asked of it) through its port.
+    key: String,
     last_used: Instant,
     /// The model has finished loading (until then the engine answers "Loading model").
     ready: bool,
@@ -273,8 +337,9 @@ async fn port() -> Result<u16, String> {
     let mut why = String::new();
     for (attempt, (ctx, offload)) in [(CONTEXT, true), (8192, false)].into_iter().enumerate() {
         let port = free_port()?;
-        let child = spawn(port, ctx, offload)?;
-        *SERVER.lock().unwrap() = Some(Server { child, port, last_used: Instant::now(), ready: false });
+        let key = new_key();
+        let child = spawn(port, ctx, offload, &key)?;
+        *SERVER.lock().unwrap() = Some(Server { child, port, key, last_used: Instant::now(), ready: false });
         match wait_until_ready(port).await {
             Ok(()) => {
                 if let Some(s) = SERVER.lock().unwrap().as_mut() {
@@ -366,12 +431,30 @@ fn alive() -> Option<u16> {
     Some(s.port)
 }
 
+/// 32 random bytes as hex, from the operating system's random source (via a fresh hasher seed and the clock).
+fn new_key() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    (0..4)
+        .map(|i| {
+            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+            h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+            h.write_usize(i);
+            format!("{:016x}", h.finish())
+        })
+        .collect()
+}
+
+/// The running engine's key.
+fn key() -> String {
+    SERVER.lock().unwrap().as_ref().map(|s| s.key.clone()).unwrap_or_default()
+}
+
 fn free_port() -> Result<u16, String> {
     let l = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     l.local_addr().map(|a| a.port()).map_err(|e| e.to_string())
 }
 
-fn spawn(port: u16, ctx: u32, mmproj_on_gpu: bool) -> Result<Child, String> {
+fn spawn(port: u16, ctx: u32, mmproj_on_gpu: bool, key: &str) -> Result<Child, String> {
     let log = std::fs::File::create(dir()?.join("engine.log")).ok();
     let mut cmd = Command::new(server_exe()?);
     cmd.current_dir(engine_dir()?)
@@ -380,6 +463,7 @@ fn spawn(port: u16, ctx: u32, mmproj_on_gpu: bool) -> Result<Child, String> {
         .arg("--mmproj")
         .arg(model_path(MMPROJ_FILE)?)
         .args(["--host", "127.0.0.1", "--port", &port.to_string()])
+        .args(["--api-key", key])
         .args(["--ctx-size", &ctx.to_string()])
         .args(["--n-gpu-layers", "99", "--parallel", "1", "--jinja", "--no-webui"])
         // Answers come straight away: Bond's requests are short, thinking only slows them.
@@ -472,6 +556,7 @@ pub async fn chat(system: &str, prompt: &str, image: Option<&str>, schema: Optio
     }
     let res = reqwest::Client::new()
         .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
+        .bearer_auth(key())
         .timeout(Duration::from_secs(180))
         .json(&body)
         .send()
@@ -518,7 +603,7 @@ pub async fn chat_stream(system: &str, prompt: &str, schema: Option<&Value>, max
         body["response_format"] = json!({"type": "json_schema", "json_schema": {"name": "reply", "schema": s}});
         body["temperature"] = json!(0.0);
     }
-    let mut res = reqwest::Client::new().post(format!("http://127.0.0.1:{port}/v1/chat/completions")).timeout(Duration::from_secs(180)).json(&body).send().await.map_err(|e| format!("Bond's brain didn't answer: {e}"))?;
+    let mut res = reqwest::Client::new().post(format!("http://127.0.0.1:{port}/v1/chat/completions")).bearer_auth(key()).timeout(Duration::from_secs(180)).json(&body).send().await.map_err(|e| format!("Bond's brain didn't answer: {e}"))?;
     if !res.status().is_success() {
         let v: Value = res.json().await.unwrap_or(Value::Null);
         return Err(format!("Bond's brain had a problem: {}", v["error"]["message"].as_str().unwrap_or("request failed")));

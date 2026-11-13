@@ -22,11 +22,13 @@ export interface Profile {
   end: string;
   /** How Bond should talk to you. */
   tone: "friendly" | "direct";
+  /** Saturday and Sunday: like any day, given to your projects, or days off (Bond says nothing about drifting). */
+  weekends: "same" | "projects" | "off";
   /** Anything else he should know. */
   more: string;
 }
 
-export const EMPTY_PROFILE: Profile = { name: "", now: "", aim: "", projects: "", start: "09:00", end: "22:00", tone: "friendly", more: "" };
+export const EMPTY_PROFILE: Profile = { name: "", now: "", aim: "", projects: "", start: "09:00", end: "22:00", tone: "friendly", weekends: "same", more: "" };
 
 const KEY = "selfglance.profile";
 export const PROFILE_EVENT = "selfglance:profile";
@@ -45,6 +47,7 @@ export function loadProfile(): Profile {
       start: HHMM.test(v.start) ? v.start : EMPTY_PROFILE.start,
       end: HHMM.test(v.end) ? v.end : EMPTY_PROFILE.end,
       tone: v.tone === "direct" ? "direct" : "friendly",
+      weekends: v.weekends === "projects" || v.weekends === "off" ? v.weekends : "same",
       more: text("more", 300),
     };
   } catch {
@@ -82,6 +85,7 @@ export function profileLine(p: Profile): string {
     p.projects && `Side projects: ${p.projects}.`,
     `Usual hours ${p.start}–${p.end}.`,
     p.tone === "direct" ? "Wants direct, short answers." : "",
+    p.weekends === "projects" ? "Weekends go to the side projects." : p.weekends === "off" ? "Weekends are days off." : "",
     p.more && `Also: ${p.more}`,
   ];
   return parts
@@ -122,6 +126,9 @@ export function aimWords(p: Profile): string[] {
   const own = (p.aim.toLowerCase().match(/[\p{L}\p{N}+#]{3,}/gu) ?? []).filter((w) => !["become", "engineer", "developer", "student", "good", "great", "senior", "junior"].includes(w));
   return [...new Set([...own, ...AIM_WORDS.filter(([re]) => re.test(about)).flatMap(([, w]) => w)])];
 }
+
+/** A Saturday or Sunday. */
+export const isWeekend = (d: Date) => d.getDay() === 0 || d.getDay() === 6;
 
 /** Making videos is your work, not your distraction. */
 export const isCreator = (p: Profile) => /\b(content|youtube|video|vlog|stream|tiktok|reels|podcast|creator|channel)\b/i.test(p.projects + " " + p.now + " " + p.aim);

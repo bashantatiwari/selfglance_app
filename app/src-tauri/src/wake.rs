@@ -36,6 +36,10 @@ const KWS_DIR: &str = "sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01";
 const KWS_MODEL: &str = "epoch-12-avg-2-chunk-16-left-64.int8.onnx";
 const SPEAKER_URL: &str = "speaker-recongition-models/nemo_en_titanet_small.onnx";
 const SPEAKER_FILE: &str = "speaker/nemo_en_titanet_small.onnx";
+/// SHA-256 of the two downloads. GitHub publishes no digest for these older uploads: these are of fresh
+/// downloads of the same URLs (2026-11-14), matching their published sizes.
+const KWS_SHA: &str = "f170013b4716e41b62b9bfd809687c207cef798ef9bc6534d524e17af9b6561a";
+const SPEAKER_SHA: &str = "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e";
 
 /// "hey bond" in the model's word pieces. `:` boosts the phrase, `#` is how sure the
 /// spotter must be (lower wakes more easily). Over 8 voices this caught 22/24 "hey bond"s
@@ -171,13 +175,13 @@ pub async fn wake_install(app: AppHandle) -> Result<(), String> {
     std::fs::create_dir_all(dir.join("speaker")).map_err(|e| e.to_string())?;
     if !kws_dir()?.exists() {
         let file = dir.join("kws.tar.bz2");
-        crate::brain::download(&app, &http, &format!("{}/{KWS_ARCHIVE}", voice::RELEASES), &file, "the wake word").await?;
+        crate::brain::download(&app, &http, &format!("{}/{KWS_ARCHIVE}", voice::RELEASES), &file, "the wake word", KWS_SHA).await?;
         let (f, target) = (file.clone(), dir.clone());
         tauri::async_runtime::spawn_blocking(move || voice::untar(&f, &target)).await.map_err(|e| e.to_string())??;
         let _ = std::fs::remove_file(&file);
     }
     if !speaker_path()?.exists() {
-        crate::brain::download(&app, &http, &format!("{}/{SPEAKER_URL}", voice::RELEASES), &speaker_path()?, "voice match").await?;
+        crate::brain::download(&app, &http, &format!("{}/{SPEAKER_URL}", voice::RELEASES), &speaker_path()?, "voice match", SPEAKER_SHA).await?;
     }
     if installed() {
         Ok(())

@@ -7,7 +7,7 @@ profile if you can, and write down every failure with the last lines of
 
 **Ship gate:** no S1 failure open, no more than 3 S2 open and each with a workaround noted in the README.
 S1 = data loss, wrong destructive action, crash/hang, privacy leak, can't start. S2 = a headline feature
-doesn't work (water break, Goals, voice, guide). S3 = wording, polish.
+doesn't work (drift nudges, follow-through, water break, Goals, voice). S3 = wording, polish.
 
 ## 0. Install, upgrade, uninstall (S1 if any fail)
 | # | Attack | Expected |
@@ -16,13 +16,14 @@ doesn't work (water break, Goals, voice, guide). S3 = wording, polish.
 | 0.2 | Install over the old version while Bond is **running**. | Installer closes it or asks; no half-installed state. |
 | 0.3 | Upgrade keeping old data (goals, ideas, diary, settings, `memory.json`). | Everything still there; Goals page opens; no blank screens. |
 | 0.4 | Kill the brain download at 50% (disable Wi-Fi), re-enable, retry. | Resumes or restarts cleanly; no corrupt model file that loads forever. |
+| 0.4b | Corrupt a finished download's `.part` file by hand (append a byte), then retry. | Refused as not matching its checksum, deleted, and downloaded again. |
 | 0.5 | Fill the disk to <1 GB free, then download the brain. | A clear "not enough space" message, not a hang. |
 | 0.6 | Install to a path with spaces and non-ASCII characters in the user name. | Works. |
 | 0.7 | Reboot: does it autostart exactly **one** copy? Start it twice by hand. | One tray icon, second launch just focuses the first. |
 | 0.8 | Uninstall. | App, autostart entry and tray gone; ask whether user data is kept. No leftover `llama-server.exe`. |
 | 0.9 | Windows SmartScreen / antivirus on the unsigned installer. | Note what a friend sees. (Past AutoIt malware incident: scan the installer with Defender before sharing.) |
 
-## 1. The water break (the core promise, S2)
+## 1. The water break (S2)
 Use Settings to set the interval to 2 minutes for tests, then back to 45.
 | # | Attack | Expected |
 |---|---|---|
@@ -80,14 +81,11 @@ Use Settings to set the interval to 2 minutes for tests, then back to 45.
 | 4.6 | Say "stop" while he is speaking and while he is acting. | Stops at once. |
 | 4.7 | Another app grabs Ctrl+Alt or Win+Alt (AutoHotkey, VS Code, a game overlay). | Bond still reacts, or the tray menu works. |
 
-## 5. Screen reading and guide mode (S2)
+## 5. Screen reading (S2)
 | # | Attack | Expected |
 |---|---|---|
 | 5.1 | A password field, bank page, private window on screen, then "what's on my screen". | Never reads or repeats password fields; note anything sensitive it does read. |
-| 5.2 | High-DPI 150%/200%, two monitors, window on the second monitor. | Pointer lands on the right control. |
 | 5.3 | Dark vs light theme, a page with 300 controls, a Chromium app with no UI Automation. | Degrades to OCR or says it can't, never clicks blindly. |
-| 5.4 | Guide: "walk me through saving this file" and abandon halfway; start another. | Old guide ends cleanly. |
-| 5.5 | Guide step the user ignores for 5 min. | Doesn't loop or spam. |
 | 5.6 | Bond must stay out of screenshots/recordings: Win+Shift+S, Print Screen, OBS, Teams share. | Hidden unless the user chose otherwise. |
 | 5.7 | The answer card on a window edge, over a text box, on the second monitor, at 200% scaling. | Fully visible, wraps long text, doesn't cover the input being typed in. |
 
@@ -147,10 +145,23 @@ Build:     version + date
 | 10.8 | Activity: forget an item while it is the window in front. | The next ticks start a fresh entry; no crash, no negative totals. |
 | 10.9 | Ideas: open, edit, close with the header, the arrow and the Close button; delete and Undo; type 600 characters. | All three ways close it. Edits save; an empty idea is never saved. Old ideas still open. |
 | 10.10 | Sidebar: click the logo to collapse and expand; resize the window to 380 px wide. | Works at every width; no separate toggle box. |
-| 10.11 | Guide: do a job across two apps (copy in one, paste in the other). Change the browser tab mid-guide. | Points at Copy, then the box with "press Ctrl+V". A new tab is treated as a new page. `bond.log` shows `guide: settled after … ms`. |
-| 10.12 | Guide, then ask "I need a bio for the channel we made". Then do it 7 hours later. | Asks one question, remembers the answer, writes the bio. After 6 hours it no longer knows the job. |
 | 10.13 | "Close all the notepad windows", "close all windows", "close everything". | The first closes Notepad; the others do not close a program called "all windows". |
 | 10.14 | An AI plan with several Ctrl+W presses (hard to trigger; run `cargo test --lib policy`). | Refused with a message. |
 | 10.15 | Settings → Wellness: click each interval, tap glasses, "Show me a break now" with breaks off. | Saved; the button is disabled when breaks are off; a goal below 4 glasses is held at 4. |
 | 10.16 | Settings → Bond's brain: "Learn more". Settings → Voice: "About the speech engine". | Opens your browser on the Hugging Face and GitHub pages only. |
 | 10.17 | Icons: taskbar, tray, title bar, Alt+Tab, Start menu, installer, uninstaller, at 100%, 150% and 200% scaling. | The robot icon is crisp and readable at every size. |
+
+## 11. Drift engine and follow-through (S2)
+Fill Settings → About you first (aim, what you do now, projects, the end of your day, weekends).
+| # | Attack | Expected |
+|---|---|---|
+| 11.1 | No goal set. Watch an unrelated video for 12 minutes during the day. | One spoken line and a card naming the video; no second nudge for 15 minutes; never more than two an hour. |
+| 11.2 | Same, but the video is about your aim (a PyTorch lecture for "AI Engineer"). | No nudge: it counts toward the aim. |
+| 11.3 | An app Bond has never seen, for 15 minutes. | Labelled once by the brain; "This is on-goal" on its card sticks after a restart. |
+| 11.4 | Watch a tutorial for 15 minutes; the next day open the laptop. | One question about it at a quiet moment; "I'll do it today" brings it back the day after; only one such question a day. |
+| 11.5 | A tutorial watched for 4 minutes. | Not written down. |
+| 11.6 | Nothing toward the aim all day; 40 minutes before the end of your day. | The last call, once; after the end, "time to wrap up", once. Nothing in a meeting. |
+| 11.7 | Weekends set to "Days off"; a Saturday of YouTube. | Bond says nothing about drifting. "For my projects": video tools count, no study call. |
+| 11.8 | About you empty. | No drift nudges and no calls at all; nothing crashes. |
+| 11.9 | Quiet hours on, or "Not now" on a card. | Nothing until they end. |
+| 11.10 | Ask "who made you?" with nothing in About you, then with "I built Bond" in Anything else. | "Bond from SelfGlance", then that you built him. |

@@ -9,7 +9,7 @@
 
 import type { Segment } from "../companion/tracker";
 import { catOf, durOf, fmt } from "../dashboard/analyze.ts";
-import { aimWords, CREATOR_TOOLS, isCreator, loadProfile, mentions, type Profile } from "./profile.ts";
+import { aimWords, CREATOR_TOOLS, isCreator, isWeekend, loadProfile, mentions, type Profile } from "./profile.ts";
 
 export type Fit = "on" | "off" | "neutral";
 /** A verdict can also be "unsure": the rules can't tell, so the brain may be asked. */
@@ -172,12 +172,16 @@ export function makeJudge(goals: string[], fixes = loadFixes(), cache = loadCach
 // laptop time is for on any day: where you are headed, what you do now, and your projects. With no goal set,
 // the day is judged against those, so drifting is noticed without you planning anything.
 
-/** The commitments as lines (for the brain, and to say back to you). Empty when About you is empty. */
+/**
+ * The commitments as lines (for the brain, and to say back to you). Empty when About you is empty, and on a
+ * weekend you keep free (About you → Weekends): then Bond says nothing about drifting.
+ */
 export function standingGoals(p: Profile, d = new Date()): string[] {
-  const weekend = d.getDay() === 0 || d.getDay() === 6;
+  const weekend = isWeekend(d);
+  if (weekend && p.weekends === "off") return [];
   const lines = [p.aim && `Becoming: ${p.aim}`, p.now && `Now: ${p.now}`, p.projects && `Projects: ${p.projects}`].filter((x): x is string => !!x);
-  // At the weekend the projects come first (the videos get made then).
-  return (weekend && p.projects ? [lines[lines.length - 1], ...lines.slice(0, -1)] : lines).slice(0, MAX_GOALS);
+  // Weekends you give to your projects: they come first.
+  return (weekend && p.weekends === "projects" && p.projects ? [lines[lines.length - 1], ...lines.slice(0, -1)] : lines).slice(0, MAX_GOALS);
 }
 
 /** The judge for a day with no goal of its own: anything about your aim or made with your tools is on-track. */
@@ -228,9 +232,11 @@ export interface Evening {
 export function evening(now: Date, end: number, segs: Segment[], p: Profile, said: { study?: string; close?: string }): Evening | null {
   const minute = now.getHours() * 60 + now.getMinutes();
   const today = dayId(now);
-  const weekend = now.getDay() === 0 || now.getDay() === 6;
+  // A weekend you keep free has no study call; a weekend for projects has none either (it isn't study time).
+  const weekend = isWeekend(now) && p.weekends !== "same";
+  if (isWeekend(now) && p.weekends === "off") return null;
   if (minute >= end && minute < end + 120 && said.close !== today) {
-    return { kind: "close", text: `It's past ${clockText(end)}, when your laptop day ends. Time to close it and call home.` };
+    return { kind: "close", text: `It's past ${clockText(end)}, when your laptop day ends. Time to wrap up and close it.` };
   }
   if (!weekend && p.aim && minute >= end - LAST_CALL_MIN && minute < end && said.study !== today) {
     const had = aimTime(segs, p);

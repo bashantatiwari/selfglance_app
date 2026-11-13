@@ -1,7 +1,7 @@
 <h1 align="center">SelfGlance</h1>
 
 <p align="center">
-  <b>Bond is a desktop guide for Windows. He looks at your screen, shows you where to click next, and keeps all of it on your laptop.</b>
+  <b>Bond is a desktop companion for Windows. He sees what you meant to do and what you actually do, and speaks up when the two drift apart. All of it stays on your laptop.</b>
 </p>
 
 <p align="center">
@@ -15,8 +15,8 @@
 
 <p align="center">
   <a href="#what-it-is">What it is</a> ·
-  <a href="#guide-mode">Guide mode</a> ·
-  <a href="#around-the-guide">Around the guide</a> ·
+  <a href="#staying-on-track">Staying on track</a> ·
+  <a href="#around-it">Around it</a> ·
   <a href="#the-dashboard">Dashboard</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#privacy">Privacy</a> ·
@@ -37,60 +37,52 @@
 
 ## What it is
 
-SelfGlance is built around one job: **helping you get things done on your own computer, step by step, without taking over.**
+SelfGlance is built around one question: **are you doing what you meant to do?**
 
-**Bond** is the helper. He lives on your desktop as a small character. Hold `Ctrl+Alt` and say what you want to do ("walk me through creating a YouTube channel"), and he reads the window in front of you, moves a cursor to the next thing to click, waits for *you* to click it, and looks again. He never clicks or types for you in this mode.
+**Bond** lives on your desktop as a small character. You tell him once who you are and where you are headed (Settings → About you): "AI Engineer", "AI security intern", "making AI videos". From then on he notes which window is in front of you, judges each stretch against that, and says something when it matters: when you have drifted for ten minutes, when a tutorial you watched yesterday led nowhere, when your laptop day is ending and the study didn't happen. Hold `Ctrl+Alt` to talk to him; he answers out loud.
 
-**The dashboard** is where you see how your day went and what you set out to do: time on the laptop, a focus goal for today and tomorrow, your ideas. What Bond remembers, and how to empty it, is in Settings → Memory. The Plan page fits what you want to do today (say "plan my day: …") around anything with a fixed time, and Bond's own suggestions only fill the gaps and wait for your yes.
+**The dashboard** shows how the day really went: time on the laptop, what counted toward your aim and what didn't, today's plan and focus, your ideas.
 
-What it deliberately is not: a cloud assistant, a remote-control agent, or a bundle of features. It stays small, and it stays on your laptop.
+What it deliberately is not: a cloud assistant or a bundle of features. It stays small, and it stays on your laptop.
 
 | | |
 |---|---|
-| **Guides, doesn't take over** | A virtual cursor points at the next click. You click. |
-| **Sees the screen** | Windows OCR and UI Automation give him the exact words and named controls of the window in front. |
-| **Remembers the job** | After a guided job he remembers what you did for a few hours, so "now write the bio for the channel we made" makes sense. |
-| **Keeps you on your goal** | One focus per day (and one for tomorrow). He nudges you if you drift, or if an hour passes without starting. |
-| **Looks after you** | Water breaks, battery warnings, simple reminders ("remind me in 10 minutes to stretch"). |
+| **Knows what you're for** | A few lines about you are enough. No timetable to fill in: he judges whenever you are at the laptop. |
+| **Speaks up, briefly** | One spoken line when you drift, with "that counts" and "not now" as answers. At most two nudges an hour. |
+| **Follows through** | Lessons you watch are written down, and the next day he asks what came of one. |
+| **Talks back fast** | A conversation answer starts in about a second, spoken as it is written. |
+| **Does small jobs** | Open apps and sites, timers, reminders, volume, files, laptop status. Commands, ending programs and deleting files always ask first. |
 | **Private by construction** | The AI, the voice and the memory all run on your laptop. No account, no keys, no cloud. |
 
-## Guide mode
-
-Say *"walk me through buying a domain"* or *"help me set up OBS to record my screen"*. Bond gets the right app in front (opening it, or restoring it if minimized), then points at one thing at a time.
+## Staying on track
 
 ```mermaid
-sequenceDiagram
-    actor You
-    participant Bond
-    participant Screen as Screen (Windows)
-    You->>Bond: "Walk me through creating a channel"
-    Bond->>Screen: bring the right window to the front
-    loop until the goal is reached
-        Bond->>Screen: read the window (UI Automation + OCR)
-        Bond->>Bond: choose the one next control
-        Bond-->>You: a cursor glides to it, with a one-line note
-        You->>Screen: you click it
-        Bond->>Screen: wait until the page has changed and stopped moving
-    end
-    Bond-->>You: "That's done"
+flowchart LR
+    A["About you<br/>aim, what you do now, projects"] --> J{"Each stretch at the laptop:<br/>on track, off track, new?"}
+    W["Window in front<br/>app and title"] --> J
+    J -- "rules: your words, your tools,<br/>known distractions" --> V["Verdict"]
+    J -- "unclear" --> B[("Local brain<br/>labels it once,<br/>remembered")]
+    B --> V
+    V --> N["10 min off track: one line"]
+    V --> F["Lesson watched: asked about tomorrow"]
+    V --> E["End of your laptop day: last call"]
 ```
 
-- **Precise by design.** Windows names every button and field in the window, so the model picks a control by id instead of guessing pixel positions. Words on screen and raw positions are fallbacks. A debug view (Settings → Bond) outlines every control he saw and the one he chose.
-- **Notices what changed.** Before and after each click he compares a coarse picture of the screen and the window title, so a new page or browser tab is seen as new, and he looks again as soon as the page settles instead of after a fixed wait.
-- **Moves text between apps.** If a job needs a reply or a paragraph from another app, he points at its Copy button, notices that something was copied (never reading what), then points at the box in the other app and tells you to press `Ctrl+V`.
-- **Honest about being finished.** He checks whether the goal is already done, asks you to fill a text box before pointing at *Save* or *Next*, and stops if he finds himself going in circles.
-- **Learns from your clicks.** Each step is logged locally: what he pointed at and whether you followed it. That data is for improving him; nothing is sent anywhere.
-- **Say "stop" any time.**
+- **No goal needed.** A focus for the day ("goal: finish the LangGraph agent") sharpens it, but without one Bond judges against About you. Weekends can be like any day, for your projects, or days off.
+- **Drift.** About ten minutes in a row off track brings one spoken line and a card: *Back to it*, *This is on-goal* (he remembers), or *Not now* (quiet for 30 minutes).
+- **Follow-through.** Anything that looks like a lesson and holds you for ten minutes or more is written down. From the next day he asks about one a day: *used it*, *I'll do it today* (he asks again tomorrow), or *drop it*.
+- **End of the day.** Forty-five minutes before your laptop day ends (About you), if under half an hour went toward your aim, he says so; after it ends, that it is time to close up.
+- **Sunday.** A look back at the week, with a few suggestions drawn from its numbers.
 
-## Around the guide
+## Around it
 
-**Write for you, with context.** Ask for a bio, a message or a reply. Bond writes it from what he knows: your facts, the jobs he just guided you through, and the conversation. If a key fact is missing ("What is the channel about?") he asks one question first instead of guessing, and remembers the answer.
+**Talk.** Ask anything; the answer streams and he starts speaking after the first sentence. He knows what you told him about yourself and what you said recently.
 
-**Goals.** A focus for today and one for tomorrow. Tomorrow's is brought up the next time you sit down ("Ready to start?"), and if an hour of laptop use passes with none of it on your goal, he says so once. Drift nudges are limited and always snoozable. A week view and a few suggestions appear on Sunday.
+**Write for you.** Ask for a message, a reply or a bio. He writes it, you read it, and *Put in the box* pastes it where you were typing. He never presses Send.
 
-**Reminders.** "Remind me in 10 minutes to call Sam", "remind me at 5pm to submit the report", "set a timer for 5 minutes." There is no reminders page: Bond keeps the list and says it, out loud if you like, when it is due.
+**Timers and reminders.** "Start a timer of 10 seconds" shows a countdown you can shrink or cancel. "Remind me at 5pm to submit the report" is said when it is due.
 
-**Water breaks.** After a stretch of active use, a bottle arrives. Taking a real break on your own counts. The interval, "Later" delay and daily goal are in Settings → Wellness.
+**Water breaks.** After a stretch of active use, a bottle arrives. Taking a real break on your own counts.
 
 ## The dashboard
 
@@ -99,8 +91,9 @@ sequenceDiagram
 | **Today** | The day at a glance: time on the laptop, hydration, productive time, longest focus, a timeline, top apps, a few observations. |
 | **Activity** | Everything you spent time on, searchable and sortable. You can **forget** any item or any single session, with Undo. Bond's own record shrinks with it. |
 | **Goals** | Today's focus, tomorrow's, how today is going toward it, how each stretch was counted (and corrections), and the week. |
+| **Plan** | What you want to do today, fitted around anything with a fixed time. |
 | **Ideas** | Write a thought down fast. Click an idea to open it and edit the idea and its notes, which save as you type. |
-| **Settings** | Wellness, Bond, his brain, voice, privacy. |
+| **Settings** | About you, wellness, Bond, his brain, voice, memory, privacy. |
 
 The interface is a soft neo-brutalist design: warm paper, charcoal outlines, offset shadows, matching light and dark themes.
 
@@ -115,24 +108,23 @@ flowchart LR
     subgraph App["SelfGlance (Tauri: Rust core, React interface)"]
         L["Listener<br/>speech to text"]
         R["Router<br/>rules first, then the AI"]
-        G["Guide mode<br/>cursor overlay"]
-        S["Screen reader<br/>OCR + UI Automation"]
+        K["Tracker<br/>window in front, idle"]
+        G["Drift engine<br/>rules and labels"]
         B[("Brain<br/>Qwen3.5-4B on your GPU,<br/>no cloud, no keys")]
         M[("Memory<br/>facts, recent jobs, chat")]
-        D["Dashboard<br/>tracking, goals, ideas"]
+        D["Dashboard<br/>day, goals, plan"]
     end
     V --> L --> R
     T --> R
     R <--> B
     R <--> M
-    R --> G
-    S --> R
-    S --> G
-    G --> Win["Windows"]
-    Win --> D
+    K --> G
+    G <--> B
+    G --> Y["Bond speaks up"]
+    K --> D
 ```
 
-**Rules first, AI second.** Clear requests ("open Spotify", "remind me in 20 minutes", "goal for tomorrow: study X") are understood instantly by plain code. Only the rest goes to the AI, which answers in a strict JSON format and can only choose from a fixed list of actions. Anything powerful passes an approval gate.
+**Rules first, AI second.** Clear requests ("open Spotify", "start a timer of 10 seconds", "goal for tomorrow: study X") are understood instantly by plain code. Only the rest goes to the AI, which answers in a strict JSON format and can only choose from a fixed list of actions; talk is answered separately and streamed. Anything powerful passes an approval gate. The drift engine works the same way: rules judge what they can, and the brain only labels what they can't.
 
 **The keys.** Hold `Ctrl+Alt` to talk (as long as you like, up to 30 seconds, so slow speakers and pauses are fine). Tap `Win+Alt` to type. `Ctrl+Alt+G` summons Bond. The two modifier-only keys are found by watching which keys are down (`hotkeys.rs`); nothing is recorded.
 
@@ -142,7 +134,7 @@ flowchart LR
 |---|---|
 | App shell | [Tauri 2](https://tauri.app) (Rust) with a transparent always-on-top overlay for Bond and a normal window for the dashboard |
 | Interface | React 19, TypeScript, Vite, Three.js (Bond's character), plain CSS design tokens |
-| Brain | [llama.cpp](https://github.com/ggml-org/llama.cpp) (Vulkan build) running Qwen3.5-4B (Q4_K_M) with its vision projector |
+| Brain | [llama.cpp](https://github.com/ggml-org/llama.cpp) (Vulkan build) running Qwen3.5-4B (Q4_K_M) with its vision projector; every download is checked against a pinned SHA-256 |
 | Voice | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx): Parakeet (speech to text), Kokoro (speech), TitaNet (voice match, optional) |
 | Screen | Windows OCR (`Windows.Media.Ocr`) and UI Automation (`uiautomation` crate) |
 
@@ -152,7 +144,7 @@ flowchart LR
 |---|---|
 | `lib.rs`, `hotkeys.rs` | Overlay window, tray, shortcuts (including the modifier-only keys), idle and active-app tracking |
 | `brain.rs` | Starts, feeds and stops the local model server |
-| `ai.rs` | Routes requests to the brain; the guide step planner and its change detection |
+| `ai.rs` | Routes requests to the brain; streamed talk; looking at the screen when asked |
 | `agent.rs`, `policy.rs` | The actions Bond can take, and what the AI is allowed to plan |
 | `screen.rs`, `capture.rs` | OCR and UI Automation; keeping Bond out of screenshots |
 | `system.rs` | Windows (switch, minimize, close), battery, memory, specs, clipboard |
@@ -163,16 +155,16 @@ flowchart LR
 
 | Folder (`app/src`) | Job |
 |---|---|
-| `App.tsx`, `stage/` | The overlay: Bond's character, cards, guide loop |
-| `dashboard/` | Today, Activity, Goals, Ideas, Settings (with Memory) and the theme |
-| `assistant/` | Understanding commands (`intent.ts`), goals, reminders, guide settling, all unit-tested |
+| `App.tsx`, `stage/`, `ui/` | The overlay: Bond's character, his cards, timers |
+| `dashboard/` | Today, Activity, Goals, Plan, Ideas, Settings (with About you and Memory) and the theme |
+| `assistant/` | Understanding commands (`intent.ts`), the drift rules (`goals.ts`), follow-through (`followup.ts`), plan, timers, reminders, all unit-tested |
 | `break/` | The water-break coach |
 
 ## Privacy
 
 - **Nothing leaves your laptop.** No cloud services, no accounts, no API keys. What you ask Bond and show him is read by a model on your own machine. The internet is used for two things only: downloading his brain and voice files once, and opening websites you ask for. Tests (`egress.rs`, `tests/nocloud.test.ts`) fail if code ever calls an AI service. The few "Learn more" links in Settings open only on your click, in your own browser.
 - **The microphone is explicit.** It is open only while you hold `Ctrl+Alt` (or while the optional "Hey Bond" listener is on, which drops what isn't for him as it hears it).
-- **Screen reading is scoped.** Bond looks when you ask. Never password managers, banking or private windows; password fields are never read. The clipboard is never read by the model, only noted as "changed".
+- **What he tracks is the window in front: its app and title.** Kept on this laptop, forgettable item by item. The screen itself is read only when you ask ("what's on my screen"); never password managers, banking or private windows, and password fields are never read.
 - **You can forget.** Delete any activity or session from the record; the learning log and memories can be cleared in Settings. Everything is stored on this computer.
 
 ## Run it
@@ -190,7 +182,9 @@ The first launch lets you download Bond's brain (about 3.4 GB) and voice (about 
 
 Things to try:
 
-- **Guide:** `walk me through buying a domain` · `help me record my screen in OBS`
+- **About you:** fill in Settings → About you first; it is what Bond judges against.
+- **Talk:** `how do I set up a Python virtual environment` · `the day was rough`
+- **Timers:** `start a timer of 10 seconds` · `set a 25 minute timer for focus`
 - **Write:** `I need a bio for my channel` · `write a polite reply declining the invite`
 - **Goals:** `goal: finish the micrograd tutorial` · `goal for tomorrow: study diffusion transformers`
 - **Reminders:** `remind me in 10 minutes to stretch` · `set a timer for 5 minutes`
@@ -218,8 +212,8 @@ An **early, actively developed personal project (v0.1)**. Being straight about i
 
 - **Windows only.** Screen reading, window control and the brain's runtime are Windows-specific for now.
 - **Measured on one laptop** (RTX 3050 6 GB, 16 GB RAM). Router accuracy on 75 unseen requests: 71 correct, none harmful. Goal labelling on 34 cases: 31 correct. Laptops without a decent GPU will be slower, and lighter model tiers are planned, not built.
-- **Guide mode is not yet measured at scale.** It works well on standard Windows apps; apps that expose few UI Automation controls (some Electron and Qt apps) are harder. It depends on the vision model for each step, which takes a few seconds.
-- **The AI is small.** A 4B model is fast and private, but it makes mistakes a large cloud model would not, and it knows little about the world. Bond points you to sources instead of pretending to teach.
+- **The drift engine is new.** It judges from window titles only, so it is sometimes wrong; correcting a stretch once teaches it. It sees only this laptop: time on your phone is invisible to it.
+- **The AI is small.** A 4B model is fast and private, but it makes mistakes a large cloud model would not, and it has no internet: it can't look up news, prices or anything recent.
 - **Voice** is tuned on the author's voice and needs more testing with others.
 
 The plan is in [ROADMAP.md](ROADMAP.md). No license has been chosen yet, so all rights are reserved by default; to use or contribute, please open an issue.
