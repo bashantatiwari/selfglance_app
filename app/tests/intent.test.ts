@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isGuideFollowUp, saidStop, spokenAnswer, understand, unsavedAnswer } from "../src/assistant/intent.ts";
+import { saidStop, spokenAnswer, understand, unsavedAnswer } from "../src/assistant/intent.ts";
 
 test("clearing out screenshots goes to delete, never straight to a command", () => {
   for (const q of ["delete my screenshots", "delete all my screenshots", "clear the screenshots folder", "remove all of my screenshot images", "get rid of my screenshots"]) {
@@ -107,35 +107,6 @@ test("answering \"it has unsaved changes\"", () => {
   for (const s of ["Cancel", "no", "leave it open"]) assert.equal(unsavedAnswer(s), "cancel", s);
 });
 
-test("jobs you want to do yourself start guide mode", () => {
-  for (const q of [
-    "walk me through buying a domain",
-    "guide me through this form",
-    "show me how to change my DNS",
-    "show me where to click",
-    "where do I click?",
-    "I'm about to buy a domain, help me out",
-    "help me buy a domain name",
-    "point me to the checkout button",
-    "I want to record my screen as well as my face, help me how to do that",
-    "help me how to do that",
-    "help me figure out how to share my screen",
-    "how do I record my screen in OBS",
-    "Help me to record my screen as well as my face using OBS Studio.",
-    "help me set up a second monitor",
-    "Help me  to record my screen as well as my face in obs studio",
-    "Help me to capture my screen as well as my face using obs studio",
-  ]) {
-    assert.deepEqual(understand(q), { kind: "screen", mode: "guide" }, q);
-  }
-  // Not these: Bond does them himself, or they're something else.
-  assert.deepEqual(understand("open spotify"), { kind: "do", actions: [{ do: "open_app", name: "spotify" }] });
-  assert.deepEqual(understand("help"), { kind: "screen", mode: "help" });
-  // Help with words is not a walkthrough.
-  assert.notDeepEqual(understand("help me write an email to my landlord"), { kind: "screen", mode: "guide" });
-  assert.notDeepEqual(understand("help me summarize this article please"), { kind: "screen", mode: "guide" });
-});
-
 test("stopping, in the ways people say it", () => {
   for (const q of ["stop", "Stop that.", "okay stop", "Bond, stop", "wait", "hold on", "cancel that", "never mind", "that's enough", "please stop"]) {
     assert.equal(saidStop(q), true, q);
@@ -166,9 +137,6 @@ test("a message to write is understood without the AI", () => {
   assert.equal(kind("can you help me write a follow-up email"), "draft");
   assert.equal(kind("what should I reply to this?"), "draft");
   assert.equal(kind("reply to her saying yes, thursday works"), "draft");
-  // in the middle of a guided job, these carry on with it
-  for (const s of ["Already I am already in Cloudflare dot com, now what's next?", "I'm already in Cloudflare.com, now what's next?", "now what", "what next?", "okay, what do I do now", "As for the instruction I have given you earlier, now what next?", "continue", "I did that"]) assert.ok(isGuideFollowUp(s), s);
-  for (const s of ["what should I reply to the terminal", "open notepad", "next week remind me to call Sam", "what is the weather", "I am in a meeting"]) assert.ok(!isGuideFollowUp(s), s);
   // said in a longer sentence: text to put in the terminal's box, not a click-by-click guide
   assert.equal(kind("I want to know what should I reply to the terminal on my right side."), "draft");
   assert.equal(kind("I'm confused what am I supposed to give prompt to the command terminal."), "draft");
@@ -288,23 +256,8 @@ test("planning the day is understood without the AI", () => {
   assert.notEqual(plan("how do I plan my day better")?.kind, "plan");
 });
 
-test("Windows jobs from today's test go to guide mode, even with speech noise in front", () => {
-  const guide = { kind: "screen", mode: "guide" };
-  for (const q of [
-    "I want to delete an app called Hey Clicky from my laptop",
-    "uninstall OBS",
-    "help me uninstall Hey Clicky",
-    "And help me connect to a Wi-Fi network.",
-    "Show me the self glance icon on my desktop.",
-    "Ow me the Self Glance icon on my desktop",
-    "How do I stop Opera fr from being startup at Windows when open?",
-    "where is the bluetooth button",
-    "Won't help me turn on dark mode",
-  ]) {
-    assert.deepEqual(understand(q), guide, q);
-  }
-  for (const q of ["npm uninstall lodash", "how do I uninstall a pip package", "I want to build a startup", "delete my screenshots", "show me my plan"]) {
-    assert.notDeepEqual(understand(q), guide, q);
-  }
+test("speech noise in front of a request is ignored", () => {
   assert.deepEqual(understand("Hey Bon, open Zed"), { kind: "do", actions: [{ do: "open_app", name: "Zed" }] });
+  // "How do I …" and "help me …" jobs are no longer pointed at: they go to the brain, which tells the steps.
+  for (const q of ["walk me through buying a domain", "help me uninstall Hey Clicky", "where is the bluetooth button"]) assert.equal(understand(q), null, q);
 });

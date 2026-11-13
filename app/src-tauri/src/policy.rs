@@ -137,7 +137,7 @@ pub fn vet(actions: Vec<Action>, user: &str) -> Result<Vec<Action>, String> {
             // A guessed uninstall command removes the wrong thing or nothing at all, and says it worked either way
             // (it once tried to remove "Heclicky" for "Hey Clicky"). Windows Settings shows exactly what goes.
             Action::RunCommand { command, .. } if uninstalls(command) => {
-                return Err("I don't uninstall programs with a command: say “help me uninstall …” and I'll walk you through Windows Settings, where you can see exactly what will be removed.".into())
+                return Err("I don't uninstall programs with a command: open Settings > Apps > Installed apps, where you can see exactly what will be removed (say “open settings”).".into())
             }
             Action::OpenUrl { url, .. } if !url_ok(url, user) => return Err(format!("I only open web addresses you asked for, so I didn't open {}.", short(url))),
             Action::WebSearch { query, .. } if !search_ok(query, user) => return Err(format!("I only search for words you said, so I didn't search for “{}”.", short(query))),
@@ -166,7 +166,7 @@ mod tests {
     fn uninstall_commands_are_refused_even_with_advanced_actions() {
         let said = "I want to delete an app called Hey Clicky from my laptop";
         let cmd = r#"{"do":"run_command","command":"Get-AppxPackage -AllUsers | Where-Object { $_.DisplayName -eq 'Heclicky' } | ForEach-Object { Remove-AppxPackage $_.PackageFullName }","why":"x"}"#;
-        assert!(vet(vec![act(cmd)], said).unwrap_err().contains("walk you through Windows Settings"));
+        assert!(vet(vec![act(cmd)], said).unwrap_err().contains("Installed apps"));
         assert!(uninstalls("winget uninstall --id Zed.Zed"));
         assert!(!uninstalls("Get-AppxPackage | Select Name"));
     }

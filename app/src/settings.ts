@@ -30,11 +30,9 @@ export interface Settings {
   followUp: boolean;
   /** The dashboard's look: follow Windows, or always light or dark. */
   theme: "system" | "light" | "dark";
-  /** Guide mode shows what he picked and what he could have picked (for finding out why he pointed wrong). */
-  guideDebug: boolean;
   /**
    * Advanced actions: lets the AI run commands, end programs, type, click and write the clipboard
-   * for you. Off by default: without it Bond points (guide mode) and does only the safe things
+   * for you. Off by default: without it Bond does only the safe things
    * (see src-tauri/src/policy.rs).
    */
   advancedActions: boolean;
@@ -85,7 +83,6 @@ export const DEFAULT_SETTINGS: Settings = {
   wakeWord: false,
   voiceMatch: true,
   followUp: true,
-  guideDebug: false,
   advancedActions: false,
   labs: false,
   theme: "system",

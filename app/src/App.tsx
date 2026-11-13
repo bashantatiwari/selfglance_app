@@ -32,22 +32,19 @@
 import { useEffect, useRef, useState } from "react";
 import { CharacterStage } from "./stage/CharacterStage";
 import type { CharacterManifest, Rect } from "./stage/types";
-import { differs, still } from "./assistant/settle";
 import { addReminder, LATE_MS, takeDue, whenText } from "./assistant/remind";
 import { BreakCoach, glassesToday, type BreakPhase } from "./break/BreakCoach";
 import { backLine, doneLine, nudgeLine, offerLine, reaction } from "./break/lines";
 import { classify, type Activity, type Context } from "./companion/context";
-import { cursorPosition, inTauri, onTauriEvent, sendHitRegions } from "./platform";
+import { inTauri, onTauriEvent, sendHitRegions } from "./platform";
 import { invoke } from "@tauri-apps/api/core";
 import { loadDay, Tracker } from "./companion/tracker";
 import { effective, loadSettings, type Settings } from "./settings";
 import { ActionMenu, ARC, arcBox, type ActionId } from "./ui/ActionMenu";
 import { AnswerCard, AskBox, type AskState } from "./ui/Ask";
-import { Guide, type GuideView } from "./ui/Guide";
 import { Timers } from "./ui/Timers";
 import { loadTimers, newTimer, saveTimers, spanText, type Timer } from "./assistant/timer";
 import {
-  aiGuide,
   aiChat,
   speakStream,
   aiText,
@@ -59,12 +56,7 @@ import {
   cancelAgent,
   denyAction,
   giveFeedback,
-  guideMouse,
-  guideSignature,
-  jobDone,
   jobNote,
-  guideOutcome,
-  guidePrepare,
   recordOwn,
   releaseFocus,
   routeCommand,
@@ -100,7 +92,7 @@ import {
   type Outcome,
   memoryProfile,
 } from "./ai";
-import { isGuideFollowUp, saidStop, spokenAnswer, understand, unsavedAnswer, type ScreenMode } from "./assistant/intent";
+import { saidStop, spokenAnswer, understand, unsavedAnswer, type ScreenMode } from "./assistant/intent";
 import { addIdea } from "./assistant/notes";
 import { fit, loadPlan, MAX_ITEMS, minutesNow, parsePlan, planSummary, savePlan } from "./assistant/plan";
 import { dayBounds, hasProfile, loadProfile, profileLine } from "./assistant/profile";
@@ -262,19 +254,8 @@ export default function App() {
   const [ask, setAsk] = useState<AskState | null>(null);
   const askRef = useRef<AskState | null>(null);
   askRef.current = ask;
-  // Guide mode: he points, you click. guideRun is the running guide's id (0 = none).
-  const [guide, setGuide] = useState<GuideView | null>(null);
-  const [guideFrom, setGuideFrom] = useState<{ x: number; y: number } | null>(null);
-  const guideRun = useRef(0);
-  /** The guide you were in the middle of: "now what next?" carries on with it instead of starting a new one. */
-  const lastGuide = useRef<{ goal: string; shown: string[]; at: number; finished: boolean } | null>(null);
-  const guideToResume = (said: string) => {
-    const g = lastGuide.current;
-    return g && !g.finished && Date.now() - g.at < 30 * 60_000 && isGuideFollowUp(said) ? g : null;
-  };
   /** Goes up on every new request and on "stop": an older request that comes back later is dropped. */
   const askEpoch = useRef(0);
-  const guideTipRef = useRef<HTMLDivElement>(null);
   // Timers you asked for, counting down on screen (ui/Timers.tsx).
   const [timers, setTimers] = useState<Timer[]>(() => loadTimers());
   const timersRef = useRef<HTMLDivElement>(null);
@@ -372,7 +353,7 @@ export default function App() {
         el.style.transform = `translate(${left}px, ${top}px)`;
         regions.push({ x: left, y: top, w, h: hh });
       }
-      for (const el of [guideTipRef.current, timersRef.current]) {
+      for (const el of [timersRef.current]) {
         if (!el) continue;
         const r = el.getBoundingClientRect();
         if (r.width && r.height) regions.push({ x: r.x, y: r.y, w: r.width, h: r.height });
@@ -751,8 +732,7 @@ export default function App() {
     stopSpeaking();
     wake();
     // The spoken request is over: later cards and buttons are not answered out loud because of it.
-    // (A guide under way keeps speaking its steps.)
-    if (!guideRun.current) heardRef.current = false;
+    heardRef.current = false;
     if (wasTyping) await releaseFocus();
   };
 
@@ -873,198 +853,49 @@ export default function App() {
     return () => void un.then((f) => f());
   }, []);
 
-  // The screen has been read: bring the note back while his brain works out the step.
-  useEffect(() => {
-    const un = onTauriEvent("guide-looked", () => setGuide((g) => (g ? { ...g, hidden: false } : g)));
-    return () => void un.then((f) => f());
-  }, []);
-
-  /** "Stop": quiet at once, the plan in progress does no more steps, guiding ends, an answer still on its way is dropped. */
+  /** "Stop": quiet at once, the plan in progress does no more steps, an answer still on its way is dropped. */
   const cancelAll = () => {
     askEpoch.current++;
     stopSpeaking();
     void cancelAgent();
-    if (guideRun.current) return stopGuide("Okay, you've got it from here.");
     void closeAsk();
   };
 
-  /** While he works (thinking, guiding), he keeps listening, so "stop" needs no "Hey Bond". */
+  /** While he works (thinking), he keeps listening, so "stop" needs no "Hey Bond". */
   const keepEars = () => {
     if (settingsRef.current.wakeWord) void wakeFollowUp(15);
   };
 
-  /** End guide mode (no more looking, the cursor and note go away). */
-  const stopGuide = (say?: string) => {
-    guideRun.current = 0;
-    setGuide(null);
-    void releaseFocus();
-    if (say) showPop(say, 2800, true);
-  };
-
-  /**
-   * "Walk me through buying a domain": look, point the cursor at the one next thing, wait
-   * for you to click it yourself, look again. Nothing is clicked or typed for you.
-   */
-  const runGuide = async (goal: string) => {
-    const id = Date.now();
-    guideRun.current = id;
-    const alive = () => guideRun.current === id;
-    const pause = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
-    // "Now what next?" in the middle of a job is the same job: its goal and the steps already shown stay.
-    const resume = guideToResume(goal);
-    if (resume) goal = resume.goal;
-    const shown: string[] = resume ? [...resume.shown] : [];
-    lastGuide.current = { goal, shown, at: Date.now(), finished: false };
-    const seen: Record<string, number> = {};
-    const say = (text: string) => {
-      if (heardRef.current) void speak(text);
-    };
-    // What he walked you through, kept for a few hours: "now write the bio for it" knows what "it" is.
-    const record = (finished: boolean) => {
-      lastGuide.current = { goal, shown, at: Date.now(), finished };
-      if (shown.length) void jobDone(goal, shown, finished);
-    };
-    const fail = (text: string) => {
-      stopGuide();
-      setAsk({ step: "error", question: goal, error: text });
-      stageRef.current?.play("annoyed", true);
+  /** Talk: the answer is shown and spoken sentence by sentence while it is still being written. */
+  const talk = async (question: string, my: number) => {
+    const byVoice = heardRef.current;
+    const voice = settingsRef.current.speakAnswers || byVoice ? speakStream() : null;
+    let text = "";
+    const un = await onTauriEvent<{ id: number; text: string }>("chat-piece", (p) => {
+      if (p.id !== my || askEpoch.current !== my) return;
+      text = text ? `${text} ${p.text}` : p.text;
+      clearTimeout(askTimer.current);
+      setAsk({ step: "answer", question, answer: text, done: [] });
+      voice?.push(p.text);
+    });
+    try {
+      const full = await aiChat(question, byVoice, my);
+      if (askEpoch.current !== my) return;
+      setAsk({ step: "answer", question, answer: full, done: [] });
+      stageRef.current?.play("nod", true);
+      void aiPrime(); // talking replaced what his brain had read; read the router's instructions again
+      void voice?.end().then(() => {
+        const st = settingsRef.current;
+        if (st.wakeWord && byVoice && st.followUp) void wakeFollowUp(FOLLOW_UP_SEC);
+      });
       autoClose();
-    };
-    setAsk(null);
-    keepEars();
-    // The app you named comes to the front first (opened if it was closed, restored if minimized):
-    // he can only point at what is on screen.
-    setGuide({ say: "Getting things ready…", step: "wait", target: null, n: 0 });
-    // Carrying on a job you are in the middle of: the program is already where you want it, so it isn't pulled to the front again.
-    const brought = resume ? null : await guidePrepare(goal);
-    if (!alive()) return;
-    if (brought) {
-      showPop(`${brought} is ready`, 2200, true);
-      await pause(1200);
+    } finally {
+      un();
     }
-    setGuideFrom(await cursorPosition());
-    let misses = 0;
-    let quiet = 0;
-    let missed: string | null = null;
-    for (let n = 1; n <= 40 && alive(); ) {
-      keepEars();
-      // Out of the screenshot (the note would be read as part of the page), back once it's taken.
-      setGuide((g) => ({ say: "Looking at your screen…", step: "wait", target: null, n: 0, ...g, hidden: true }));
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      await pause(60);
-      let s;
-      try {
-        s = await aiGuide(goal, shown, missed);
-      } catch (e) {
-        return alive() ? fail(String(e)) : undefined;
-      }
-      if (!alive()) return;
-      void aiPrime();
-      const target = s.target;
-      setGuide({ say: s.say, step: s.step, target, n: target ? n : 0, debug: s.debug });
-      if (s.step === "done") {
-        record(true);
-        say(s.say);
-        stageRef.current?.play("celebrate", true);
-        window.setTimeout(() => guideRun.current === id && stopGuide(), 6000);
-        return;
-      }
-      say(s.say);
-      if (!target) {
-        // Nothing to point at yet (a page loading, something to open first): look again shortly.
-        // A click or type step that found nothing is a miss he is told about, so the next look picks differently.
-        missed = s.step === "click" || s.step === "type" ? s.say : null;
-        if (++misses >= 8) return record(false), stopGuide("I can't find the next step — ask me again when you're ready.");
-        await pause(2500);
-        continue;
-      }
-      misses = 0;
-      missed = null;
-      const before = await guideSignature().catch(() => null); // what the page looks like before your click
-      // Wait for your click on it (and, for a text box, for you to finish typing).
-      const [l, t, r, b] = target.phys;
-      const inside = (x: number, y: number) => x >= l - 24 && x <= r + 24 && y >= t - 24 && y <= b + 24;
-      const typing = s.step === "type";
-      const started = Date.now();
-      let pressed = false;
-      let clickedAt = 0;
-      let typedAfter = false;
-      let outcome: "clicked" | "elsewhere" | "timeout" = "timeout";
-      let clickAt: { x: number; y: number } | null = null;
-      while (alive() && Date.now() - started < 60_000) {
-        await pause(70);
-        const m = await guideMouse().catch(() => null);
-        if (!m) continue;
-        if (m.down) pressed = true;
-        else if (pressed) {
-          pressed = false;
-          clickAt = { x: m.x, y: m.y };
-          if (inside(m.x, m.y)) {
-            if (!typing) {
-              outcome = "clicked";
-              break;
-            }
-            clickedAt = Date.now();
-          } else if (!clickedAt) {
-            outcome = "elsewhere";
-            break;
-          }
-        }
-        if (typing && clickedAt) {
-          if (Date.now() - clickedAt > 500 && m.idle_ms < 400) typedAfter = true;
-          if (typedAfter && m.idle_ms >= 2000) {
-            outcome = "clicked";
-            break;
-          }
-        }
-      }
-      if (!alive()) return;
-      // What came of his pick, for his log: followed, clicked elsewhere (and where), or nothing.
-      void guideOutcome(goal, s.say, s.debug.picked, s.debug.candidates.length, outcome === "clicked" ? "followed" : outcome, clickAt);
-      if (outcome === "timeout") {
-        // Nobody touched anything for a minute: look again once or twice, then stop.
-        const m = await guideMouse().catch(() => null);
-        quiet = m && m.idle_ms > 50_000 ? quiet + 1 : 0;
-        if (quiet >= 3) return record(false), stopGuide("Still there? I'll stop pointing — ask me again anytime.");
-        continue;
-      }
-      if (outcome === "clicked") {
-        // The same step for the third time is going in circles: the job is most likely done.
-        const key = `${s.say}|${s.debug.picked}`;
-        seen[key] = (seen[key] ?? 0) + 1;
-        if (seen[key] >= 3) return record(true), stopGuide("That looks done — we're going in circles, so I'll stop.");
-        shown.push(s.say);
-        lastGuide.current = { goal, shown, at: Date.now(), finished: false };
-        n++;
-      }
-      // Look again once the page has reacted and stopped moving (at most 3 s), not after a fixed wait.
-      // A click that changes nothing is not waited on for long.
-      if (before) {
-        const t0 = Date.now();
-        let last = before;
-        let changed = false;
-        let steady = 0;
-        while (alive() && Date.now() - t0 < 3000) {
-          await pause(250); // each look captures the screen: not more often than this
-          const now = await guideSignature().catch(() => null);
-          if (!now) break;
-          if (differs(before, now)) changed = true;
-          steady = still(last, now) ? steady + 1 : 0;
-          last = now;
-          if (changed && steady >= 2) break;
-          if (!changed && Date.now() - t0 > 1000) break;
-        }
-        diag(`guide: settled after ${Date.now() - t0} ms (${changed ? "the screen changed" : "nothing changed"})`);
-      } else await pause(1200);
-    }
-    if (alive()) record(false);
-    if (alive()) stopGuide("That's as far as I'll go — ask me again if you need more.");
   };
 
   const doAsk = async (question: string, typed = true) => {
-    guideRun.current = 0; // a new request ends the old guide
     const my = ++askEpoch.current;
-    setGuide(null);
     keepEars();
     setAsk({ step: "thinking", question, looking: false });
     expRef.current = "";
@@ -1077,7 +908,6 @@ export default function App() {
     try {
       // 1. Bond's own understanding: instant, no AI call.
       const own = understand(question);
-      if (guideToResume(question)) return await runGuide(question);
       // What he understood on his own is a sure example for the brain to learn from.
       if (own?.kind === "draft") return await runDraft(question);
       if (own?.kind === "timer") {
@@ -1136,7 +966,6 @@ export default function App() {
         const reply = await aiText(CLIPBOARD_SYSTEM, `${question}\n\n--- Clipboard ---\n${copied.slice(0, 20_000)}`);
         return answer(question, reply, [], true);
       }
-      if (own?.kind === "screen" && own.mode === "guide") return await runGuide(question);
       if (own?.kind === "screen") return await lookAtScreen(question, own.mode);
 
       // 2. Not sure: the AI classifies it (text only), and runs simple tasks right away.
@@ -1152,43 +981,18 @@ export default function App() {
         case "help":
           return await lookAtScreen(question, "help");
         case "guide":
-          return await runGuide(question);
+          // "How do I …": he tells you the steps (he no longer points at each click).
+          return await talk(question, my);
         case "write":
           // The model judged he's being asked to write something: a draft, ready to put in the box.
           return await runDraft(question);
         case "task":
-          // Clicking and typing for you is an Advanced action; otherwise Bond points the way instead.
-          if (r.needs_screen) return settingsRef.current.advancedActions ? await lookAtScreen(question, "task") : await runGuide(question);
+          // Clicking and typing for you is an Advanced action; without it he tells you how to do it yourself.
+          if (r.needs_screen) return settingsRef.current.advancedActions ? await lookAtScreen(question, "task") : await talk(question, my);
           return showOutcome(question, r.outcome ?? { done: [], info: [], pending: null }, r.reply);
-        default: {
-          // Something the router itself had to say ("I can't run commands right now").
-          if (r.reply) return answer(question, r.reply, [], true);
-          // Talk: the answer is shown and spoken sentence by sentence while it is still being written.
-          const byVoice = heardRef.current;
-          const voice = settingsRef.current.speakAnswers || byVoice ? speakStream() : null;
-          let text = "";
-          const un = await onTauriEvent<{ id: number; text: string }>("chat-piece", (p) => {
-            if (p.id !== my || askEpoch.current !== my) return;
-            text = text ? `${text} ${p.text}` : p.text;
-            clearTimeout(askTimer.current);
-            setAsk({ step: "answer", question, answer: text, done: [] });
-            voice?.push(p.text);
-          });
-          try {
-            const full = await aiChat(question, byVoice, my);
-            if (askEpoch.current !== my) return;
-            setAsk({ step: "answer", question, answer: full, done: [] });
-            stageRef.current?.play("nod", true);
-            void aiPrime(); // talking replaced what his brain had read; read the router's instructions again
-            void voice?.end().then(() => {
-              const st = settingsRef.current;
-              if (st.wakeWord && byVoice && st.followUp) void wakeFollowUp(FOLLOW_UP_SEC);
-            });
-            return autoClose();
-          } finally {
-            un();
-          }
-        }
+        default:
+          // Something the router itself had to say ("I can't run commands right now"), or talk.
+          return r.reply ? answer(question, r.reply, [], true) : await talk(question, my);
       }
     } catch (e) {
       diag(`request failed: ${String(e)}`);
@@ -1630,8 +1434,8 @@ export default function App() {
 
   // --- Render -----------------------------------------------------------------------------
   const inBreak = phase !== "idle";
-  tuckedRef.current = inDashboard && !inBreak && !ask && !menu && !guide;
-  const awake = hover || busy || touched || menu || !!ask || !!guide || phase === "arriving" || phase === "offering";
+  tuckedRef.current = inDashboard && !inBreak && !ask && !menu;
+  const awake = hover || busy || touched || menu || !!ask || phase === "arriving" || phase === "offering";
   const dim = !awake && inBreak; // waiting / away: half visible, bottle still in view
   const look = awake ? "" : dim ? "dim" : ctx === "watching" ? "watch" : ctx === "focus" ? "faint" : "ghost";
 
@@ -1737,7 +1541,6 @@ export default function App() {
         />
       )}
       {timers.length > 0 && <Timers timers={timers} boxRef={timersRef} onCancel={(id) => changeTimers((list) => list.filter((t) => t.id !== id))} onDone={(t) => void timerDone(t)} />}
-      {guide && <Guide view={guide} origin={guideFrom} showDebug={settingsRef.current.guideDebug} tipRef={guideTipRef} onStop={() => stopGuide()} />}
       {menu && <ActionMenu menuRef={menuRef} inBreak={phase !== "idle"} laterMin={settingsRef.current.snoozeMin} onPick={act} />}
     </>
   );

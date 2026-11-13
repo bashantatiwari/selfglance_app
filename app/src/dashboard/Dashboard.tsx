@@ -933,7 +933,6 @@ function SettingsPage() {
           onChange={(v) => update({ brainstormAlert: v })}
         />
         )}
-        <Toggle label="Guide mode: show what he picked" hint="Outlines every control he could point at and says which one he chose and why. For finding out why he pointed wrong." checked={s.guideDebug} onChange={(v) => update({ guideDebug: v })} />
         <Toggle
           label="Advanced actions"
           hint="Lets the AI run commands, end programs, type, click and copy for you. Off: Bond points the way (guide mode) and only does the safe things; running a command, ending a program or deleting always asks you first either way."

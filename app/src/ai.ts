@@ -77,8 +77,6 @@ export interface Draft {
   /** A question to ask before writing (the draft needs a fact he doesn't have). Then `message` is empty. */
   need: string;
 }
-/** A guided job ended: he remembers it for a few hours, so "now write the bio for it" knows what "it" is. */
-export const jobDone = (goal: string, steps: string[], finished: boolean) => (inTauri ? invoke<void>("job_done", { goal, steps, finished }).catch(() => {}) : Promise.resolve());
 /** Something you told him about the latest job (an answer to his question). */
 export const jobNote = (note: string) => (inTauri ? invoke<void>("job_note", { note }).catch(() => {}) : Promise.resolve());
 export const aiDraft = (request: string) => invoke<Draft>("ai_draft", { request });
@@ -108,7 +106,6 @@ export const runActions = (actions: Action[]) => invoke<Outcome>("agent_run", { 
 
 /** Yes to a pending approval: the next step (a second confirmation) or the result. */
 export const approveAction = (id: string, alt = false) => invoke<Outcome>("agent_approve", { id, alt });
-export const guidePrepare = (goal: string) => (inTauri ? invoke<string | null>("guide_prepare", { goal }).catch(() => null) : Promise.resolve(null));
 /** Settings → Bond → Advanced actions: lets the AI run commands, type, click and more (policy.rs). */
 export const setAdvancedActions = (on: boolean) => (inTauri ? invoke<void>("agent_set_advanced", { on }).catch(() => {}) : Promise.resolve());
 export const cancelAgent = () => (inTauri ? invoke<void>("agent_cancel").catch(() => {}) : Promise.resolve());
@@ -391,44 +388,3 @@ function systemVoice(text: string): Promise<void> {
     }
   });
 }
-
-/** Where guide mode's cursor goes: the box in overlay pixels, and in physical screen pixels. */
-export interface GuideTarget {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  /** left, top, right, bottom */
-  phys: [number, number, number, number];
-}
-
-export interface GuideDebug {
-  provider: string;
-  secs: number;
-  /** "[12] button “Add to cart”", "words “Sign in”", "position (x, y)", or why nothing. */
-  picked: string;
-  raw: string;
-  /** Every control he was shown, in overlay pixels. */
-  candidates: { id: number; kind: string; name: string; x: number; y: number; w: number; h: number }[];
-}
-
-export interface GuideStep {
-  say: string;
-  step: "click" | "type" | "wait" | "done";
-  target: GuideTarget | null;
-  debug: GuideDebug;
-}
-
-/** The next step towards `goal` from a fresh look at the screen. Nothing is clicked. `done`: steps already shown. */
-/** `missed`: the last hint, when it pointed at nothing (he is told, so he doesn't say it again). */
-export const aiGuide = (goal: string, done: string[], missed: string | null = null) => invoke<GuideStep>("ai_guide", { goal, done, missed });
-
-/** Tell his log how a step went (what you clicked after he pointed), so he can learn from it. */
-export const guideOutcome = (goal: string, say: string, picked: string, shown: number, outcome: "followed" | "elsewhere" | "timeout", at: { x: number; y: number } | null) =>
-  inTauri ? invoke<void>("guide_outcome", { goal, say, picked, shown, outcome, x: at?.x ?? null, y: at?.y ?? null }).catch(() => {}) : Promise.resolve();
-
-/** A coarse picture of the screen plus the window title: compared before and after a click to see the page change. */
-export const guideSignature = () => invoke<{ title: string; cells: number[] }>("guide_signature");
-
-/** The real mouse, in physical screen pixels, and how long the user has been idle. */
-export const guideMouse = () => invoke<{ x: number; y: number; down: boolean; idle_ms: number }>("guide_mouse");

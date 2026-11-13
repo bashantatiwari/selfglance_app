@@ -39,7 +39,7 @@ export type Action =
   | { do: "close_app"; name: string }
   | { do: "delete"; paths: string[]; permanent?: boolean };
 
-export type ScreenMode = "explain" | "help" | "task" | "guide";
+export type ScreenMode = "explain" | "help" | "task";
 
 export type Intent =
   | { kind: "idea"; text: string }
@@ -91,23 +91,6 @@ const MEDIA: [RegExp, string][] = [
   [/^(previous|prev|last)( (song|track|video))?$/i, "previous"],
 ];
 
-/** "Walk me through buying a domain", "show me how to...", "I'm about to buy a domain, help me", "where do I click?" */
-const GUIDE_ME = new RegExp(
-  [
-    String.raw`^(?:please\s+)?(?:guide|walk|talk|take|lead) me (?:through|to|with|along)\b`,
-    String.raw`^(?:please\s+)?(?:show|teach) me (?:how to|where to|where i (?:should |can |have to )?(?:click|go|press|type))\b`,
-    String.raw`^(?:please\s+)?point (?:me )?(?:to|at|out)\b`,
-    String.raw`^where (?:do|should|can) i (?:click|press|tap|go|type)\b`,
-    String.raw`^(?:please\s+)?help me (?:figure out |understand |learn |know )?how (?:to|do i|can i)\b`,
-    String.raw`^(?:please\s+)?(?:help|assist) me (?:to |with |in )?(?!(?:write|draft|compose|summari[sz]e|translate|explain|fix|debug|code|solve|decide|choose|think|plan|brainstorm|name|understand|learn|remember|study|check|find out|figure)\b)\w+(?:\s+\S+){2,}`,
-    String.raw`\bhelp me (?:how )?to do (?:that|this|it)\b`,
-    String.raw`^how (?:do|can|would|should) i .{3,}\b(?:in|on|with|using|from) (?:obs|chrome|edge|brave|firefox|word|excel|powerpoint|outlook|teams|zoom|discord|photoshop|premiere|davinci|vs ?code|settings|windows|the browser)\b`,
-    String.raw`^(?:i(?:'m| am) (?:about|going|trying|gonna) to|i want to|i need to|i have to|let'?s) .+\b(?:help|guide|walk|show|point|assist)\b`,
-    String.raw`^(?:help|assist) me (?:to |with )?(?:buy|book|register|sign (?:up|in)|set ?up|create|fill|apply|order|install|find|change|reset|pay|renew|transfer|get|open|make|add|enable|disable|turn)\b`,
-  ].join("|"),
-  "i",
-);
-
 /**
  * "Write me a polite email…", "draft a reply", "write a prompt in the chatgpt…", "what should I reply
  * to this?": text to write for a box, which he drafts for you to put in it.
@@ -131,23 +114,6 @@ const DRAFT = new RegExp(
   "i",
 );
 
-/**
- * "Now what next?", "I'm already on Cloudflare, what now", "I did that": said in the middle of a guided job,
- * it means "carry on", not a new job. Only used while a guide is under way.
- */
-const GUIDE_FOLLOW_UP = new RegExp(
-  [
-    String.raw`^(?:(?:ok(?:ay)?|so|and|well|now|then|alright|right)[,.]?\s+)*(?:what(?:'s| is)?\s+(?:next|now)|now what|what next|what do i do (?:now|next)|what should i do (?:now|next)|then what|where (?:to|do i go) (?:next|now))\b`,
-    String.raw`^(?:(?:ok(?:ay)?|so|and|well|now|then|alright|right)[,.]?\s+)*(?:next(?: step)?|continue|carry on|keep going|go on)$`,
-    String.raw`\b(?:i(?:'m| am)(?: already)?|already i(?:'m| am)|i(?:'ve| have)(?: already)?) (?:in|on|at|done|did|clicked|opened|finished|completed|logged in|signed in)\b.*\b(?:now what|what(?:'s| is) next|what next|next)\b`,
-    String.raw`\b(?:as for|like|from) the (?:instruction|task|job|thing) (?:i|that i) (?:have )?(?:given|gave|told|asked)\b`,
-    String.raw`^(?:i|we)(?:'ve| have)? (?:did|done|finished|completed) (?:that|it|this|the step)\b`,
-  ].join("|"),
-  "i",
-);
-
-export const isGuideFollowUp = (said: string): boolean => GUIDE_FOLLOW_UP.test(said.trim().replace(/[.!?]+$/, ""));
-
 /** Words after "close"/"end" that are not a program ("close this tab"). */
 const NOT_A_PROGRAM = /^(this|it|that|them|tab|tabs|window|windows|apps|programs|all windows|all tabs|all apps|all programs|every window|every tab|all|everything|the call|call|meeting|this tab|this window|the tab|the window|everything else)$/i;
 
@@ -159,23 +125,6 @@ const LEAD_NOISE = new RegExp(
   [
     String.raw`^(?:(?:and|so|okay|ok|um+|uh+|hmm+|well|hey|hi|please|bond|bon)\b[,.!]?\s+)+`,
     String.raw`^(?:won'?t|they bond|say bond|ow)[,.]?\s+(?=(?:help|show|open|walk|guide|take|where|how|can|could|please)\b)`,
-  ].join("|"),
-  "i",
-);
-
-/** Jobs done by clicking around in Windows: guided, never a guessed command. */
-const GUIDE_JOB = new RegExp(
-  [
-    // Removing a program: Settings shows exactly what goes ("delete an app called Hey Clicky from my laptop").
-    // (Not a developer's package: "npm uninstall lodash", "how do I uninstall a pip package" are questions for the brain.)
-    String.raw`^(?:(?:please\s+)?help me\s+|how (?:do|can) i\s+|i (?:want|need) to\s+)?uninstall\s+(?!.*\b(?:npm|pip|package|module|library|crate|extension|dependency)\b)`,
-    String.raw`\b(?:delete|remove|get rid of)\s+(?:the\s+|an?\s+|this\s+|that\s+|my\s+)?(?:app|application|program|software|game)\b`,
-    // "Show me the SelfGlance icon on my desktop", "where is the Wi-Fi button".
-    String.raw`^show me (?:where )?(?:the |my )?.{2,40}\b(?:icon|button|setting|settings|option|menu|tab)\b`,
-    String.raw`^show me (?:where )?(?:the |my )?.{2,40}\b(?:on|in) (?:my |the )?(?:desktop|taskbar|start menu)\b`,
-    String.raw`^where(?:'s| is| are| do i find| can i find)\s+(?:the\s+|my\s+)?.{2,40}\b(?:icon|button|setting|settings|option|menu|switch|toggle)\b`,
-    // Windows settings jobs, asked as "how do I …" or "help me …".
-    String.raw`^(?:how (?:do|can|should) i|help me|show me how to|i want to|i need to)\b.*\b(?:wi-?fi|bluetooth|(?:at|on|from|being|during) start ?up|start ?up (?:apps?|programs?)|dark mode|light mode|night light|wallpaper|desktop background|screen resolution|text size|default (?:browser|app)|taskbar|start menu|notifications?)\b`,
   ].join("|"),
   "i",
 );
@@ -212,9 +161,6 @@ export function understand(input: string): Intent {
   // Being in a screenshot or recording: hidden unless you ask (checked first: "don't show yourself in it").
   if (HIDE_FROM_PICTURE.test(t)) return { kind: "capture", show: false };
   if (SHOW_IN_PICTURE.test(t)) return { kind: "capture", show: true };
-
-  // Uninstalling, finding a button, a Windows setting: Bond points the way (guide mode opens the right Settings page).
-  if (GUIDE_JOB.test(t)) return { kind: "screen", mode: "guide" };
 
   // Clearing out screenshots: Bond shows them (with previews) and asks twice before anything goes.
   if (/^(?:delete|remove|clear|clean up|get rid of|empty)\s+(?:all\s+)?(?:of\s+)?(?:my\s+|the\s+)?screen\s?shots?(?:\s+folder)?(?:\s+(?:images?|pictures?|files?))?$/i.test(t))
@@ -276,9 +222,6 @@ export function understand(input: string): Intent {
   if (/^(what'?s|what is|show( me)?|read( me)?)( on| in)? (my |the )?clipboard\??$/i.test(t)) return { kind: "do", actions: [{ do: "clipboard_get" }] };
   if ((m = raw.match(/^copy (.+?) (?:to|into|on) (?:my |the )?clipboard\.?$/is))) return { kind: "do", actions: [{ do: "clipboard_set", text: m[1].replace(/^["“'](.*)["”']$/s, "$1") }] };
   if (/\bclipboard\b|\bwhat i (just )?copied\b|\bthe copied text\b/i.test(t)) return { kind: "clipboard" };
-
-  // Guide: you do it yourself, Bond moves a virtual cursor to each next step.
-  if (GUIDE_ME.test(t)) return { kind: "screen", mode: "guide" };
 
   // Look: explain the screen, or help when stuck.
   if (/\b(stuck|not working|doesn'?t work|isn'?t working|what'?s wrong|what is wrong|can'?t figure|fix (this|it))\b|^help( me)?\??$/i.test(t)) return { kind: "screen", mode: "help" };

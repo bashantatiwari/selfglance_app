@@ -1418,15 +1418,6 @@ const SITES: &[(&str, &str)] = &[
     ("x", "https://x.com"),
 ];
 
-/// Start an app by name (not a website): its display name.
-pub fn start_app(name: &str) -> Result<String, String> {
-    let wanted = name.trim().to_lowercase();
-    let wanted = ALIASES.iter().find(|(a, _)| *a == wanted).map(|(_, b)| b.to_string()).unwrap_or(wanted);
-    let (display, target) = find_app(&wanted).ok_or_else(|| not_found(name))?;
-    open_target(&target)?;
-    Ok(display)
-}
-
 fn open_app(name: &str) -> Result<String, String> {
     let wanted = name.trim().to_lowercase();
     if wanted.is_empty() {
