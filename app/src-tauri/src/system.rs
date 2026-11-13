@@ -262,11 +262,17 @@ pub fn which_app(name: &str) -> Result<(Vec<u32>, String), String> {
     let process = if generic {
         last.as_ref().map(|(p, _)| p.clone()).ok_or("Which app should I close?")?
     } else {
+        let n = said_program(&n);
         match find_processes(&n) {
             Ok(_) => n.clone(),
-            Err(e) => match &last {
-                Some((p, shown)) if shown.to_lowercase().contains(&n) || n.contains(&shown.to_lowercase()) => p.clone(),
-                _ => return Err(e),
+            // People say the app's name, not its program's: "Edge" is msedge, "Word" is winword. An open
+            // window of that app tells which program it is.
+            Err(e) => match program_of_window(&n, &top_windows()) {
+                Some(p) => p,
+                None => match &last {
+                    Some((p, shown)) if same_name(shown, &n) => p.clone(),
+                    _ => return Err(e),
+                },
             },
         }
     };
@@ -277,11 +283,59 @@ pub fn which_app(name: &str) -> Result<(Vec<u32>, String), String> {
     let shown = match &last {
         Some((p, shown)) if *p == process && !shown.is_empty() => shown.clone(),
         _ => {
-            let mut c = process.chars();
+            // What you called it ("Edge"), not the program's own name ("msedge").
+            let said = if generic { process.as_str() } else { n.as_str() };
+            let mut c = said.chars();
             c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
         }
     };
     Ok((found.pids, shown))
+}
+
+/// What people call a program, when it is nothing like the program's own name.
+const SAID_AS: &[(&str, &str)] = &[
+    ("vs code", "code"),
+    ("vscode", "code"),
+    ("visual studio code", "code"),
+    ("edge", "msedge"),
+    ("microsoft edge", "msedge"),
+    ("google chrome", "chrome"),
+    ("word", "winword"),
+    ("microsoft word", "winword"),
+    ("powerpoint", "powerpnt"),
+    ("terminal", "windowsterminal"),
+    ("windows terminal", "windowsterminal"),
+    ("task manager", "taskmgr"),
+    ("calculator", "calculatorapp"),
+];
+
+/// "edge" → "msedge"; anything not in the list is left as said.
+fn said_program(name: &str) -> String {
+    SAID_AS.iter().find(|(said, _)| *said == name).map(|(_, p)| p.to_string()).unwrap_or_else(|| name.to_string())
+}
+
+/// The program behind an open window that goes by `name`: its program name contains the name's first word
+/// ("word" in winword), or its title ends with the name ("Document1 - Word"). A title that merely mentions the
+/// name does not count: "word counter - Google Chrome" is Chrome, and closing Chrome for "close Word" is wrong.
+fn program_of_window(name: &str, windows: &[Win]) -> Option<String> {
+    let token = first_word(name);
+    let squash = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+    let whole = squash(name);
+    windows
+        .iter()
+        .find(|w| whole.len() >= 3 && squash(&w.proc).contains(&whole))
+        .or_else(|| windows.iter().find(|w| (token.len() >= 3 && w.proc.starts_with(&token)) || (token.len() >= 4 && w.proc.contains(&token))))
+        .or_else(|| windows.iter().find(|w| name.len() >= 3 && w.title.to_lowercase().trim_end().ends_with(name)))
+        .map(|w| w.full_proc.clone())
+}
+
+/// Whether what was said names this app: the same words, or all the words of one inside the other
+/// ("code" for "Visual Studio Code"). Whole words only, and never an app without a name: "close barcode
+/// scanner" once matched an app called "Code" because the letters were in it.
+fn same_name(app: &str, said: &str) -> bool {
+    let words = |s: &str| s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(String::from).collect::<Vec<_>>();
+    let (a, s) = (words(app), words(said));
+    !a.is_empty() && !s.is_empty() && (s.iter().all(|w| a.contains(w)) || a.iter().all(|w| s.contains(w)))
 }
 
 /// The visible windows of these processes (with their owned dialogs when `owned`).
@@ -349,6 +403,8 @@ pub struct Win {
     pub hwnd: usize,
     /// Process name, lower-case, without ".exe" or a trailing "64" ("obs64" → "obs").
     pub proc: String,
+    /// The process name as find_processes knows it: lower-case, without ".exe" ("obs64").
+    pub full_proc: String,
     pub title: String,
     pub minimized: bool,
 }
@@ -401,8 +457,9 @@ pub fn top_windows() -> Vec<Win> {
         .filter(|(_, pid, _, _)| *pid != own)
         .map(|(hwnd, pid, title, minimized)| {
             let name = sys.process(Pid::from_u32(pid)).map(|p| p.name().to_string_lossy().to_lowercase()).unwrap_or_default();
-            let name = name.trim_end_matches(".exe").trim_end_matches("64").to_string();
-            Win { hwnd, proc: name, title, minimized }
+            let full_proc = name.trim_end_matches(".exe").to_string();
+            let name = full_proc.trim_end_matches("64").to_string();
+            Win { hwnd, proc: name, full_proc, title, minimized }
         })
         .collect()
 }
@@ -725,6 +782,31 @@ pub fn spawn_battery_watch(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_app_is_closed_by_the_name_people_say() {
+        let win = |proc: &str, title: &str| Win { hwnd: 1, proc: proc.trim_end_matches("64").into(), full_proc: proc.into(), title: title.into(), minimized: false };
+        let open = [
+            win("chrome", "word counter - Google Chrome"),
+            win("winword", "Document1 - Word"),
+            win("msedge", "New tab - Microsoft Edge"),
+            win("obs64", "OBS 31.0 - Profile: Untitled"),
+            win("code", "wake.rs - SelfGlance - Visual Studio Code"),
+        ];
+        assert_eq!(said_program("edge"), "msedge");
+        assert_eq!(said_program("vs code"), "code");
+        assert_eq!(said_program("spotify"), "spotify");
+        assert_eq!(program_of_window("word", &open).as_deref(), Some("winword"), "not Chrome, whose tab only mentions it");
+        assert_eq!(program_of_window("obs studio", &open).as_deref(), Some("obs64"), "the program's name starts with the first word said");
+        assert_eq!(program_of_window("obs", &open).as_deref(), Some("obs64"));
+        assert_eq!(program_of_window("microsoft edge", &open).as_deref(), Some("msedge"));
+        assert_eq!(program_of_window("photoshop", &open), None);
+        // The app in front, by name: whole words, and never an app with no name.
+        assert!(same_name("Visual Studio Code", "code"));
+        assert!(same_name("Brave", "brave browser"));
+        assert!(!same_name("Code", "barcode scanner"));
+        assert!(!same_name("", "anything"));
+    }
 
     #[test]
     fn guide_goals_open_their_settings_page() {

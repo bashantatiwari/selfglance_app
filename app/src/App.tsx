@@ -757,6 +757,9 @@ export default function App() {
     setAsk(null);
     stopSpeaking();
     wake();
+    // The spoken request is over: later cards and buttons are not answered out loud because of it.
+    // (A guide under way keeps speaking its steps.)
+    if (!guideRun.current) heardRef.current = false;
     if (wasTyping) await releaseFocus();
   };
 
@@ -854,6 +857,7 @@ export default function App() {
     stageRef.current?.play("nod", true);
     showPop(text.length > 60 ? `${text.slice(0, 57)}…` : text, 2800, true);
     if (heardRef.current) talkBack(text.replace(/✓/g, "").trim()); // you talked to him: he answers out loud
+    heardRef.current = false; // that was the answer: the next click on a card is not a spoken request
   };
 
   const lookAtScreen = async (question: string, mode: ScreenMode) => {

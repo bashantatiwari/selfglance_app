@@ -624,7 +624,8 @@ fn refuse_protected(app: &AppHandle, home: &Path, p: &Path) -> Result<(), String
     let ap = app.path();
     protected.extend([ap.download_dir(), ap.document_dir(), ap.desktop_dir(), ap.picture_dir(), ap.audio_dir(), ap.video_dir()].into_iter().flatten());
     protected.extend(folder(app, "screenshots").ok().map(|(_, d)| d));
-    if c.parent().is_none() || protected.iter().any(|x| canon(x) == c) {
+    // The folder itself, or anything above it: deleting C:\Users takes the home folder with it.
+    if c.parent().is_none() || protected.iter().any(|x| holds(&c, &canon(x))) {
         return Err(format!("Bond won't delete {} itself — name the files inside it.", p.display()));
     }
     let lower = c.to_string_lossy().to_lowercase();
@@ -633,6 +634,11 @@ fn refuse_protected(app: &AppHandle, home: &Path, p: &Path) -> Result<(), String
         return Err(format!("{} is a system folder; Bond won't delete anything there.", p.display()));
     }
     Ok(())
+}
+
+/// Is `path` the protected folder, or a folder above it? (Compared part by part, so "C:\Users\me2" is not above "C:\Users\me".)
+fn holds(path: &Path, protected: &Path) -> bool {
+    protected.starts_with(path)
 }
 
 /// `*` any run of characters, `?` one character.
@@ -1507,8 +1513,31 @@ fn find_app(wanted: &str) -> Option<(String, String)> {
     let mut cache = APPS.lock().unwrap();
     if cache.is_none() {
         *cache = Some(list_apps());
+        *APPS_READ.lock().unwrap() = Some(Instant::now());
     }
-    let apps = cache.as_ref().unwrap();
+    if let Some(hit) = app_in(cache.as_ref().unwrap(), wanted) {
+        return Some(hit);
+    }
+    // Not in the list: it may have been installed since the list was read. Read it again (at most once a
+    // minute: it takes about a second) and look once more.
+    let stale = APPS_READ.lock().unwrap().is_none_or(|t| t.elapsed() > Duration::from_secs(60));
+    if !stale {
+        return None;
+    }
+    let fresh = list_apps();
+    *APPS_READ.lock().unwrap() = Some(Instant::now());
+    if fresh.is_empty() {
+        return None; // the list couldn't be read: keep the one we have
+    }
+    let hit = app_in(&fresh, wanted);
+    *cache = Some(fresh);
+    hit
+}
+
+/// When the app list was last read.
+static APPS_READ: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn app_in(apps: &[(String, String)], wanted: &str) -> Option<(String, String)> {
     let lower = |s: &str| s.to_lowercase();
     apps.iter()
         .find(|(n, _)| lower(n) == wanted)
@@ -1585,6 +1614,7 @@ pub fn preload_apps() {
     std::thread::spawn(|| {
         let apps = list_apps();
         *APPS.lock().unwrap() = Some(apps);
+        *APPS_READ.lock().unwrap() = Some(Instant::now());
     });
 }
 
@@ -1673,6 +1703,16 @@ mod tests {
         assert!(!name_matches("Chrome", "Hey Clicky"));
         assert!(!name_matches("Office 16 Click-to-Run Component", "Hey Clicky"));
         assert!(!name_matches("ab", "ab"));
+    }
+
+    #[test]
+    fn a_folder_above_a_protected_one_is_protected_too() {
+        let home = Path::new(r"C:\Users\me");
+        assert!(holds(Path::new(r"C:\Users\me"), home));
+        assert!(holds(Path::new(r"C:\Users"), home), "deleting C:\\Users takes the home folder with it");
+        assert!(holds(Path::new(r"C:\"), home));
+        assert!(!holds(Path::new(r"C:\Users\me\Downloads\old.zip"), home));
+        assert!(!holds(Path::new(r"C:\Users\me2"), home));
     }
 
     #[test]

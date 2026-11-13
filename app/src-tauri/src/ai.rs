@@ -1101,15 +1101,23 @@ pub async fn guide_outcome(goal: String, say: String, picked: String, shown: usi
         "local",
         if ok { Ok(()) } else { Err(outcome.clone()) },
     );
-    // A running score in the log: how often you went where he pointed.
-    let all: Vec<_> = crate::experience::snapshot().into_iter().filter(|e| e.kind == "guide").collect();
-    let followed = all.iter().filter(|e| e.ok).count();
+    // A running score in the log: how often you went where he pointed. Counted here, not in the experience
+    // log: that one keeps nothing while "Learn from me" is off, and the score then read "0 of 2" for ever.
+    let (followed, all) = guide_score(ok);
     crate::diag::log(&format!(
-        "guide: {outcome}{} — {followed} of {} steps followed his pick",
+        "guide: {outcome}{} — {followed} of {all} steps followed his pick since he started",
         clicked.map(|(k, n)| format!(" (you clicked {k} “{n}”)")).unwrap_or_default(),
-        all.len()
     ));
     Ok(())
+}
+
+/// Count one guide step and return (followed, all) since start-up.
+fn guide_score(followed: bool) -> (usize, usize) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static FOLLOWED: AtomicUsize = AtomicUsize::new(0);
+    static ALL: AtomicUsize = AtomicUsize::new(0);
+    let f = if followed { FOLLOWED.fetch_add(1, Ordering::Relaxed) + 1 } else { FOLLOWED.load(Ordering::Relaxed) };
+    (f, ALL.fetch_add(1, Ordering::Relaxed) + 1)
 }
 
 /// The mouse position in physical pixels (for the hand-run test below).
