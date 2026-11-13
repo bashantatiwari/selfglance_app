@@ -95,6 +95,9 @@ export interface GoalState {
   stalledDay?: string;
   /** When the brain was last asked about unclear items (ms). */
   judgedAt?: number;
+  /** The day each end-of-day line was said. */
+  studyCall?: string;
+  closeCall?: string;
 }
 export const loadState = (): GoalState => read("selfglance.goalstate", {});
 export const saveState = (s: GoalState) => write("selfglance.goalstate", s);
@@ -163,6 +166,83 @@ export function makeJudge(goals: string[], fixes = loadFixes(), cache = loadCach
     cache,
   };
 }
+
+// --- Standing commitments -------------------------------------------------------------------
+// A line for the day is optional. What you told Bond about yourself (Settings → About you) says what your
+// laptop time is for on any day: where you are headed, what you do now, and your projects. With no goal set,
+// the day is judged against those, so drifting is noticed without you planning anything.
+
+/** The commitments as lines (for the brain, and to say back to you). Empty when About you is empty. */
+export function standingGoals(p: Profile, d = new Date()): string[] {
+  const weekend = d.getDay() === 0 || d.getDay() === 6;
+  const lines = [p.aim && `Becoming: ${p.aim}`, p.now && `Now: ${p.now}`, p.projects && `Projects: ${p.projects}`].filter((x): x is string => !!x);
+  // At the weekend the projects come first (the videos get made then).
+  return (weekend && p.projects ? [lines[lines.length - 1], ...lines.slice(0, -1)] : lines).slice(0, MAX_GOALS);
+}
+
+/** The judge for a day with no goal of its own: anything about your aim or made with your tools is on-track. */
+export function makeStandingJudge(p: Profile = loadProfile(), fixes = loadFixes(), cache = loadCache(), d = new Date()): Judge {
+  return {
+    words: [],
+    aim: aimWords(p),
+    creator: isCreator(p),
+    aimFocus: true,
+    contentFocus: true,
+    goalsKey: `standing|${standingGoals(p, d).join("|").toLowerCase()}`,
+    fixes,
+    cache,
+  };
+}
+
+/** The drift card when the day has no goal of its own. */
+export function standingDriftText(p: Profile, d: Drift): string {
+  const min = Math.round(d.ms / MIN);
+  const what = [p.now, p.aim, isCreator(p) ? "your videos" : ""].filter(Boolean).slice(0, 3).join(", ");
+  return `The last ${min} minutes went to ${d.top ? `“${d.top}”` : "something else"}. That isn't ${what || "what you're here for"}.`;
+}
+
+// --- The end of the day -----------------------------------------------------------------------
+
+/** Time spent today on your aim itself (a lesson, a library, a paper), as opposed to anything else that is fine. */
+export function aimTime(segs: Segment[], p: Profile): number {
+  const aim = aimWords(p);
+  if (!aim.length) return 0;
+  return segs.filter((s) => s.ctx !== "meeting" && mentions(`${s.label} ${s.app}`, aim)).reduce((a, s) => a + durOf(s), 0);
+}
+
+/** Minutes toward your aim that make a day count as "studied". */
+export const STUDY_MIN = 30;
+/** How long before your day's end Bond says the study hasn't happened. */
+export const LAST_CALL_MIN = 45;
+
+export interface Evening {
+  /** "study": your day ends soon and nothing went toward your aim. "close": it is past the end of your day. */
+  kind: "study" | "close";
+  text: string;
+}
+
+/**
+ * What Bond says as your day ends (once each, per day): with `end` the minute your laptop day ends (About you),
+ * a last call when the study hasn't happened, and after the end, that it is time to close the laptop.
+ */
+export function evening(now: Date, end: number, segs: Segment[], p: Profile, said: { study?: string; close?: string }): Evening | null {
+  const minute = now.getHours() * 60 + now.getMinutes();
+  const today = dayId(now);
+  const weekend = now.getDay() === 0 || now.getDay() === 6;
+  if (minute >= end && minute < end + 120 && said.close !== today) {
+    return { kind: "close", text: `It's past ${clockText(end)}, when your laptop day ends. Time to close it and call home.` };
+  }
+  if (!weekend && p.aim && minute >= end - LAST_CALL_MIN && minute < end && said.study !== today) {
+    const had = aimTime(segs, p);
+    if (had < STUDY_MIN * MIN) {
+      const left = end - minute;
+      return { kind: "study", text: `${had < 5 * MIN ? "Nothing" : `Only ${Math.round(had / MIN)} minutes`} toward ${p.aim} today, and your laptop day ends in ${left} minutes. Use them?` };
+    }
+  }
+  return null;
+}
+
+const clockText = (m: number) => new Date(2000, 0, 1, Math.floor(m / 60), m % 60).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
 export function verdict(s: Segment, j: Judge): Verdict {
   const key = keyOf(s);

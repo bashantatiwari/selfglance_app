@@ -25,6 +25,8 @@ export type AskState =
   | { step: "drift"; text: string }
   | { step: "goalnudge"; text: string }
   | { step: "review"; text: string }
+  /** A question from Bond with a few answers to pick from (follow-through, the end of the day). */
+  | { step: "choice"; title: string; text: string; options: { label: string; primary?: boolean; run: () => void }[] }
   | { step: "unsure" }
   | { step: "error"; question: string; error: string };
 
@@ -154,6 +156,19 @@ export function AnswerCard(props: { cardRef: Ref<HTMLDivElement>; state: AskStat
             <button className="btn-primary" onClick={props.onDriftBack}>
               On it
             </button>
+          </div>
+        </>
+      )}
+      {s.step === "choice" && (
+        <>
+          <p className="q">{s.title}</p>
+          <p className="a">{s.text}</p>
+          <div className="choices">
+            {s.options.map((o) => (
+              <button key={o.label} className={o.primary ? "btn-primary" : "btn-ghost"} onClick={o.run}>
+                {o.label}
+              </button>
+            ))}
           </div>
         </>
       )}

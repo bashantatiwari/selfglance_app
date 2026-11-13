@@ -178,3 +178,67 @@ test("a goal can be set for tomorrow, in a few phrasings", async () => {
   assert.equal(dayId(tomorrowOf(new Date(2026, 9, 31))), "2026-11-01");
   void stalled; void makeJudge;
 });
+
+test("with no goal for the day, the day is judged against what you told Bond about yourself", async () => {
+  const { makeStandingJudge, standingGoals, standingDriftText, verdict, evening, aimTime } = await import("../src/assistant/goals.ts");
+  const { EMPTY_PROFILE } = await import("../src/assistant/profile.ts");
+  const me = { ...EMPTY_PROFILE, name: "Alex", now: "data analyst", aim: "AI Engineer", projects: "tech explainer videos (YouTube)", end: "21:00" };
+  const seg = (ctx: string, label: string, app = "Brave", min = 12, at = 0) => ({ start: at, end: at + min * 60_000, ctx, label, app }) as never;
+  const j = makeStandingJudge(me, {}, {});
+  assert.equal(verdict(seg("watching", "Let's build GPT from scratch - Andrej Karpathy"), j), "on", "about the aim");
+  assert.equal(verdict(seg("other", "OWASP Top 10 for LLM applications"), j), "on", "the internship's field counts too");
+  assert.equal(verdict(seg("other", "CapCut", "CapCut"), j), "on", "the videos are a commitment");
+  assert.equal(verdict(seg("watching", "Funny cat compilation 2026"), j), "off");
+  assert.equal(verdict(seg("other", "Roblox Studio", "RobloxStudioBeta"), j), "unsure", "something new is for the brain to label");
+  assert.equal(verdict(seg("other", "Inbox - Gmail"), j), "neutral");
+  // weekdays lead with the aim, the weekend with the videos
+  assert.match(standingGoals(me, new Date(2026, 10, 16))[0], /AI Engineer/);
+  assert.match(standingGoals(me, new Date(2026, 10, 14))[0], /videos/);
+  assert.deepEqual(standingGoals(EMPTY_PROFILE), []);
+  assert.match(standingDriftText(me, { ms: 14 * 60_000, since: 0, top: "Roblox Studio", topKey: "x" }), /14 minutes went to “Roblox Studio”/);
+
+  // the end of the day: 21:00
+  const end = 21 * 60;
+  const mon = (h: number, m: number) => new Date(2026, 10, 16, h, m);
+  const none: never[] = [];
+  assert.equal(evening(mon(19, 0), end, none, me, {}), null, "too early to say anything");
+  assert.equal(evening(mon(20, 20), end, none, me, {})?.kind, "study");
+  assert.match(evening(mon(20, 20), end, none, me, {})!.text, /Nothing toward AI Engineer today.*40 minutes/);
+  const studied = [seg("watching", "PyTorch tutorial for beginners", "Brave", 40)];
+  assert.ok(aimTime(studied, me) >= 30 * 60_000);
+  assert.equal(evening(mon(20, 20), end, studied, me, {}), null, "the study happened: nothing to say");
+  assert.equal(evening(mon(20, 20), end, none, me, { study: "2026-11-16" }), null, "said once a day");
+  assert.equal(evening(mon(21, 5), end, none, me, {})?.kind, "close");
+  assert.equal(evening(mon(21, 5), end, none, me, { close: "2026-11-16" }), null);
+  assert.equal(evening(new Date(2026, 10, 14, 20, 20), end, none, me, {}), null, "no study call at the weekend");
+});
+
+test("follow-through: a lesson watched is asked about from the next day, one a day", async () => {
+  const { isLesson, lessonsIn, merge, due, question, answer, week } = await import("../src/assistant/followup.ts");
+  const aim = ["pytorch", "llm", "ai"];
+  const seg = (ctx: string, label: string, min: number) => ({ start: 0, end: min * 60_000, ctx, label, app: "Brave" }) as never;
+  assert.ok(isLesson(seg("watching", "LangGraph tutorial: build an agent", 20), aim));
+  assert.ok(isLesson(seg("watching", "Attention in LLM models", 20), aim), "about the aim, even without the word tutorial");
+  assert.ok(isLesson(seg("other", "Roblox Studio for beginners - full course", 20), aim), "a lesson off your path is still a lesson");
+  assert.ok(!isLesson(seg("watching", "Funny cat compilation", 20), aim));
+  assert.ok(!isLesson(seg("focus", "tutorial.py - Visual Studio Code", 20), aim), "working is not watching");
+
+  const monday = [seg("watching", "LangGraph tutorial: build an agent", 25), seg("watching", "LangGraph tutorial: build an agent", 10), seg("watching", "RAG explained", 4), seg("watching", "Funny cat compilation", 30)];
+  const found = lessonsIn(monday, "2026-11-16", aim);
+  assert.deepEqual(found.map((l) => [l.title, Math.round(l.ms / 60_000)]), [["LangGraph tutorial: build an agent", 35]], "added up; four minutes is a glance");
+  let list = merge([], found, "2026-11-16");
+  assert.equal(due(list, "2026-11-16"), null, "not on the day itself");
+  const q = due(list, "2026-11-17")!;
+  assert.match(question(q, "2026-11-17"), /^Yesterday you watched “LangGraph tutorial: build an agent” for 35 minutes\. Did you build or try anything from it\?$/);
+  list = answer(list, q.id, "asked", "2026-11-17");
+  assert.equal(due(list, "2026-11-17"), null, "asked once a day");
+  list = answer(list, q.id, "today", "2026-11-17");
+  assert.match(question(due(list, "2026-11-18")!, "2026-11-18"), /you said you'd use what you learned/);
+  list = answer(list, q.id, "used", "2026-11-18");
+  assert.equal(due(list, "2026-11-19"), null);
+  assert.deepEqual(week(list, "2026-11-19"), { watched: 1, used: 1, waiting: 0, ms: 35 * 60_000 });
+  // the same lesson seen again in the day's diary keeps your answer
+  assert.equal(merge(list, found, "2026-11-19")[0].state, "used");
+  // an old unanswered one is let go
+  assert.equal(merge(merge([], found, "2026-11-16"), [], "2026-12-01").length, 0);
+});

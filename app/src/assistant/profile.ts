@@ -116,9 +116,11 @@ const AIM_WORDS: [RegExp, string[]][] = [
 
 /** Lower-case words that show something is about your aim. */
 export function aimWords(p: Profile): string[] {
-  if (!p.aim) return [];
+  if (!p.aim && !p.now) return [];
+  // What you do now is part of it: an AI security intern's security reading is work, not a detour.
+  const about = `${p.aim} ${p.now}`;
   const own = (p.aim.toLowerCase().match(/[\p{L}\p{N}+#]{3,}/gu) ?? []).filter((w) => !["become", "engineer", "developer", "student", "good", "great", "senior", "junior"].includes(w));
-  return [...new Set([...own, ...AIM_WORDS.filter(([re]) => re.test(p.aim)).flatMap(([, w]) => w)])];
+  return [...new Set([...own, ...AIM_WORDS.filter(([re]) => re.test(about)).flatMap(([, w]) => w)])];
 }
 
 /** Making videos is your work, not your distraction. */

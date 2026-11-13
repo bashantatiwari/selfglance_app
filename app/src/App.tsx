@@ -95,13 +95,18 @@ import {
 import { saidStop, spokenAnswer, understand, unsavedAnswer, type ScreenMode } from "./assistant/intent";
 import { addIdea } from "./assistant/notes";
 import { fit, loadPlan, MAX_ITEMS, minutesNow, parsePlan, planSummary, savePlan } from "./assistant/plan";
-import { dayBounds, hasProfile, loadProfile, profileLine } from "./assistant/profile";
+import { aimWords, dayBounds, hasProfile, loadProfile, profileLine } from "./assistant/profile";
+import { answer as answerLesson, due as lessonDue, lessonsIn, loadLessons, merge as mergeLessons, question as lessonQuestion, saveLessons, type LessonState } from "./assistant/followup";
 import {
   cacheKey,
   canNudge,
   driftMoment,
   driftRun,
   driftText,
+  evening,
+  makeStandingJudge,
+  standingDriftText,
+  standingGoals,
   loadCache,
   loadFixes,
   loadGoals,
@@ -1213,6 +1218,11 @@ export default function App() {
     askTimer.current = window.setTimeout(() => void closeAsk(), ms);
   };
 
+  /** A card Bond brings up on his own is also said out loud (when he reads answers aloud, and never in a meeting). */
+  const sayCard = (text: string) => {
+    if (settingsRef.current.speakAnswers && ctxRef.current !== "meeting") void speak(text);
+  };
+
   /** Say any reminder that has come due: a card, and out loud when he reads answers aloud. */
   const reminderTick = async () => {
     if (askRef.current || stageRef.current?.busy === true || coachBreakRef.current()) return;
@@ -1257,11 +1267,51 @@ export default function App() {
       }
     }
 
-    if (!goals.length) return;
-    const judge = makeJudge(goals);
+    const profile = loadProfile();
+    const dayKey = dayId(d);
+
+    // 2a. Follow-through: what you watched to learn is written down, and from the next day he asks what came of it.
+    const lessons = mergeLessons(loadLessons(), lessonsIn(today, dayKey, aimWords(profile)), dayKey);
+    saveLessons(lessons);
+    const lesson = lessonDue(lessons, dayKey);
+    if (lesson && naturalPause(moment)) {
+      saveLessons(answerLesson(lessons, lesson.id, "asked", dayKey));
+      const text = lessonQuestion(lesson, dayKey);
+      const set = (to: LessonState, say: string) => () => {
+        saveLessons(answerLesson(loadLessons(), lesson.id, to, dayId()));
+        confirm(say);
+      };
+      sayCard(text);
+      return void showGoalCard(
+        {
+          step: "choice",
+          title: "Follow-through",
+          text,
+          options: [
+            { label: "Drop it", run: set("dropped", "Dropped ✓") },
+            { label: "I'll do it today", run: set("today", "I'll ask you tomorrow ✓") },
+            { label: "Yes, I used it", primary: true, run: set("used", "Good. Counted ✓") },
+          ],
+        },
+        60_000,
+      );
+    }
+
+    // 2b. The end of your laptop day (About you): a last call when nothing went toward your aim, then time to close.
+    const ev = evening(d, dayBounds(profile).end, today, profile, { study: state.studyCall, close: state.closeCall });
+    if (ev) {
+      patchState(ev.kind === "study" ? { studyCall: dayKey } : { closeCall: dayKey });
+      sayCard(ev.text);
+      return void showGoalCard({ step: "choice", title: ev.kind === "study" ? "Before the day ends" : "Laptop off", text: ev.text, options: [{ label: "Okay", primary: true, run: () => void closeAsk() }] }, 45_000);
+    }
+
+    // With no goal set for today, the day is judged against what you told him about yourself.
+    const lines = goals.length ? goals : standingGoals(profile, d);
+    if (!lines.length) return;
+    const judge = goals.length ? makeJudge(goals) : makeStandingJudge(profile);
 
     // 2b. A goal is set (maybe last night): once a day say so, and once an hour has gone by without it.
-    if (st.goalNudge && naturalPause(moment) && canNudge(state, now)) {
+    if (goals.length && st.goalNudge && naturalPause(moment) && canNudge(state, now)) {
       if (stalled(today, judge, state, d)) {
         const ms = tally(today, judge);
         saveState(recordNudge({ ...state, stalledDay: dayId(d) }, now));
@@ -1279,7 +1329,9 @@ export default function App() {
       if (run) {
         goalCheck.current.drift = run;
         saveState(recordNudge(state, now));
-        return void showGoalCard({ step: "drift", text: driftText(goals[0], run) }, 25_000);
+        const text = goals.length ? driftText(goals[0], run) : standingDriftText(profile, run);
+        sayCard(text);
+        return void showGoalCard({ step: "drift", text }, 25_000);
       }
     }
 
@@ -1289,7 +1341,7 @@ export default function App() {
     if (!items.length) return;
     patchState({ judgedAt: now });
     const fits = await goalJudge(
-      goals,
+      lines,
       items.map((i) => ({ app: i.app, label: i.label })),
       blockList(),
     );
