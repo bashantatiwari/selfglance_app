@@ -1,0 +1,113 @@
+/* Timers: small cards in the top-right corner of the screen, above whatever you are working in. */
+.timers {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  font-family: "Segoe UI", system-ui, -apple-system, "Ubuntu", sans-serif;
+}
+
+.timer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 11px 14px;
+  border-radius: 12px;
+  background: rgba(24, 27, 34, 0.92);
+  color: #fff;
+  border: 1.5px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.timer-time {
+  all: unset;
+  font-size: 24px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.timer-label {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.timer-btn {
+  all: unset;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  text-align: center;
+  line-height: 22px;
+  font-size: 17px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.timer-btn:hover,
+.timer-btn:focus-visible {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.timer-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.timer-bar span {
+  display: block;
+  height: 100%;
+  background: #4fd1ff;
+  transition: width 250ms linear;
+}
+
+/* Made small: just the time, still counting. */
+.timer.mini {
+  padding: 3px 4px 3px 10px;
+  gap: 2px;
+  opacity: 0.85;
+}
+
+.timer.mini .timer-time {
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.timer.done {
+  background: #b4321f;
+  border-color: rgba(255, 255, 255, 0.5);
+  animation: timer-ring 0.9s ease-in-out infinite;
+}
+
+.timer.done .timer-bar span {
+  background: #fff;
+}
+
+@keyframes timer-ring {
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timer.done {
+    animation: none;
+  }
+  .timer-bar span {
+    transition: none;
+  }
+}

@@ -32,7 +32,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CharacterStage } from "./stage/CharacterStage";
 import type { CharacterManifest, Rect } from "./stage/types";
-import { BUDDY_EVENT, BUDDY_KEY, loadBuddy } from "./stage/buddy";
 import { differs, still } from "./assistant/settle";
 import { addReminder, LATE_MS, takeDue, whenText } from "./assistant/remind";
 import { BreakCoach, glassesToday, type BreakPhase } from "./break/BreakCoach";
@@ -45,6 +44,8 @@ import { effective, loadSettings, type Settings } from "./settings";
 import { ActionMenu, ARC, arcBox, type ActionId } from "./ui/ActionMenu";
 import { AnswerCard, AskBox, type AskState } from "./ui/Ask";
 import { Guide, type GuideView } from "./ui/Guide";
+import { Timers } from "./ui/Timers";
+import { loadTimers, newTimer, saveTimers, spanText, type Timer } from "./assistant/timer";
 import {
   aiGuide,
   aiChat,
@@ -205,9 +206,6 @@ const store = {
 };
 
 async function loadCharacter(): Promise<{ base: string; manifest: CharacterManifest }> {
-  // Your photo buddy, when you made one (Settings → Buddy), stands in for the robot.
-  const buddy = loadBuddy();
-  if (buddy) return { base: "", manifest: { id: "photo", name: buddy.name, model: "", photo: buddy.url, height: buddy.height, entrance: "web-drop" } };
   const index: { default: string; characters: string[] } = await (await fetch("/characters/index.json")).json();
   const saved = store.get("selfglance.character");
   const id = saved && index.characters.includes(saved) ? saved : index.default;
@@ -277,6 +275,15 @@ export default function App() {
   /** Goes up on every new request and on "stop": an older request that comes back later is dropped. */
   const askEpoch = useRef(0);
   const guideTipRef = useRef<HTMLDivElement>(null);
+  // Timers you asked for, counting down on screen (ui/Timers.tsx).
+  const [timers, setTimers] = useState<Timer[]>(() => loadTimers());
+  const timersRef = useRef<HTMLDivElement>(null);
+  const changeTimers = (next: (list: Timer[]) => Timer[]) =>
+    setTimers((list) => {
+      const now = next(list);
+      saveTimers(now);
+      return now;
+    });
   /** The dashboard has the focus: Bond steps aside (unless he has something to say). */
   const [inDashboard, setInDashboard] = useState(false);
   const tuckedRef = useRef(false);
@@ -365,10 +372,10 @@ export default function App() {
         el.style.transform = `translate(${left}px, ${top}px)`;
         regions.push({ x: left, y: top, w, h: hh });
       }
-      const tip = guideTipRef.current;
-      if (tip) {
-        const r = tip.getBoundingClientRect();
-        regions.push({ x: r.x, y: r.y, w: r.width, h: r.height });
+      for (const el of [guideTipRef.current, timersRef.current]) {
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width && r.height) regions.push({ x: r.x, y: r.y, w: r.width, h: r.height });
       }
       sendHitRegions(regions);
     };
@@ -530,20 +537,6 @@ export default function App() {
       diag(`character failed to load: ${err}`);
       setBusy(false);
     });
-    // A new buddy made (or the robot chosen again) in Settings: he changes where he stands, no restart.
-    let buddyAt = loadBuddy()?.at ?? 0;
-    const changeBuddy = () => {
-      const at = loadBuddy()?.at ?? 0;
-      if (at === buddyAt) return; // the same change, heard twice
-      buddyAt = at;
-      void loadCharacter()
-        .then(({ base, manifest }) => stage.swap(base, manifest))
-        .then(() => diag(`character changed to ${at ? "a photo buddy" : "the robot"}`))
-        .catch((err) => diag(`character change failed: ${err}`));
-    };
-    const onStorage = (e: StorageEvent) => e.key === BUDDY_KEY && changeBuddy();
-    window.addEventListener("storage", onStorage);
-
     // Without Tauri (plain browser preview) there is no idle signal: assume active use.
     const fakeIdle = inTauri ? undefined : window.setInterval(() => coach.onIdle(0), 2000);
 
@@ -724,13 +717,11 @@ export default function App() {
         store.set("selfglance.homeX", String(Math.round(stage.x)));
         setBusy(false);
       }),
-      onTauriEvent<null>(BUDDY_EVENT, changeBuddy),
     ];
 
     return () => {
       disposed = true;
       clearInterval(fakeIdle);
-      window.removeEventListener("storage", onStorage);
       stage.dispose();
       unlisten.forEach((p) => p.then((u) => u()));
     };
@@ -1089,6 +1080,12 @@ export default function App() {
       if (guideToResume(question)) return await runGuide(question);
       // What he understood on his own is a sure example for the brain to learn from.
       if (own?.kind === "draft") return await runDraft(question);
+      if (own?.kind === "timer") {
+        const t = newTimer(own.ms, own.label);
+        changeTimers((list) => [...list, t].slice(-5));
+        void recordOwn(question, { intent: "task" });
+        return confirm(`Timer set for ${spanText(own.ms)} ✓`);
+      }
       if (own?.kind === "remind") {
         const r = addReminder(own.at, own.text);
         void recordOwn(question, { intent: "task" });
@@ -1529,6 +1526,19 @@ export default function App() {
     void closeAsk();
   };
 
+  /** A timer reached zero: he comes in, rings, and says so. The card stays until you dismiss it. */
+  const timerDone = async (t: Timer) => {
+    const stage = stageRef.current;
+    if (stage && !stage.visible && !stage.busy) await stage.webDrop(homeX());
+    wake(12_000);
+    stage?.play("wave", true);
+    chime();
+    window.setTimeout(chime, 450);
+    const what = t.label ? `Time's up: ${t.label}` : "Time's up";
+    showPop(what, 6000, "long");
+    if (settingsRef.current.speakAnswers && ctxRef.current !== "meeting") void speak(`${what}. Your ${spanText(t.end - t.start)} timer is done.`);
+  };
+
   // --- Right-click actions ----------------------------------------------------------------
   const openMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1726,6 +1736,7 @@ export default function App() {
           }}
         />
       )}
+      {timers.length > 0 && <Timers timers={timers} boxRef={timersRef} onCancel={(id) => changeTimers((list) => list.filter((t) => t.id !== id))} onDone={(t) => void timerDone(t)} />}
       {guide && <Guide view={guide} origin={guideFrom} showDebug={settingsRef.current.guideDebug} tipRef={guideTipRef} onStop={() => stopGuide()} />}
       {menu && <ActionMenu menuRef={menuRef} inBreak={phase !== "idle"} laterMin={settingsRef.current.snoozeMin} onPick={act} />}
     </>

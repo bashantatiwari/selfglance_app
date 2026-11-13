@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "node --experimental-strip-types --no-warnings --test tests/notice.test.ts tests/speech.test.ts tests/intent.test.ts tests/goals.test.ts tests/nocloud.test.ts tests/break.test.ts tests/plan.test.ts tests/buddy.test.ts tests/profile.test.ts"
+    "test": "node --experimental-strip-types --no-warnings --test tests/notice.test.ts tests/speech.test.ts tests/intent.test.ts tests/goals.test.ts tests/nocloud.test.ts tests/break.test.ts tests/plan.test.ts tests/profile.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

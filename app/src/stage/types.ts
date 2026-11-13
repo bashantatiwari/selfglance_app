@@ -17,8 +17,6 @@ export interface CharacterManifest {
   name: string;
   /** Model file inside the character folder: .glb / .gltf / .fbx. */
   model: string;
-  /** A photo buddy instead of a model: the sticker image (a URL or data URL); see buddy.ts and sticker.ts. */
-  photo?: string;
   /** On-screen height in CSS pixels. */
   height: number;
   /** Logical clip -> clip name embedded in the model file. */

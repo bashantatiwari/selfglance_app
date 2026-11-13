@@ -43,10 +43,8 @@ import {
 import { analyzeDay, CATS, catName, clock, fmt, insights, kindOf, type Cat, type DayStats, type Item, type Kind } from "./analyze";
 import { forgetSegments, loadDay, LOG_EVENT, restoreSegments, type Segment } from "../companion/tracker";
 import { addGlass, glassesToday } from "../break/BreakCoach";
-import { BuddyPanel } from "./Buddy";
 import { AboutYouPanel } from "./AboutYou";
 import { hasProfile, loadProfile } from "../assistant/profile";
-import { loadBuddy } from "../stage/buddy";
 import { loadSettings, saveSettings, type Settings, effective } from "../settings";
 import Goals, { GoalTile } from "./Goals";
 import Ideas from "./Ideas";
@@ -875,7 +873,6 @@ const SECTIONS = [
   { id: "about", name: "About you", hint: "What Bond should know" },
   { id: "wellness", name: "Wellness", hint: "Water breaks" },
   { id: "assistant", name: "Bond", hint: "How he behaves" },
-  { id: "buddy", name: "Buddy", hint: "Your own character" },
   { id: "ai", name: "Bond's brain", hint: "Runs on this laptop" },
   { id: "voice", name: "Voice", hint: "Speaking and “Hey Bond”" },
   { id: "suggest", name: "Suggestions", hint: "When he speaks up" },
@@ -1080,7 +1077,6 @@ function SettingsPage() {
       </Group>
         )}
         {sec === "about" && <AboutYouPanel />}
-        {sec === "buddy" && <BuddyPanel />}
         {sec === "memory" && <MemoryPanel s={s} update={update} />}
         {sec === "privacy" && <PrivacyPanel s={s} go={setSec} />}
         </div>
@@ -1120,13 +1116,6 @@ function PrivacyPanel({ s: saved, go }: { s: Settings; go: (id: SecId) => void }
       calm: !s.learnFromMe,
       text: s.learnFromMe ? "He keeps what you ask and what worked, on this computer, so he can adapt." : "Nothing new is kept.",
       to: "learning",
-    },
-    {
-      title: "Buddy photo",
-      state: loadBuddy() ? "A sticker of your photo is kept" : "None",
-      calm: true,
-      text: "Only the finished sticker is kept, on this laptop; the photo you picked is not copied or sent. “Back to Bond the robot” deletes it.",
-      to: "buddy",
     },
   ];
   return (

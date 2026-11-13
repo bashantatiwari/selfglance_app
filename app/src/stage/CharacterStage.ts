@@ -8,7 +8,6 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
 import { Bottle } from "./Bottle";
-import { STICKER_ONCE_SECS, stickerMotion } from "./sticker";
 import type { CharacterManifest, ClipName, Rect } from "./types";
 
 type Mode = "hidden" | "idle" | "walking" | "flying" | "dragging" | "falling" | "hanging";
@@ -50,8 +49,6 @@ export class CharacterStage {
   private bottleMode: BottleMode = "none";
   private drinkDone?: () => void;
   private manifest!: CharacterManifest;
-  /** A photo buddy: the flat sticker moved by sticker.ts instead of a skeleton. */
-  private sticker?: { pivot: THREE.Group; clip: ClipName; t: number; dur: number };
   private bodyW = 0; // on-screen width in px, for the hit box and where the bottle is held
   private mode: Mode = "hidden";
   private facing = 0; // target rotation around y (relative to the model's front)
@@ -129,7 +126,6 @@ export class CharacterStage {
 
   async load(baseUrl: string, manifest: CharacterManifest) {
     this.manifest = manifest;
-    if (manifest.photo) return this.loadSticker(manifest);
     this.bodyW = manifest.height * 0.55;
     const { scene: model, animations } = await loadAsset(`${baseUrl}/${manifest.model}`);
 
@@ -172,61 +168,10 @@ export class CharacterStage {
     this.mixer.addEventListener("finished", () => this.play(this.looping));
   }
 
-  /** The photo as a flat sticker, standing on its bottom edge like the model's feet. */
-  private async loadSticker(manifest: CharacterManifest) {
-    const tex = await new THREE.TextureLoader().loadAsync(manifest.photo!);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const img = tex.image as { width: number; height: number };
-    // A wide photo (a cat stretched out) is kept no wider than 1.4 times its height, so it never fills the taskbar.
-    const h = Math.round(Math.min(manifest.height, (manifest.height * 1.4 * img.height) / img.width));
-    const w = (h * img.width) / img.height;
-    this.manifest = { ...manifest, height: h };
-    const geo = new THREE.PlaneGeometry(w, h);
-    geo.translate(0, h / 2, 0);
-    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.02, depthWrite: false }));
-    const pivot = new THREE.Group(); // sticker.ts moves this
-    pivot.add(mesh);
-    const holder = new THREE.Group();
-    holder.add(pivot);
-    this.root.add(holder);
-    this.model = holder;
-    this.bodyW = w;
-    this.sticker = { pivot, clip: "idle", t: 0, dur: 0 };
-  }
-
-  /** Change character without leaving the screen: the old one is let go, the new one appears where he stood. */
-  async swap(baseUrl: string, manifest: CharacterManifest) {
-    if (this.model) {
-      this.root.remove(this.model);
-      this.model.traverse((o) => {
-        const m = o as THREE.Mesh;
-        m.geometry?.dispose();
-        for (const mat of Array.isArray(m.material) ? m.material : m.material ? [m.material] : []) {
-          (mat as THREE.MeshBasicMaterial).map?.dispose();
-          mat.dispose();
-        }
-      });
-    }
-    this.mixer?.stopAllAction();
-    this.mixer = this.current = this.holdBone = this.sticker = this.model = undefined;
-    this.legs = [];
-    this.hipHeight = 0;
-    this.actions.clear();
-    await this.load(baseUrl, manifest);
-    this.play(this.mode === "walking" ? "walk" : this.mode === "idle" || this.mode === "hidden" ? "idle" : this.looping);
-    if (this.mode === "idle") this.play("celebrate", true);
-  }
-
   /** Crossfade to a clip. `once` plays it a single time, then returns to the current loop. */
   play(name: ClipName, once = false) {
     if (!once) this.looping = name;
     if (once) this.onClip?.(name);
-    if (this.sticker) {
-      const s = this.sticker;
-      if (!once && s.clip === name && !s.dur) return;
-      Object.assign(s, { clip: name, t: 0, dur: once ? (STICKER_ONCE_SECS[name] ?? 1) : 0 });
-      return;
-    }
     const next = this.actions.get(name) ?? this.actions.get("idle");
     if (!next || (next === this.current && !once)) return;
     next.reset();
@@ -472,16 +417,9 @@ export class CharacterStage {
     this.time += step;
 
     this.updateMovement(step);
-    if (this.sticker) this.animateSticker(step);
-    else {
-      this.mixer?.update(step);
-      this.applyPose(step);
-    }
-    if (this.model && this.sticker) {
-      // A flat photo can't turn to walk (side-on it would vanish): it faces the way it walks by flipping.
-      this.model.rotation.set(0, 0, 0);
-      this.model.scale.x = this.mode === "walking" && this.facing < 0 ? -1 : 1;
-    } else if (this.model) {
+    this.mixer?.update(step);
+    this.applyPose(step);
+    if (this.model) {
       // Smoothly turn toward the direction of travel (or face the user when idle).
       const target = this.facing + (this.manifest.turn ?? 0);
       const r = this.model.rotation;
@@ -536,18 +474,6 @@ export class CharacterStage {
         }
       }
     }
-  }
-
-  /** A photo buddy's frame: the clip's motion (sticker.ts); a one-shot hands back to the loop when it ends. */
-  private animateSticker(dt: number) {
-    const s = this.sticker!;
-    s.t += dt;
-    // The loop carries on from the same moment, which is where the one-shot was made to land (sticker.ts).
-    if (s.dur && s.t >= s.dur) Object.assign(s, { clip: this.looping, dur: 0 });
-    const f = stickerMotion(s.clip, s.t, this.pose);
-    s.pivot.position.set(f.x, f.y, 0);
-    s.pivot.rotation.z = f.rot;
-    s.pivot.scale.set(f.sx, f.sy, 1);
   }
 
   /** Procedural pose layer on top of whatever clip is playing: sitting. */

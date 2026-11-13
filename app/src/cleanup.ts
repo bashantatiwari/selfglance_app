@@ -10,6 +10,8 @@ export function removeJournalLeftovers() {
       if (k && k.startsWith("selfglance.journal")) stale.push(k);
     }
     stale.forEach((k) => localStorage.removeItem(k));
+    // The photo buddy was removed too (a flat picture beside a 3D Bond never looked right): its sticker goes.
+    localStorage.removeItem("selfglance.buddy");
   } catch {
     /* storage unavailable: nothing to remove */
   }

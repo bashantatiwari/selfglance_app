@@ -16,6 +16,7 @@
 
 import { goalForTomorrow, goalFrom } from "./goals.ts";
 import { parseReminder } from "./remind.ts";
+import { parseTimer } from "./timer.ts";
 
 export type Action =
   | { do: "open_app"; name: string }
@@ -50,6 +51,8 @@ export type Intent =
   | { kind: "plan"; text: string }
   /** "remind me in 10 minutes to stretch": Bond keeps it and says it when it is time. */
   | { kind: "remind"; at: number; text: string }
+  /** "start a timer of 10 seconds": a countdown you can see, make small or cancel. */
+  | { kind: "timer"; ms: number; label: string }
   | { kind: "do"; actions: Action[] }
   | { kind: "screen"; mode: ScreenMode }
   | { kind: "clipboard" }
@@ -197,7 +200,9 @@ export function understand(input: string): Intent {
   const next = goalForTomorrow(t);
   if (next) return { kind: "goal", text: next, tomorrow: true };
 
-  // A reminder or a timer.
+  // A timer you can watch, then a reminder.
+  const timer = parseTimer(t);
+  if (timer) return { kind: "timer", ...timer };
   const reminder = parseReminder(t);
   if (reminder) return { kind: "remind", ...reminder };
 

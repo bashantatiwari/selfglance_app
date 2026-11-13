@@ -227,6 +227,23 @@ test("Bond understands reminders and timers", async () => {
   assert.equal(parseReminder("what is a reminder", now), null);
   assert.equal(parseReminder("remind me in 10 minutes", now), null);
   assert.equal(parseReminder("open notepad", now), null);
+  // a timer is its own kind: it shows on screen and rings to the second
+  const { parseTimer, leftText, spanText } = await import("../src/assistant/timer.ts");
+  assert.deepEqual(parseTimer("start a timer of 10 seconds"), { ms: 10_000, label: "" });
+  assert.deepEqual(parseTimer("Set a timer for 5 minutes."), { ms: 300_000, label: "" });
+  assert.deepEqual(parseTimer("set a 10 minute timer for the eggs"), { ms: 600_000, label: "eggs" });
+  assert.deepEqual(parseTimer("timer 1 minute and 30 seconds"), { ms: 90_000, label: "" });
+  assert.deepEqual(parseTimer("can you start a timer for half an hour"), { ms: 1_800_000, label: "" });
+  assert.deepEqual(parseTimer("countdown from 30 sec"), { ms: 30_000, label: "" });
+  assert.equal(parseTimer("what is a timer"), null);
+  assert.equal(parseTimer("remind me in 10 minutes to stretch"), null);
+  assert.equal(parseTimer("set a timer"), null);
+  assert.equal(leftText(9_200), "0:10");
+  assert.equal(leftText(0), "0:00");
+  assert.equal(leftText(3_723_000), "1:02:03");
+  assert.equal(spanText(90_000), "1 minute 30 seconds");
+  assert.equal(understand("start a timer of 10 seconds")?.kind, "timer");
+  assert.equal(understand("set a timer for 5 minutes")?.kind, "timer");
   // through understand(): a reminder is its own kind
   assert.equal(understand("remind me in 10 minutes to stretch")?.kind, "remind");
 });
