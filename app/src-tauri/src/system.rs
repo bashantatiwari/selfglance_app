@@ -2,7 +2,6 @@
 // program (only after you approve, see agent.rs), the clipboard, and a low-battery warning.
 // Everything here is read locally; nothing is sent anywhere unless you ask Bond about it.
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use sysinfo::{Disks, Pid, ProcessesToUpdate, System};
@@ -111,110 +110,15 @@ pub fn specs() -> String {
     lines.join("\n")
 }
 
-/// A program as people think of it: all processes with the same name added together.
-struct Group {
-    name: String,
-    cpu: f32,
-    mem: u64,
-    count: usize,
-}
-
-fn groups(sys: &System) -> Vec<Group> {
-    let own = std::process::id();
-    let cores = sys.cpus().len().max(1) as f32;
-    let mut by_name: HashMap<String, Group> = HashMap::new();
-    for (pid, p) in sys.processes() {
-        if pid.as_u32() == own {
-            continue;
-        }
-        let name = clean_name(&p.name().to_string_lossy());
-        if name.is_empty() || PROTECTED.contains(&name.to_lowercase().as_str()) {
-            continue;
-        }
-        let g = by_name.entry(name.to_lowercase()).or_insert(Group { name, cpu: 0.0, mem: 0, count: 0 });
-        g.cpu += p.cpu_usage() / cores;
-        g.mem += p.memory();
-        g.count += 1;
-    }
-    by_name.into_values().collect()
-}
-
 fn clean_name(name: &str) -> String {
     let n = name.trim();
     n.strip_suffix(".exe").or_else(|| n.strip_suffix(".EXE")).unwrap_or(n).to_string()
 }
 
-fn sampled() -> System {
-    let mut sys = System::new();
-    sys.refresh_cpu_usage();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    std::thread::sleep(Duration::from_millis(700));
-    sys.refresh_cpu_usage();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    sys
-}
-
-/// "Why is my laptop slow?": the programs using the most CPU, then the most memory.
-pub fn top_processes() -> String {
-    let sys = sampled();
-    let mut gs = groups(&sys);
-    let line = |g: &Group| {
-        let many = if g.count > 1 { format!(" ({} processes)", g.count) } else { String::new() };
-        format!("{} — {:.0}% CPU, {:.1} GB{many}", g.name, g.cpu, g.mem as f64 / GB)
-    };
-    let mut out = vec!["Busiest right now:".to_string()];
-    gs.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
-    out.extend(gs.iter().take(5).map(|g| format!("  {}", line(g))));
-    gs.sort_by(|a, b| b.mem.cmp(&a.mem));
-    out.push("Most memory:".into());
-    out.extend(gs.iter().take(5).map(|g| format!("  {}", line(g))));
-    let total = sys.total_memory() as f64;
-    if total > 0.0 {
-        let used = total - sys.available_memory() as f64;
-        out.push(format!("Memory {:.0}% used, CPU {:.0}% busy.", used / total * 100.0, sys.global_cpu_usage()));
-    }
-    out.push("Say “close <name>” and I'll end one (you approve first).".into());
-    out.join("\n")
-}
-
-/// Free memory available right now, in bytes.
-pub fn available_memory() -> u64 {
-    let mut sys = System::new();
-    sys.refresh_memory();
-    sys.available_memory()
-}
-
-/// "Free up some RAM": what Bond let go of, then the programs holding the most memory,
-/// so you can pick which to close (each one still asks first).
-pub fn free_memory_report(freed_own: Option<u64>, unloaded: &[&str]) -> String {
-    let mut sys = System::new();
-    sys.refresh_memory();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    let mut out = Vec::new();
-    match (unloaded.is_empty(), freed_own) {
-        (true, _) => out.push("My own models weren't loaded, so nothing of mine to free.".to_string()),
-        (false, Some(b)) if b > 50 * 1024 * 1024 => out.push(format!("Unloaded my {}: about {:.1} GB back.", unloaded.join(" and "), b as f64 / GB)),
-        (false, _) => out.push(format!("Unloaded my {} (their memory is on the graphics card or was already small).", unloaded.join(" and "))),
-    }
-    let mut gs = groups(&sys);
-    gs.sort_by(|a, b| b.mem.cmp(&a.mem));
-    out.push("Holding the most memory now:".into());
-    out.extend(gs.iter().take(6).map(|g| {
-        let many = if g.count > 1 { format!(" ({} processes)", g.count) } else { String::new() };
-        format!("  {} — {:.1} GB{many}", g.name, g.mem as f64 / GB)
-    }));
-    let total = sys.total_memory() as f64;
-    if total > 0.0 {
-        let free = sys.available_memory() as f64;
-        out.push(format!("{:.1} of {:.1} GB free.", free / GB, total / GB));
-    }
-    out.push("Say “close <name>” to end one of these (you approve first).".into());
-    out.join("\n")
-}
-
 /// Processes matching a name ("chrome", "chrome.exe") or a PID, for the approval card.
 pub struct Found {
     pub pids: Vec<u32>,
+    #[allow(dead_code)] // shown in a test
     pub summary: String,
 }
 
@@ -469,19 +373,6 @@ pub fn top_windows() -> Vec<Win> {
     Vec::new()
 }
 
-/// A window's class name ("Progman" for the desktop, "Shell_TrayWnd" for the taskbar).
-#[cfg(target_os = "windows")]
-pub fn window_class(hwnd: usize) -> String {
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetClassNameW;
-    let mut class = [0u16; 128];
-    let len = unsafe { GetClassNameW(hwnd as *mut core::ffi::c_void, class.as_mut_ptr(), class.len() as i32) }.max(0) as usize;
-    String::from_utf16_lossy(&class[..len])
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn window_class(_hwnd: usize) -> String {
-    String::new()
-}
 
 /// What is open, for Bond's instructions: "Windows Terminal (in front), OBS Studio (minimized)".
 pub fn open_windows_summary() -> String {
@@ -638,34 +529,6 @@ pub fn bring_to_front(_pids: &[u32]) -> bool {
     false
 }
 
-pub fn kill(pids: &[u32]) -> Result<usize, String> {
-    let mut sys = System::new();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    let ended = pids.iter().filter(|pid| sys.process(Pid::from_u32(**pid)).is_some_and(|p| p.kill())).count();
-    if ended == 0 {
-        return Err("Couldn't end it (it may need administrator rights, or it already closed).".into());
-    }
-    Ok(ended)
-}
-
-pub fn clipboard_get() -> Result<String, String> {
-    let text = arboard::Clipboard::new().and_then(|mut c| c.get_text()).map_err(|_| "There's no text on the clipboard.".to_string())?;
-    if text.trim().is_empty() {
-        return Err("The clipboard is empty.".into());
-    }
-    Ok(text)
-}
-
-pub fn clipboard_set(text: &str) -> Result<(), String> {
-    arboard::Clipboard::new().and_then(|mut c| c.set_text(text)).map_err(|e| format!("Couldn't copy: {e}"))
-}
-
-/// The clipboard text, for asking the AI about what you copied.
-#[tauri::command]
-pub fn clipboard_text() -> Result<String, String> {
-    clipboard_get()
-}
-
 /// Emits `low-battery` (percent) once when the battery drops to 15% while unplugged, and
 /// once more at 7%. Plugging in resets it.
 pub fn spawn_battery_watch(app: AppHandle) {
@@ -743,7 +606,7 @@ mod tests {
     #[test]
     #[ignore]
     fn show_this_machine() {
-        println!("{}\n\n{}", super::status(), super::top_processes());
+        println!("{}\n\n{}", super::status(), "");
         assert!(super::find_processes("csrss").is_err());
         assert!(super::find_processes("no-such-program-xyz").is_err());
     }

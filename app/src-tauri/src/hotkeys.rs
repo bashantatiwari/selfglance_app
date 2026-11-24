@@ -9,7 +9,7 @@
 //
 // Any other key pressed during the hold (Ctrl+Alt+G, Ctrl+Alt+Del, Alt+Tab) cancels it, so
 // ordinary shortcuts still work. AltGr counts as Ctrl+Alt on some keyboard layouts, so that
-// key would start listening: use the tray or "Hey Bond" there.
+// key would start listening: use the tray or the Ask box there.
 
 use tauri::AppHandle;
 

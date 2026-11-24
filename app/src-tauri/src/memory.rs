@@ -24,7 +24,6 @@ use tauri::{AppHandle, Manager};
 /// Exchanges older than this are a new conversation.
 const CONVERSATION: Duration = Duration::from_secs(10 * 60);
 const MAX_TURNS: usize = 8;
-const MAX_FACTS: usize = 60;
 const MAX_TEXT: usize = 400;
 
 struct Turn {
@@ -313,36 +312,6 @@ pub fn last_app() -> Option<(String, String)> {
     LAST_APP.lock().unwrap().clone()
 }
 
-/// Keep a lasting fact. One about the same thing ("The user's name is …") replaces the older.
-pub fn learn(fact: &str) {
-    let fact = clip(fact);
-    if fact.len() < 4 {
-        return;
-    }
-    let key = |s: &str| s.to_lowercase().split_whitespace().take(4).collect::<Vec<_>>().join(" ");
-    with_facts(|facts| {
-        facts.retain(|f| key(f) != key(&fact) && !f.eq_ignore_ascii_case(&fact));
-        facts.push(fact.clone());
-        while facts.len() > MAX_FACTS {
-            facts.remove(0);
-        }
-        save(facts);
-    });
-    crate::diag::log(&format!("memory: learned “{fact}”"));
-}
-
-/// Whether a message tells something about the person saying it ("call me Alex", "I
-/// study at BCU", "my sister is Asha"), rather than asking or talking about something else.
-pub fn about_yourself(text: &str) -> bool {
-    let t = text.trim().to_lowercase();
-    const ASKING: &[&str] = &["what", "who", "where", "when", "why", "how", "which", "do", "does", "did", "is", "are", "can", "could", "will", "would", "should", "tell", "say"];
-    let words: Vec<String> = t.split(|c: char| !c.is_alphanumeric() && c != '\'').filter(|w| !w.is_empty()).map(String::from).collect();
-    if t.ends_with('?') || words.first().is_some_and(|w| ASKING.contains(&w.as_str())) {
-        return false;
-    }
-    words.iter().any(|w| matches!(w.as_str(), "my" | "i'm" | "im" | "i" | "me" | "mine" | "i've" | "i'd"))
-}
-
 /// Everything the brain should know before reading your new message.
 pub fn context_block() -> String {
     context_for(true)
@@ -409,8 +378,18 @@ pub fn memory_forget(fact: Option<String>) {
     // Forgetting everything includes what was talked about, not only the facts.
     if fact_is_all {
         memory_forget_conversations();
+        forget_old_files();
     }
     TURNS.lock().unwrap().clear();
+}
+
+/// Files older versions kept for features that are gone (a voiceprint for "Hey Bond", the learning log and its
+/// training export). Nothing reads them any more; forgetting everything removes them.
+fn forget_old_files() {
+    let Some(dir) = FILE.lock().unwrap().as_ref().and_then(|p| p.parent().map(|d| d.to_path_buf())) else { return };
+    for f in ["voiceprint.json", "brain/experience.jsonl", "brain/bond-router-sft.jsonl"] {
+        let _ = std::fs::remove_file(dir.join(f));
+    }
 }
 
 /// These tests share the memory's global state, so they take turns.
@@ -422,25 +401,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_what_you_say_about_yourself_is_kept() {
-        for yes in ["Call me Alex.", "My name is Alex", "I study at BCU", "I'm a student", "my sister is Asha"] {
-            assert!(about_yourself(yes), "{yes}");
-        }
-        for no in ["Thanks.", "What am I working on?", "Say my name again.", "Tell me who am I", "Open Notepad", "What else do you know about it?"] {
-            assert!(!about_yourself(no), "{no}");
-        }
-    }
-
-    #[test]
-    fn a_new_fact_about_the_same_thing_replaces_the_old_one() {
+    fn the_context_holds_about_you_and_the_conversation() {
         let _turn = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         TURNS.lock().unwrap().clear();
         with_past(|p| p.clear());
         *FACTS.lock().unwrap() = Some(Vec::new());
-        learn("The user's name is Sam.");
-        learn("The user's name is Alex.");
-        learn("The user likes lofi music.");
-        assert_eq!(memory_list(), vec!["The user's name is Alex.", "The user likes lofi music."]);
         turn("Open Notepad", "Opened Notepad.");
         turn("Close it", "");
         *PROFILE.lock().unwrap() = Some(String::new());
@@ -450,7 +415,6 @@ mod tests {
         memory_profile(String::new());
         assert!(!context_block().contains("About the user"));
         let c = context_block();
-        assert!(c.contains("- The user's name is Alex."));
         assert!(c.contains("User: Open Notepad\nBond: Opened Notepad.\nUser: Close it\nBond: (did it)"));
     }
 }
@@ -497,12 +461,3 @@ mod history_tests {
     }
 }
 
-#[cfg(test)]
-pub fn tests_facts() -> std::sync::MutexGuard<'static, Option<Vec<String>>> {
-    FACTS.lock().unwrap()
-}
-
-#[cfg(test)]
-pub fn set_activity_for_tests(now: Option<&str>) {
-    *NOW.lock().unwrap() = now.map(String::from);
-}

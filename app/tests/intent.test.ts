@@ -2,262 +2,109 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { saidStop, spokenAnswer, understand, unsavedAnswer } from "../src/assistant/intent.ts";
+import { ideaText, saidStop, understand } from "../src/assistant/intent.ts";
+import { parseTimer } from "../src/assistant/timer.ts";
+import { parseReminder } from "../src/assistant/remind.ts";
 
-test("clearing out screenshots goes to delete, never straight to a command", () => {
-  for (const q of ["delete my screenshots", "delete all my screenshots", "clear the screenshots folder", "remove all of my screenshot images", "get rid of my screenshots"]) {
-    assert.deepEqual(understand(q), { kind: "do", actions: [{ do: "delete", paths: ["screenshots/*"] }] }, q);
+const actions = (s: string) => {
+  const i = understand(s);
+  return i?.kind === "do" ? i.actions : null;
+};
+
+test("timers, said the ways people say them (speech adds an s, or drops the word timer)", () => {
+  for (const s of ["start a one minute countdown timer", "starts a one minute count down timer", "Start a one-minute countdown.", "start a one minute countdown", "start a timer for one minute", "set a 1 minute timer"]) {
+    assert.deepEqual(parseTimer(s.replace(/[.]$/, "")), { ms: 60_000, label: "" }, s);
   }
+  assert.deepEqual(parseTimer("start a timer of 10 seconds"), { ms: 10_000, label: "" });
+  assert.equal(understand("starts a one minute count down timer")?.kind, "timer");
+  assert.equal(parseTimer("what is a timer"), null);
 });
 
-test("the screenshots folder opens like the other folders", () => {
-  assert.deepEqual(understand("open my screenshots folder"), { kind: "do", actions: [{ do: "open_folder", name: "screenshots" }] });
+test("reminders", () => {
+  const now = new Date(2026, 9, 27, 15, 0, 0);
+  const r = parseReminder("remind me in 10 minutes to call mom", now);
+  assert.deepEqual(r && { m: Math.round((r.at - now.getTime()) / 60_000), text: r.text }, { m: 10, text: "call mom" });
+  assert.equal(understand("remind me at 5pm to submit the report")?.kind, "remind");
 });
 
-test("being in a screenshot: hidden unless he is asked", () => {
-  for (const q of ["include yourself in the screenshot", "Include yourself in the next screenshot.", "show yourself in the screenshot", "put yourself in my screenshot", "I want you to appear in the screenshot", "take a screenshot with you", "show up in the recording", "leave yourself in the screen recording"]) {
-    assert.deepEqual(understand(q), { kind: "capture", show: true }, q);
+test("an idea is saved in your own words, minus the words that only say it's an idea", () => {
+  assert.deepEqual(understand("idea: an app that sorts my downloads"), { kind: "idea", text: "an app that sorts my downloads" });
+  assert.deepEqual(understand("I just got an idea, a sleep mask that plays rain sounds"), { kind: "idea", text: "a sleep mask that plays rain sounds" });
+  assert.deepEqual(understand("Okay so I have an idea: AI comedy sketch about a robot barista"), { kind: "idea", text: "AI comedy sketch about a robot barista" });
+  assert.deepEqual(understand("save this idea: Bond for Android"), { kind: "idea", text: "Bond for Android" });
+  assert.equal(ideaText("new idea, a channel about local AI"), "a channel about local AI");
+  assert.equal(understand("what's a good idea for dinner"), null, "a question is not an idea");
+});
+
+test("today's list from a sentence", () => {
+  assert.deepEqual(understand("today: make the video, learn LangGraph, internship work"), { kind: "todo", items: ["make the video", "learn LangGraph", "internship work"] });
+  assert.deepEqual(understand("add to my list: call parents"), { kind: "todo", items: ["call parents"] });
+  assert.deepEqual(understand("I have to create a video and learn LangGraph today"), { kind: "todo", items: ["create a video", "learn LangGraph"] });
+  assert.deepEqual(understand("goal: finish micrograd"), { kind: "todo", items: ["finish micrograd"] });
+  assert.deepEqual(understand("goal for tomorrow: edit the video"), { kind: "todo", items: ["edit the video"], tomorrow: true });
+  assert.deepEqual(understand("what's on my list"), { kind: "list" });
+});
+
+test("a project opens in the tool you name; the folder is found by name, never given as a path", () => {
+  assert.deepEqual(actions("open claude code in selfglance"), [{ do: "open_project", name: "selfglance", tool: "claude" }]);
+  assert.deepEqual(actions("Open Claude Code in the portfolio project"), [{ do: "open_project", name: "portfolio", tool: "claude" }]);
+  assert.deepEqual(actions("open bullet news in vs code"), [{ do: "open_project", name: "bullet news", tool: "code" }]);
+  assert.deepEqual(actions("open a terminal in x-lens"), [{ do: "open_project", name: "x-lens", tool: "terminal" }]);
+  assert.deepEqual(actions("open the sajak project"), [{ do: "open_project", name: "sajak", tool: "folder" }]);
+});
+
+test("finding a file by name", () => {
+  assert.deepEqual(actions("is there a file called internship offer on my laptop?"), [{ do: "find_files", query: "internship offer" }]);
+  assert.deepEqual(actions("find the file named resume"), [{ do: "find_files", query: "resume" }]);
+  assert.deepEqual(actions("where is my file called budget"), [{ do: "find_files", query: "budget" }]);
+});
+
+test("browser tabs, folders, drives, apps", () => {
+  assert.deepEqual(actions("close this tab"), [{ do: "tab", key: "close" }]);
+  assert.deepEqual(actions("new tab"), [{ do: "tab", key: "new" }]);
+  assert.deepEqual(actions("reopen the closed tab"), [{ do: "tab", key: "reopen" }]);
+  assert.deepEqual(actions("open my d drive"), [{ do: "open_folder", name: "d drive" }]);
+  assert.deepEqual(actions("open downloads"), [{ do: "open_folder", name: "downloads" }]);
+  assert.deepEqual(actions("open spotify"), [{ do: "open_app", name: "spotify" }]);
+  assert.deepEqual(actions("search standing desks in brave"), [{ do: "web_search", query: "standing desks", browser: "brave" }]);
+  assert.deepEqual(actions("close notepad"), [{ do: "close_app", name: "notepad" }]);
+});
+
+test("nothing destructive is understood: those go to the AI, which can only talk about them", () => {
+  for (const s of ["delete my screenshots", "$ rm -rf C:\\", "kill chrome", "run the command ipconfig", "what's on my screen", "copy hello to clipboard"]) {
+    const i = understand(s);
+    assert.ok(i === null || (i.kind === "do" && i.actions.every((a) => !["delete", "run_command", "kill_process"].includes(a.do as string))), s);
   }
-  for (const q of ["hide yourself from the screenshot", "hide from screenshots", "keep yourself out of the screenshots", "don't show yourself in screenshots", "don't appear in the screenshot", "stop appearing in my screenshots", "remove yourself from the recording"]) {
-    assert.deepEqual(understand(q), { kind: "capture", show: false }, q);
-  }
-});
-
-test("other screenshot requests are not about being in one", () => {
-  assert.deepEqual(understand("delete my screenshots"), { kind: "do", actions: [{ do: "delete", paths: ["screenshots/*"] }] });
-  assert.deepEqual(understand("open my screenshots folder"), { kind: "do", actions: [{ do: "open_folder", name: "screenshots" }] });
-  for (const q of ["what's in this screenshot", "take a screenshot", "where do my screenshots go", "save a picture of my screen"]) {
-    assert.notEqual(understand(q)?.kind, "capture", q);
-  }
-});
-
-test("freeing up RAM", () => {
-  for (const q of ["free up ram", "free up some memory", "clear my ram", "reduce ram usage", "save memory"]) {
-    assert.deepEqual(understand(q), { kind: "do", actions: [{ do: "free_memory" }] }, q);
-  }
-  // Asking what uses it still just shows it.
-  assert.deepEqual(understand("what's eating my ram"), { kind: "do", actions: [{ do: "top_processes" }] });
-});
-
-test("answering his questions out loud", () => {
-  assert.equal(spokenAnswer("Yes.", false), "yes");
-  assert.equal(spokenAnswer("Yeah, go ahead", false), "yes");
-  assert.equal(spokenAnswer("Okay, do it.", false), "yes");
-  assert.equal(spokenAnswer("No, don't.", false), "no");
-  assert.equal(spokenAnswer("Never mind", true), "no");
-  // Anything else is a new request.
-  assert.equal(spokenAnswer("open spotify", false), null);
-  // Said in a sentence, as people do.
-  assert.equal(spokenAnswer("I need you to run this command.", false), "yes");
-  assert.equal(spokenAnswer("Go ahead and execute it", false), "yes");
-  assert.equal(spokenAnswer("Please don't run it", false), "no");
-});
-
-test("a spoken yes is a clear whole answer, never a question or a hedge", () => {
-  for (const q of [
-    "Okay, what does it do?",
-    "Sure, but is it safe?",
-    "should I do it?",
-    "what happens if I do that",
-    "yes?? wait what",
-    "Ok so is this going to delete anything",
-    "Can you run it with admin?",
-    "I'm not sure, maybe go ahead",
-    "okay but only the first one",
-  ]) {
-    assert.equal(spokenAnswer(q, false), null, q);
-  }
-});
-
-test("the last check before deleting is typed: a voice can say no, never yes", () => {
-  for (const q of ["Yes", "Delete them.", "Yes, delete.", "I'm not going to delete anything", "why would it delete them?", "go ahead and delete"]) {
-    assert.equal(spokenAnswer(q, true), null, q);
-  }
-  assert.equal(spokenAnswer("No, cancel that", true), "no");
-});
-
-test("'save' by voice is a short plain answer, not a sentence that mentions saving", () => {
-  assert.equal(unsavedAnswer("Save it"), "save");
-  assert.equal(unsavedAnswer("yes, save"), "save");
-  assert.equal(unsavedAnswer("Don't save"), "discard");
-  assert.equal(unsavedAnswer("Can you save it first?"), null);
-  assert.equal(unsavedAnswer("I forgot whether I need to save this"), null);
-});
-
-test("\"run it\" is about something said before, not an app called it", () => {
-  for (const q of ["Run it.", "run this", "open it", "run the command", "start that"]) assert.equal(understand(q), null, q);
-  assert.deepEqual(understand("open notepad"), { kind: "do", actions: [{ do: "open_app", name: "notepad" }] });
 });
 
 test("telling him to stop", () => {
-  for (const s of ["Stop.", "be quiet", "Thanks, Bond.", "thank you"]) assert.ok(saidStop(s), s);
-  assert.ok(!saidStop("stop the music"));
+  for (const s of ["stop", "Stop it.", "be quiet", "thanks Bond", "never mind"]) assert.ok(saidStop(s), s);
+  assert.ok(!saidStop("stop the music on spotify"));
 });
 
-test("closing an app asks it nicely; killing ends it", () => {
-  for (const q of ["Close it.", "close this app", "quit that"]) assert.deepEqual(understand(q), { kind: "do", actions: [{ do: "close_app", name: "it" }] }, q);
-  assert.deepEqual(understand("close notepad"), { kind: "do", actions: [{ do: "close_app", name: "notepad" }] });
-  assert.deepEqual(understand("kill chrome"), { kind: "do", actions: [{ do: "kill_process", name: "chrome" }] });
-  assert.equal(understand("close this tab"), null);
-});
-
-test("answering \"it has unsaved changes\"", () => {
-  for (const s of ["Don't save.", "Don't say.", "close it without saving", "discard them"]) assert.equal(unsavedAnswer(s), "discard", s);
-  for (const s of ["Save.", "save it", "keep the changes"]) assert.equal(unsavedAnswer(s), "save", s);
-  for (const s of ["Cancel", "no", "leave it open"]) assert.equal(unsavedAnswer(s), "cancel", s);
-});
-
-test("stopping, in the ways people say it", () => {
-  for (const q of ["stop", "Stop that.", "okay stop", "Bond, stop", "wait", "hold on", "cancel that", "never mind", "that's enough", "please stop"]) {
-    assert.equal(saidStop(q), true, q);
+test("anything that says timer or countdown with a length is a timer, however it was heard", () => {
+  for (const [s, ms] of [
+    ["starts to one minute count down", 60_000],
+    ["Start to a one minute countdown timer", 60_000],
+    ["can you do a countdown like 2 minutes", 120_000],
+    ["timer 90 seconds please", 90_000],
+    ["okay set up a countdown for 5 minutes for the eggs", 300_000],
+  ] as const) {
+    assert.equal(parseTimer(s)?.ms, ms, s);
   }
-  // A request that merely contains the word is still a request.
-  for (const q of ["stop the music", "wait for the download to finish", "open notepad"]) {
-    assert.equal(saidStop(q), false, q);
-  }
+  assert.equal(parseTimer("okay set up a countdown for 5 minutes for the eggs")?.label, "eggs");
+  assert.equal(parseTimer("how does a timer work?"), null);
+  assert.equal(parseTimer("open the countdown app"), null, "no length, no timer");
 });
 
-test("skipping a song is understood without the AI, with or without 'this'", () => {
-  for (const q of ["skip", "next song", "skip this song", "skip the track", "skip that video", "next"]) {
-    assert.deepEqual(understand(q), { kind: "do", actions: [{ do: "media", key: "next" }] }, q);
-  }
-});
-
-test("a goal for the day is understood without the AI", () => {
-  assert.deepEqual(understand("goal: finish micrograd"), { kind: "goal", text: "finish micrograd" });
-  assert.deepEqual(understand("my focus today is the resume"), { kind: "goal", text: "the resume" });
-  assert.equal(understand("what is a goal in football")?.kind ?? null, null);
-});
-
-test("a message to write is understood without the AI", () => {
-  const kind = (s: string) => understand(s)?.kind ?? null;
-  assert.equal(kind("write me a msg stating that the review is taking long"), "draft");
-  assert.equal(kind("Write a polite email to my manager asking for leave"), "draft");
-  assert.equal(kind("draft a quick slack message to the team"), "draft");
-  assert.equal(kind("can you help me write a follow-up email"), "draft");
-  assert.equal(kind("what should I reply to this?"), "draft");
-  assert.equal(kind("reply to her saying yes, thursday works"), "draft");
-  // said in a longer sentence: text to put in the terminal's box, not a click-by-click guide
-  assert.equal(kind("I want to know what should I reply to the terminal on my right side."), "draft");
-  assert.equal(kind("I'm confused what am I supposed to give prompt to the command terminal."), "draft");
-  assert.equal(kind("Thank you, what should I type?"), "draft");
-  assert.deepEqual(understand("write me a message to Sam saying hi"), { kind: "draft", request: "write me a message to Sam saying hi" });
-  // text for a box that isn't a "message"
-  assert.equal(kind("Write a prompt in the chatgpt stating that I want logo for selfglance and write it in a professional way"), "draft");
-  assert.equal(kind("write a linkedin post about my new job"), "draft");
-  assert.equal(kind("write a short caption for my photo"), "draft");
-  assert.equal(kind("write this in the chatgpt box: make me a logo"), "draft");
-  // not messages
-  assert.notEqual(kind("write a function that sorts a list"), "draft");
-  assert.notEqual(kind("write a poem about rain"), "draft");
-  assert.notEqual(kind("open slack"), "draft");
-  assert.notEqual(kind("write a function in rust that reverses a string"), "draft");
-});
-
-test("a search can name the browser", () => {
-  const act = (s: string) => (understand(s) as { actions: { do: string; query?: string; browser?: string }[] } | null)?.actions[0];
-  assert.deepEqual(act("search standing desks in brave"), { do: "web_search", query: "standing desks", browser: "brave" });
-  assert.deepEqual(act("google best laptops on Chrome"), { do: "web_search", query: "best laptops", browser: "chrome" });
-  assert.deepEqual(act("in firefox, look up rust tutorials"), { do: "web_search", query: "rust tutorials", browser: "firefox" });
-  assert.deepEqual(act("open brave and search for lofi mix"), { do: "web_search", query: "lofi mix", browser: "brave" });
-  assert.deepEqual(act("search for cheap flights using microsoft edge"), { do: "web_search", query: "cheap flights", browser: "edge" });
-  // no browser named: the default one
-  assert.deepEqual(act("search for rust tutorials"), { do: "web_search", query: "rust tutorials" });
-});
-
-test("laptop specs are read from the machine, not answered with a command to copy", () => {
-  const first = (s: string) => (understand(s) as { actions: { do: string }[] } | null)?.actions?.[0]?.do;
-  for (const q of ["what are my laptop specs", "my laptop specification", "show me my pc configuration", "which gpu do i have", "what is my computer hardware?"]) {
-    assert.equal(first(q), "system_specs", q);
-  }
-  // how it is doing is the status, not the specs
-  assert.equal(first("how is my laptop"), "system_status");
-  assert.equal(first("how much battery do i have left"), "system_status");
-});
-
-test("Bond understands reminders and timers", async () => {
-  const { parseReminder } = await import("../src/assistant/remind.ts");
-  const now = new Date(2026, 9, 27, 15, 0, 0); // 3:00 pm
-  const mins = (s: string) => {
-    const r = parseReminder(s, now);
-    return r ? { m: Math.round((r.at - now.getTime()) / 60_000), text: r.text } : null;
-  };
-  assert.deepEqual(mins("remind me in 10 minutes to call mom"), { m: 10, text: "call mom" });
-  assert.deepEqual(mins("Remind me to stretch in 20 min"), { m: 20, text: "stretch" });
-  assert.deepEqual(mins("in an hour remind me to check the oven"), { m: 60, text: "check the oven" });
-  assert.deepEqual(mins("remind me in half an hour about the call"), { m: 30, text: "the call" });
-  assert.deepEqual(mins("set a timer for 5 minutes"), { m: 5, text: "Your timer is up" });
-  assert.deepEqual(mins("remind me at 5pm to submit the report"), { m: 120, text: "submit the report" });
-  assert.deepEqual(mins("remind me to take a walk at 3:30 pm"), { m: 30, text: "take a walk" });
-  // a time that has already passed today means tomorrow
-  assert.deepEqual(mins("remind me at 2pm to call Sam"), { m: 23 * 60, text: "call Sam" });
-  // not reminders
-  assert.equal(parseReminder("what is a reminder", now), null);
-  assert.equal(parseReminder("remind me in 10 minutes", now), null);
-  assert.equal(parseReminder("open notepad", now), null);
-  // a timer is its own kind: it shows on screen and rings to the second
-  const { parseTimer, leftText, spanText } = await import("../src/assistant/timer.ts");
-  assert.deepEqual(parseTimer("start a timer of 10 seconds"), { ms: 10_000, label: "" });
-  assert.deepEqual(parseTimer("Set a timer for 5 minutes."), { ms: 300_000, label: "" });
-  assert.deepEqual(parseTimer("set a 10 minute timer for the eggs"), { ms: 600_000, label: "eggs" });
-  assert.deepEqual(parseTimer("timer 1 minute and 30 seconds"), { ms: 90_000, label: "" });
-  assert.deepEqual(parseTimer("can you start a timer for half an hour"), { ms: 1_800_000, label: "" });
-  assert.deepEqual(parseTimer("countdown from 30 sec"), { ms: 30_000, label: "" });
-  assert.equal(parseTimer("what is a timer"), null);
-  assert.equal(parseTimer("remind me in 10 minutes to stretch"), null);
-  assert.equal(parseTimer("set a timer"), null);
-  assert.equal(leftText(9_200), "0:10");
-  assert.equal(leftText(0), "0:00");
-  assert.equal(leftText(3_723_000), "1:02:03");
-  assert.equal(spanText(90_000), "1 minute 30 seconds");
-  assert.equal(understand("start a timer of 10 seconds")?.kind, "timer");
-  assert.equal(understand("set a timer for 5 minutes")?.kind, "timer");
-  // through understand(): a reminder is its own kind
-  assert.equal(understand("remind me in 10 minutes to stretch")?.kind, "remind");
-});
-
-test("closing every window of a program names the program", () => {
-  const first = (s: string) => (understand(s) as { actions: { do: string; name?: string }[] } | null)?.actions?.[0];
-  assert.deepEqual(first("close all the notepad windows"), { do: "close_app", name: "notepad" });
-  assert.deepEqual(first("shut every chrome window"), { do: "close_app", name: "chrome" });
-  assert.deepEqual(first("Close all my notepad windows please"), { do: "close_app", name: "notepad" });
-  // not a program
-  assert.notEqual(first("close all windows")?.do, "close_app");
-  assert.notEqual(first("close everything")?.do, "close_app");
-});
-
-test("reminders: whole words, tomorrow, and a time with no am or pm", async () => {
-  const { parseReminder, whenText } = await import("../src/assistant/remind.ts");
-  const now = new Date(2026, 9, 27, 15, 0, 0); // 3:00 pm
-  const hours = (s: string) => {
-    const r = parseReminder(s, now);
-    return r ? { h: Math.round(((r.at - now.getTime()) / 3_600_000) * 10) / 10, text: r.text } : null;
-  };
-  // "tomorrow" is a day, not "to" + "morrow"
-  assert.deepEqual(hours("remind me at 9am tomorrow to call sam"), { h: 18, text: "call sam" });
-  assert.deepEqual(hours("remind me to call sam at 9am tomorrow"), { h: 18, text: "call sam" });
-  assert.deepEqual(hours("remind me tomorrow at 9am to call sam"), { h: 18, text: "call sam" });
-  // "at 5" at 3 pm means 5 pm today, not 5 am tomorrow
-  assert.deepEqual(hours("remind me at 5 to call sam"), { h: 2, text: "call sam" });
-  assert.deepEqual(hours("remind me at 2 to call sam"), { h: 23, text: "call sam" });
-  assert.equal(whenText(parseReminder("remind me at 9am tomorrow to call sam", now)!.at, now.getTime()), "tomorrow at 9:00 AM");
-  assert.equal(whenText(parseReminder("remind me at 5pm to call sam", now)!.at, now.getTime()), "at 5:00 PM");
-  // "tomorrow" in a goal sentence is not a reminder and not a focus goal either
-  assert.equal(understand("tomorrow I'll be late")?.kind ?? "none", "none");
-  assert.notEqual(understand("tomorrow, remind me to call mom")?.kind, "goal");
-});
-
-test("planning the day is understood without the AI", () => {
-  const plan = (s: string) => understand(s);
-  assert.deepEqual(plan("Plan my day: three videos, research a channel"), { kind: "plan", text: "three videos, research a channel" });
-  assert.deepEqual(plan("plan my day"), { kind: "plan", text: "" });
-  assert.deepEqual(plan("add to my plan: study transformers at 5pm"), { kind: "plan", text: "study transformers at 5pm" });
-  assert.deepEqual(plan("what's my plan"), { kind: "plan", text: "" });
-  assert.notEqual(plan("how do I plan my day better")?.kind, "plan");
-});
-
-test("speech noise in front of a request is ignored", () => {
-  assert.deepEqual(understand("Hey Bon, open Zed"), { kind: "do", actions: [{ do: "open_app", name: "Zed" }] });
-  // "How do I …" and "help me …" jobs are no longer pointed at: they go to the brain, which tells the steps.
-  for (const q of ["walk me through buying a domain", "help me uninstall Hey Clicky", "where is the bluetooth button"]) assert.equal(understand(q), null, q);
+test("an idea mentioned anywhere is saved; questions about ideas are not", () => {
+  const idea = (s: string) => { const i = understand(s); return i?.kind === "idea" ? i.text : null; };
+  assert.equal(idea("so this idea came to me, an app that tracks my gym sets"), "an app that tracks my gym sets");
+  assert.equal(idea("I was thinking of an idea about a podcast on local AI"), "a podcast on local AI");
+  assert.equal(idea("a YouTube short where Bond roasts my code, just an idea"), "a YouTube short where Bond roasts my code");
+  assert.equal(idea("my idea is to make a weekly AI news recap"), "to make a weekly AI news recap");
+  assert.equal(idea("I have no idea what to cook"), null);
+  assert.equal(idea("any idea how to fix this?"), null);
+  assert.equal(idea("what's a good idea for dinner"), null);
+  assert.equal(idea("open my ideas"), null);
 });

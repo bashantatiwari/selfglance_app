@@ -1,24 +1,17 @@
-// The dashboard, organised around the questions you actually ask:
-//   Today     How did today go? One number, one bar, four stats, the day as a strip,
-//             top things + a few insights, and the day in words (AI).
-//   Activity  What exactly did I spend time on? One searchable list (projects, videos,
-//             sites, apps) and the session-by-session log.
-//   Plan      Today's plan (yours and Bond's fitted together), the focus, how it is going, and the week in review.
-//   Memory    (in Settings) what Bond keeps, its size, and how to empty it.
-//   Ideas     Project ideas you told Bond ("idea: …") or added here.
-//   Settings  Water breaks, Bond, his brain, voice and privacy, each explained.
+// The dashboard:
+//   Today's list  What you mean to do today, ticked off as you go (Bond judges drift against it).
+//   Today         How the day went: time on the laptop, where it went, the day as a strip.
+//   Activity      Everything you spent time on, searchable; forget any of it.
+//   Ideas         Ideas you told Bond, word for word.
+//   Settings      About you, breaks, Bond, his brain, voice, memory, privacy.
 // Everything is computed locally from the diary the overlay records.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { inTauri, onTauriEvent } from "../platform";
 import {
-  aiText,
   brainInstall,
   brainStatus,
-  exportLearned,
-  forgetLearned,
-  learnStats,
   speak,
   voiceInstall,
   memoryForget,
@@ -27,25 +20,16 @@ import {
   memoryList,
   memoryUsage,
   type MemoryUsage,
-  wakeEnrollCancel,
-  wakeEnrollRecord,
-  wakeEnrollSave,
-  wakeForgetVoice,
-  wakeInstall,
-  wakeStatus,
-  type WakeStatus,
   voiceStatus,
   type BrainProgress,
   type VoiceStatus,
   type BrainStatus,
-  type LearnStats,
 } from "../ai";
 import { analyzeDay, CATS, catName, clock, fmt, insights, kindOf, type Cat, type DayStats, type Item, type Kind } from "./analyze";
 import { forgetSegments, loadDay, LOG_EVENT, restoreSegments, type Segment } from "../companion/tracker";
-import { addGlass, glassesToday } from "../break/BreakCoach";
 import { AboutYouPanel } from "./AboutYou";
 import { hasProfile, loadProfile } from "../assistant/profile";
-import { loadSettings, saveSettings, type Settings, effective } from "../settings";
+import { loadSettings, saveSettings, type Settings } from "../settings";
 import Goals, { GoalTile } from "./Goals";
 import Ideas from "./Ideas";
 import { Avatar, KindBadge, toast, Toasts, Toggle } from "./ui";
@@ -61,9 +45,9 @@ const NAV_GROUPS: { id: NavGroup; name: string }[] = [
   { id: "prefs", name: "Preferences" },
 ];
 const PAGES: { id: Page; name: string; group: NavGroup; icon: ReactNode }[] = [
+  { id: "goals", name: "Today's list", group: "analyse", icon: <path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" /> },
   { id: "today", name: "Today", group: "analyse", icon: <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" /> },
   { id: "activity", name: "Activity", group: "analyse", icon: <path d="M4 6h16M4 12h10M4 18h13" /> },
-  { id: "goals", name: "Plan", group: "personal", icon: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zM12 12.5a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z" /> },
   { id: "ideas", name: "Ideas", group: "personal", icon: <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" /> },
   { id: "settings", name: "Settings", group: "prefs", icon: <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z" /> },
 ];
@@ -287,8 +271,6 @@ function Section(props: { title: string; right?: ReactNode; children: ReactNode;
 
 // --- Today -----------------------------------------------------------------------------
 function Today({ stats, segs, prev, offset, picker, go }: { stats: DayStats; segs: Segment[]; prev: DayStats | null; offset: number; picker: ReactNode; go: (p: Page) => void }) {
-  const goal = loadSettings().waterGoal;
-  const [, bumpWater] = useState(0); // the glass count lives in storage; a tap re-reads it
   const notes = insights(stats, prev).slice(0, 3);
   const sub = dayDate(offset).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
   if (stats.total === 0) {
@@ -296,15 +278,13 @@ function Today({ stats, segs, prev, offset, picker, go }: { stats: DayStats; seg
       <>
         <PageHead title={dayName(offset)} sub={sub} right={picker} />
         <div className="bento">
-          <GoalTile segs={segs} date={dayDate(offset)} today={offset === 0} open={() => go("goals")} />
+          {offset === 0 && <GoalTile segs={segs} open={() => go("goals")} />}
         </div>
         <Empty />
       </>
     );
   }
   const present = CATS.filter((c) => stats.byCat[c.id] > 0);
-  const glasses = glassesToday();
-  const cups = Math.min(Math.max(goal, 1), 15);
   return (
     <>
       <PageHead title={dayName(offset)} sub={sub} right={picker} />
@@ -338,34 +318,6 @@ function Today({ stats, segs, prev, offset, picker, go }: { stats: DayStats; seg
           </ul>
         </section>
 
-        <section className="tile t-water">
-          <h2 className="tile-label">Hydration</h2>
-          {offset === 0 ? (
-            <>
-              {/* Tap a glass to set today's count (tap the last full one to take it back): Bond only counts the bottle. */}
-              <div className="cups" role="group" aria-label={`${glasses} of ${goal} glasses of water`}>
-                {Array.from({ length: cups }, (_, n) => (
-                  <button
-                    key={n}
-                    className={n < glasses ? "full" : ""}
-                    aria-label={n + 1 === glasses ? `Take back glass ${n + 1}` : `${n + 1} glasses`}
-                    title={n + 1 === glasses ? "Take this one back" : `I've had ${n + 1}`}
-                    onClick={() => {
-                      addGlass((n + 1 === glasses ? n : n + 1) - glasses);
-                      bumpWater((v) => v + 1);
-                    }}
-                  />
-                ))}
-              </div>
-              <p className="tile-value">
-                <b>{glasses}</b> / {goal} <small>glasses</small>
-              </p>
-            </>
-          ) : (
-            <p className="muted">Water is only counted for today.</p>
-          )}
-        </section>
-
         <section className="tile tone-blue">
           <h2 className="tile-label">Productive</h2>
           <span className="tile-num">{fmt(stats.productive)}</span>
@@ -386,7 +338,7 @@ function Today({ stats, segs, prev, offset, picker, go }: { stats: DayStats; seg
           <span className="stat-delta muted">{stats.longestFocus ? `from ${clock(stats.longestFocus.start)}` : "no focus stretch yet"}</span>
         </section>
 
-        <GoalTile segs={segs} date={dayDate(offset)} today={offset === 0} open={() => go("goals")} />
+        {offset === 0 && <GoalTile segs={segs} open={() => go("goals")} />}
 
         <Section title="Your day" className="t-wide">
           <DayStrip stats={stats} />
@@ -417,7 +369,6 @@ function Today({ stats, segs, prev, offset, picker, go }: { stats: DayStats; seg
 
       </div>
 
-      <DaySummary stats={stats} />
     </>
   );
 }
@@ -505,80 +456,7 @@ function TopItems({ items }: { items: Item[] }) {
 }
 
 /** "Your day in words": an honest written summary generated from the analysis. */
-function DaySummary({ stats }: { stats: DayStats }) {
-  const day = stats.first ? new Date(stats.first).toDateString() : "";
-  const cacheKey = `selfglance.summary.${day}`;
-  const [text, setText] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(cacheKey);
-    } catch {
-      return null;
-    }
-  });
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
 
-  const write = async () => {
-    setBusy(true);
-    setErr(null);
-    const digest = {
-      date: day,
-      active: `${clock(stats.first!)} – ${clock(stats.last!)}`,
-      screenTime: fmt(stats.total),
-      byCategory: Object.fromEntries(CATS.map((c) => [c.name, fmt(stats.byCat[c.id])])),
-      focusScore: stats.focusScore,
-      longestFocus: stats.longestFocus
-        ? { minutes: Math.round(stats.longestFocus.ms / 60000), from: clock(stats.longestFocus.start), on: stats.longestFocus.label }
-        : null,
-      switchesPerHour: stats.switchesPerHour,
-      topItems: stats.items.slice(0, 15).map((i) => ({ what: i.label, type: i.kind, category: catName(i.cat), time: fmt(i.ms), sessions: i.sessions })),
-    };
-    try {
-      const out = await aiText(
-        "You are Bond, a warm but honest desktop companion. You write the user's end-of-day summary from their activity data. " +
-          "Be specific (name the projects, videos and sites), never invent anything that isn't in the data, and keep it under 170 words. " +
-          "Use exactly these four short sections, each a heading line followed by 1-3 sentences: " +
-          "What you built / What you watched & learned / Where focus broke / One thing for tomorrow. Plain text, no markdown symbols.",
-        JSON.stringify(digest),
-      );
-      setText(out);
-      try {
-        localStorage.setItem(cacheKey, out);
-      } catch {
-        /* not cached */
-      }
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Section
-      title="Your day in words"
-      className="words"
-      right={
-        <button className="btn" onClick={write} disabled={busy}>
-          {busy ? "Writing…" : text ? "Rewrite" : "Write it"}
-        </button>
-      }
-    >
-      {err && <p className="error">{err}</p>}
-      {text ? (
-        <div className="words-text">
-          {text.split(/\n+/).map((line, i) =>
-            /^(What you built|What you watched|Where focus broke|One thing for tomorrow)/i.test(line.trim()) ? <h3 key={i}>{line.trim()}</h3> : <p key={i}>{line}</p>,
-          )}
-        </div>
-      ) : (
-        !err && <p className="muted">Bond reads the day and writes an honest summary: what you built, what you watched, where focus broke, one thing for tomorrow.</p>
-      )}
-    </Section>
-  );
-}
-
-// --- Activity --------------------------------------------------------------------------
 type ActTab = "all" | Kind | "sessions";
 const ACT_TABS: { id: ActTab; name: string }[] = [
   { id: "all", name: "Everything" },
@@ -871,13 +749,11 @@ function Activity({ stats, offset, picker }: { stats: DayStats; offset: number; 
 // --- Settings --------------------------------------------------------------------------
 const SECTIONS = [
   { id: "about", name: "About you", hint: "What Bond should know" },
-  { id: "wellness", name: "Wellness", hint: "Water breaks" },
+  { id: "wellness", name: "Breaks", hint: "Stand up, drink water" },
   { id: "assistant", name: "Bond", hint: "How he behaves" },
   { id: "ai", name: "Bond's brain", hint: "Runs on this laptop" },
-  { id: "voice", name: "Voice", hint: "Speaking and “Hey Bond”" },
-  { id: "suggest", name: "Suggestions", hint: "When he speaks up" },
+  { id: "voice", name: "Voice", hint: "Talking and listening" },
   { id: "memory", name: "Memory", hint: "What he keeps, empty it" },
-  { id: "learning", name: "Learning", hint: "Labs: what worked" },
   { id: "privacy", name: "Privacy", hint: "What's stored, what's sent" },
 ] as const;
 type SecId = (typeof SECTIONS)[number]["id"];
@@ -887,9 +763,6 @@ function SettingsPage() {
   const [saved, setSaved] = useState(false);
   // Until you've told him about yourself, that is where Settings opens.
   const [sec, setSec] = useState<SecId>(() => (hasProfile(loadProfile()) ? "wellness" : "about"));
-  useEffect(() => {
-    if (!s.labs && (sec === "suggest" || sec === "learning")) setSec("wellness");
-  }, [s.labs, sec]);
   const update = (patch: Partial<Settings>) => {
     const next = { ...s, ...patch };
     setS(next);
@@ -904,7 +777,7 @@ function SettingsPage() {
 
       <div className="settings">
         <div className="subnav" role="tablist" aria-label="Settings sections">
-          {SECTIONS.filter((x) => s.labs || (x.id !== "suggest" && x.id !== "learning")).map((x) => (
+          {SECTIONS.map((x) => (
             <button key={x.id} role="tab" aria-selected={sec === x.id} className={sec === x.id ? "on" : ""} onClick={() => setSec(x.id)}>
               {x.name}
               <small>{x.hint}</small>
@@ -913,47 +786,29 @@ function SettingsPage() {
         </div>
         <div className="settings-body">
         {sec === "wellness" && (
-          <Group title="Water breaks">
-        <Toggle label="Bring me water breaks" checked={s.breaksOn} onChange={(v) => update({ breaksOn: v })} />
-        <Choice label="Break every" unit="min" options={[15, 30, 45, 60, 90]} value={s.breakEveryMin} disabled={!s.breaksOn} onChange={(v) => update({ breakEveryMin: v })} />
-        <Choice label="“Later” waits" unit="min" options={[5, 10, 15, 30]} value={s.snoozeMin} disabled={!s.breaksOn} onChange={(v) => update({ snoozeMin: v })} />
-        <CupPicker goal={s.waterGoal} onChange={(v) => update({ waterGoal: v })} />
-        <button className="btn ghost" disabled={!s.breaksOn || !inTauri} onClick={() => void invoke("break_now").catch(() => {})} title="Bring the bottle now, to see what a break looks like">
+          <Group title="Breaks" desc="After about 50 minutes of sitting, Bond brings water and asks you to stand up for a few minutes. Getting up on your own counts too. No counting, nothing to set.">
+        <Toggle label="Remind me to take breaks" checked={s.breaksOn} onChange={(v) => update({ breaksOn: v })} />
+        <button className="btn ghost" disabled={!s.breaksOn || !inTauri} onClick={() => void invoke("break_now").catch(() => {})} title="See what a break looks like">
           Show me a break now
         </button>
       </Group>
         )}
         {sec === "assistant" && (
-          <Group title="Bond" desc="How he behaves around you.">
-        {s.labs && (
-        <Toggle
-          label="Nudge me when I'm brainstorming too long"
-          hint="About 20 minutes with ChatGPT, Claude or notes and no editor time → “Time to build!”"
-          checked={s.brainstormAlert}
-          onChange={(v) => update({ brainstormAlert: v })}
-        />
-        )}
-        <Toggle
-          label="Advanced actions"
-          hint="Lets the AI run commands, end programs, type, click and copy for you. Off: Bond points the way (guide mode) and only does the safe things; running a command, ending a program or deleting always asks you first either way."
-          checked={s.advancedActions}
-          onChange={(v) => update({ advancedActions: v })}
-        />
-        <Toggle
-          label="Labs: experimental features"
-          hint="“Hey Bond”, suggestions he makes on his own, learning from you, and the brainstorm nudge. Unfinished, so they are off until you switch this on."
-          checked={s.labs}
-          onChange={(v) => update({ labs: v })}
-        />
+          <Group title="Bond" desc="How he behaves around you. To hide him without closing the app, click him → Tuck away (or use the tray menu).">
+        <Toggle label="Tell me when I drift from today's list" hint="About ten minutes in a row on something not on the list: one line, at most twice an hour." checked={s.goalNudge} onChange={(v) => update({ goalNudge: v })} />
+        <Toggle label="Read his answers aloud" checked={s.speakAnswers} onChange={(v) => update({ speakAnswers: v })} />
         <Toggle
           label="Keep Bond out of screenshots and recordings"
-          hint="You still see him; Snipping Tool, Print Screen and screen recorders don't. For a picture with him in it, say “include yourself in the screenshot” or use his tray menu: he appears for 5 minutes."
+          hint="You still see him; Snipping Tool, Print Screen and screen recorders don't. The tray menu shows him for 5 minutes."
           checked={s.hideFromCaptures}
           onChange={(v) => update({ hideFromCaptures: v })}
         />
-        <Toggle label="Read his answers aloud" checked={s.speakAnswers} onChange={(v) => update({ speakAnswers: v })} />
-        <Toggle label="Warn me when the battery is low" hint="At 15% and again at 7%, while unplugged." checked={s.batteryAlert} onChange={(v) => update({ batteryAlert: v })} />
         <Slider label="Answers close after" unit="seconds" min={4} max={60} step={2} value={s.answerSeconds} onChange={(v) => update({ answerSeconds: v })} />
+        <label className="slider">
+          <span className="s-label">Project folders</span>
+          <textarea className="search" rows={2} value={s.projectFolders} onChange={(e) => update({ projectFolders: e.target.value })} placeholder={"D:\\"} spellCheck={false} />
+          <span className="s-value muted">For “open claude code in &lt;project&gt;” and file search. One folder per line.</span>
+        </label>
         <Autostart />
       </Group>
         )}
@@ -963,11 +818,9 @@ function SettingsPage() {
       </Group>
         )}
         {sec === "voice" && (
-          <div className={`mic-banner ${s.labs && s.wakeWord ? "live" : ""}`} role="status">
+          <div className="mic-banner" role="status">
             <i aria-hidden />
-            {s.labs && s.wakeWord
-              ? "The microphone is open right now, listening for “Hey Bond”. What isn't for him is dropped as it's heard; nothing is recorded or sent."
-              : "The microphone is closed. It opens only while you hold Ctrl+Alt and talk."}
+            The microphone is closed. It opens only while you hold Ctrl+Alt and talk.
           </div>
         )}
         {sec === "voice" && (
@@ -1022,59 +875,6 @@ function SettingsPage() {
         <VoiceModels />
       </Group>
         )}
-        {sec === "voice" && s.labs && (
-          <Group
-        title="“Hey Bond”"
-        desc="Talk to him without a hotkey, like Siri. His ears, on this laptop, listen for “Hey Bond”; what isn't for him is dropped as soon as it's heard, and nothing is recorded or sent anywhere. With voice match he answers only you, not other people, videos or calls."
-      >
-        <HeyBond s={s} onChange={update} />
-      </Group>
-        )}
-        {sec === "suggest" && (
-          <Group
-        title="Suggestions"
-        desc="Bond speaks up on his own at a natural pause: things you usually do in an app, a tip when you copy an error or keep searching while working. Tips come from the brain on this laptop only — nothing is sent anywhere. 👎 on a suggestion stops it."
-      >
-        <div className="tabs" role="radiogroup" aria-label="How often">
-          {(
-            [
-              ["off", "Off"],
-              ["stuck", "Only when I'm stuck"],
-              ["helpful", "Helpful"],
-              ["chatty", "Chatty"],
-            ] as const
-          ).map(([v, label]) => (
-            <button key={v} className={s.notice === v ? "on" : ""} onClick={() => update({ notice: v })}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <Slider label="At most" unit="an hour" min={1} max={6} step={1} value={s.noticeMaxPerHour} disabled={s.notice === "off"} onChange={(v) => update({ noticeMaxPerHour: v })} />
-        <Toggle
-          label="Let him look at my screen when I seem stuck"
-          hint="Read on this laptop and not kept. Never password managers, banking or private windows."
-          checked={s.noticeLook}
-          onChange={(v) => update({ noticeLook: v })}
-        />
-        <Toggle label="Quiet hours" checked={s.quietOn} onChange={(v) => update({ quietOn: v })} />
-        <Slider label="Quiet from" unit=":00" min={0} max={23} step={1} value={s.quietFrom} disabled={!s.quietOn} onChange={(v) => update({ quietFrom: v })} />
-        <Slider label="Until" unit=":00" min={0} max={23} step={1} value={s.quietTo} disabled={!s.quietOn} onChange={(v) => update({ quietTo: v })} />
-        <label className="slider">
-          <span className="s-label">Never in</span>
-          <input className="search" placeholder="e.g. slack, payroll, figma" value={s.noticeBlock} onChange={(e) => update({ noticeBlock: e.target.value })} />
-          <span className="s-value muted">apps or window titles, comma-separated</span>
-        </label>
-      </Group>
-        )}
-        {sec === "learning" && (
-          <Group
-        title="Learning"
-        desc="Bond keeps what you ask, what he did and your 👍 / 👎, and reuses what worked for similar requests. It stays on this computer, and can later train his own brain on your habits."
-      >
-        <Toggle label="Learn from me" checked={s.learnFromMe} onChange={(v) => update({ learnFromMe: v })} />
-        <Learned />
-      </Group>
-        )}
         {sec === "about" && <AboutYouPanel />}
         {sec === "memory" && <MemoryPanel s={s} update={update} />}
         {sec === "privacy" && <PrivacyPanel s={s} go={setSec} />}
@@ -1085,8 +885,7 @@ function SettingsPage() {
 }
 
 /** What is stored where, and what leaves this computer, from your real settings (read-only). */
-function PrivacyPanel({ s: saved, go }: { s: Settings; go: (id: SecId) => void }) {
-  const s = effective(saved);
+function PrivacyPanel({ go }: { s: Settings; go: (id: SecId) => void }) {
   const rows: { title: string; state: string; calm: boolean; text: string; to: SecId }[] = [
     {
       title: "Where answers come from",
@@ -1097,24 +896,17 @@ function PrivacyPanel({ s: saved, go }: { s: Settings; go: (id: SecId) => void }
     },
     {
       title: "Microphone",
-      state: s.wakeWord ? "Open: listening for “Hey Bond”" : "Closed",
-      calm: !s.wakeWord,
-      text: s.wakeWord ? "What isn't for him is dropped as it's heard. Nothing is recorded or sent." : "It opens only while you hold Ctrl+Alt and talk.",
+      state: "Closed",
+      calm: true,
+      text: "It opens only while you hold Ctrl+Alt and talk.",
       to: "voice",
     },
     {
-      title: "Reading your screen",
-      state: s.noticeLook ? "Also when you seem stuck" : "Only when you ask",
-      calm: !s.noticeLook,
-      text: "Never password managers, banking or private windows. A screen he looks at is read on this laptop and not kept.",
-      to: "suggest",
-    },
-    {
-      title: "Learning from you",
-      state: s.learnFromMe ? "On" : "Off",
-      calm: !s.learnFromMe,
-      text: s.learnFromMe ? "He keeps what you ask and what worked, on this computer, so he can adapt." : "Nothing new is kept.",
-      to: "learning",
+      title: "Your screen",
+      state: "Never read",
+      calm: true,
+      text: "Bond notes which window is in front (app and title) for your day. He never takes screenshots or reads the screen.",
+      to: "privacy",
     },
   ];
   return (
@@ -1166,44 +958,6 @@ function Group(props: { title: string; desc?: string; children: ReactNode }) {
       </div>
       <div className="group-body">{props.children}</div>
     </section>
-  );
-}
-
-/** A few ready-made choices (a segmented control): quicker than a slider for numbers people pick from a short list. */
-function Choice(props: { label: string; unit: string; options: number[]; value: number; disabled?: boolean; onChange: (v: number) => void }) {
-  // A value saved earlier that isn't one of the presets still shows, as its own choice.
-  const opts = props.options.includes(props.value) ? props.options : [...props.options, props.value].sort((a, b) => a - b);
-  return (
-    <div className={`choice ${props.disabled ? "off" : ""}`}>
-      <span className="s-label">{props.label}</span>
-      <div className="tabs" role="radiogroup" aria-label={props.label}>
-        {opts.map((o) => (
-          <button key={o} role="radio" aria-checked={o === props.value} className={o === props.value ? "on" : ""} disabled={props.disabled} onClick={() => props.onChange(o)}>
-            {o} <small>{props.unit}</small>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/** The daily water goal as a row of glasses: tap the one you're aiming for. */
-function CupPicker(props: { goal: number; onChange: (v: number) => void }) {
-  const glasses = glassesToday();
-  return (
-    <div className="choice">
-      <span className="s-label">Daily water goal</span>
-      <div>
-        <div className="cup-pick" role="radiogroup" aria-label="Glasses of water a day">
-          {Array.from({ length: 15 }, (_, n) => (
-            <button key={n} role="radio" aria-checked={n + 1 === props.goal} className={n < props.goal ? "full" : ""} aria-label={`${n + 1} glasses`} onClick={() => props.onChange(Math.max(4, n + 1))} />
-          ))}
-        </div>
-        <p className="small muted">
-          <b>{props.goal}</b> glasses a day · {glasses} so far today
-        </p>
-      </div>
-    </div>
   );
 }
 
@@ -1315,15 +1069,12 @@ function LocalBrain() {
 /** The speech models Bond carries, what each is for, and whether it is installed. */
 function VoiceModels() {
   const [v, setV] = useState<VoiceStatus | null>(null);
-  const [w, setW] = useState<WakeStatus | null>(null);
   useEffect(() => {
     void voiceStatus().then(setV);
-    void wakeStatus().then(setW);
   }, []);
   const rows: { job: string; name: string; on: boolean | null }[] = [
     { job: "Speaking", name: "Kokoro v1.0", on: v ? v.installed : null },
     { job: "Listening", name: "Parakeet TDT 0.6B", on: v ? v.installed : null },
-    { job: "Your voice (“Hey Bond”)", name: "TitaNet small", on: w ? w.installed : null },
   ];
   return (
     <>
@@ -1421,149 +1172,6 @@ function LocalVoice(props: { voiceId: number; speed: number; onChange: (p: Parti
   );
 }
 
-/** "Hey Bond": download, teach him your voice, turn it on. */
-function HeyBond(props: { s: Settings; onChange: (p: Partial<Settings>) => void }) {
-  const { s, onChange } = props;
-  const [st, setSt] = useState<WakeStatus | null>(null);
-  const [progress, setProgress] = useState<BrainProgress | null>(null);
-  const [installing, setInstalling] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  // Teaching: which line you're on, and whether the mic is open.
-  const [teach, setTeach] = useState<{ line: number; saved: number; recording: boolean; note: string } | null>(null);
-  const refresh = () => wakeStatus().then(setSt);
-  useEffect(() => {
-    void refresh();
-    const off = onTauriEvent<BrainProgress>("brain-progress", setProgress);
-    const t = window.setInterval(refresh, 4000); // recent voice checks
-    return () => {
-      clearInterval(t);
-      void off.then((f) => f());
-      void wakeEnrollCancel();
-    };
-  }, []);
-
-  const install = async () => {
-    setMsg(null);
-    setInstalling(true);
-    try {
-      await wakeInstall();
-    } catch (e) {
-      setMsg(`${e}`);
-    }
-    setInstalling(false);
-    setProgress(null);
-    void refresh();
-  };
-
-  const record = async () => {
-    if (!teach || !st) return;
-    setTeach({ ...teach, recording: true, note: "Listening… read the line, then stop talking." });
-    try {
-      const r = await wakeEnrollRecord();
-      if (!r.heard) return setTeach({ ...teach, recording: false, note: "I didn't hear “Hey Bond” in that. Try the same line again, a little clearer." });
-      const line = teach.line + 1;
-      if (line < st.lines.length) return setTeach({ line, saved: r.count, recording: false, note: `Got it (${r.count} of ${r.needed}).` });
-      await wakeEnrollSave();
-      setTeach(null);
-      setMsg("✓ He knows your voice now.");
-      onChange({ voiceMatch: true });
-      void refresh();
-    } catch (e) {
-      setTeach({ ...teach, recording: false, note: String(e) });
-    }
-  };
-
-  if (!st) return <p className="small muted">Only in the desktop app.</p>;
-  if (!st.installed) {
-    const pct = progress && progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
-    return (
-      <>
-        <p className="small muted">The wake word and voice match models, on this laptop. A one-time 57 MB download (needs Bond's voice above).</p>
-        {installing ? (
-          <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-            <div className="bar" style={{ width: `${pct}%` }} />
-            <span className="small">{progress ? `${progress.what}: ${Math.round(progress.done / 1e6)} / ${Math.round(progress.total / 1e6)} MB` : "Starting download…"}</span>
-          </div>
-        ) : (
-          <button className="btn" onClick={() => void install()}>
-            Download “Hey Bond”
-          </button>
-        )}
-        {msg && <p className="small muted">{msg}</p>}
-      </>
-    );
-  }
-
-  if (teach) {
-    return (
-      <div className="teach">
-        <p className="small muted">
-          Line {teach.line + 1} of {st.lines.length}. Read it in your normal voice, where you usually sit.
-        </p>
-        <p className="teach-line">“{st.lines[teach.line]}”</p>
-        <div className="key-row">
-          <button className="btn" disabled={teach.recording} onClick={() => void record()}>
-            {teach.recording ? "Listening…" : "🎙 Record this line"}
-          </button>
-          <button
-            className="btn ghost"
-            disabled={teach.recording}
-            onClick={() => {
-              void wakeEnrollCancel();
-              setTeach(null);
-            }}
-          >
-            Cancel
-          </button>
-        </div>
-        {teach.note && <p className="small muted">{teach.note}</p>}
-      </div>
-    );
-  }
-
-  const recent = st.recent.slice(-4);
-  return (
-    <>
-      <Toggle
-        label="Listen for “Hey Bond”"
-        hint="Then say what you want in the same breath, or after a pause. The microphone stays on while this is on."
-        checked={s.wakeWord}
-        onChange={(v) => onChange({ wakeWord: v })}
-      />
-      <Toggle
-        label="Answer only my voice"
-        hint={st.enrolled ? "Voice match is set up." : "Teach him your voice first (below)."}
-        checked={s.voiceMatch && st.enrolled}
-        onChange={(v) => (st.enrolled ? onChange({ voiceMatch: v }) : undefined)}
-      />
-      <Toggle label="Keep listening after he answers" hint="A few seconds for a follow-up, without saying “Hey Bond” again (still only your voice)." checked={s.followUp} onChange={(v) => onChange({ followUp: v })} />
-      <div className="key-row">
-        <button className="btn" onClick={() => setTeach({ line: 0, saved: 0, recording: false, note: "" })}>
-          {st.enrolled ? "Teach him my voice again" : "Teach him my voice"}
-        </button>
-        {st.enrolled && (
-          <button
-            className="btn ghost"
-            onClick={async () => {
-              await wakeForgetVoice();
-              setMsg("Your voiceprint is deleted.");
-              void refresh();
-            }}
-          >
-            Forget my voice
-          </button>
-        )}
-      </div>
-      {st.enrolled && recent.length > 0 && st.threshold !== null && (
-        <p className="small muted">
-          Last checks (bar {st.threshold.toFixed(2)}): {recent.map(([score, ok]) => `${score.toFixed(2)} ${ok ? "✓ you" : "✗ not you"}`).join(" · ")}
-        </p>
-      )}
-      {msg && <p className="small muted">{msg}</p>}
-    </>
-  );
-}
-
 /** The facts Bond keeps about you; forget any or all. */
 /** Keys Settings → Memory leaves alone when it empties Bond: how the app looks and where he sits. */
 const KEEP_KEYS = ["selfglance.settings", "selfglance.sidebar", "selfglance.character", "selfglance.homeX"];
@@ -1610,8 +1218,6 @@ function MemoryPanel({ s, update }: { s: Settings; update: (p: Partial<Settings>
   };
   const emptyAll = async () => {
     await memoryForget(null).catch(() => {});
-    await forgetLearned().catch(() => {});
-    await wakeForgetVoice().catch(() => {});
     try {
       for (const k of Object.keys(localStorage)) if (k.startsWith("selfglance.") && !KEEP_KEYS.includes(k)) localStorage.removeItem(k);
     } catch {
@@ -1708,53 +1314,6 @@ function Memories() {
       <button className="btn ghost" onClick={() => void memoryForget(null).then(refresh)}>
         Forget everything
       </button>
-    </>
-  );
-}
-
-/** What Bond has learned so far, export for training, forget. */
-function Learned() {
-  const [stats, setStats] = useState<LearnStats | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const refresh = () => learnStats().then(setStats).catch(() => setStats(null));
-  useEffect(() => {
-    void refresh();
-  }, []);
-  if (!stats) return null;
-  return (
-    <>
-      <p className="small muted">
-        {stats.total === 0
-          ? "Nothing yet — he learns as you use him."
-          : `${stats.total} requests remembered · ${stats.good} 👍 · ${stats.bad} 👎 or refused · ${stats.trainable} usable to train his brain.`}
-      </p>
-      <div className="key-row">
-        <button
-          className="btn ghost"
-          disabled={stats.trainable === 0}
-          onClick={() =>
-            exportLearned()
-              .then((path) => setMsg(`Saved the training set to ${path}`))
-              .catch((e) => setMsg(String(e)))
-          }
-        >
-          Export training set
-        </button>
-        <button
-          className="btn ghost"
-          disabled={stats.total === 0}
-          onClick={() => {
-            if (!window.confirm("Forget everything Bond has learned from you?")) return;
-            void forgetLearned().then(() => {
-              setMsg("Forgotten.");
-              void refresh();
-            });
-          }}
-        >
-          Forget
-        </button>
-      </div>
-      {msg && <p className="small muted">{msg}</p>}
     </>
   );
 }

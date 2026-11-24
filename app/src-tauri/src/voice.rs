@@ -12,8 +12,7 @@
 //              What he hears goes through exactly the same path as typed requests.
 //
 // Models are downloaded once into <local app data>/voice. Nothing is sent anywhere.
-// Loaded they take about 1 GB of RAM, so they're let go after a few quiet minutes and
-// load again (about a second) the next time he speaks or listens.
+// Loaded they take about 1 GB of RAM; they are loaded once at start and kept, so he answers at once.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,37 +38,24 @@ const TTS_THREADS: i32 = 8;
 /// The recognizer's sample rate.
 pub(crate) const ASR_RATE: u32 = 16_000;
 
-/// Let the models go after this long without speaking or listening.
-const IDLE_UNLOAD: Duration = Duration::from_secs(5 * 60);
-
 static DIR: OnceLock<PathBuf> = OnceLock::new();
-static LAST_USED: Mutex<Option<Instant>> = Mutex::new(None);
 
+/// Load the voice and the ears once, at start, and keep them (about 1 GB of RAM). They used to be let go
+/// after five quiet minutes, and loading them again is what made Bond wait seconds before speaking.
 pub fn init(app: &AppHandle) {
     if let Ok(d) = app.path().app_local_data_dir() {
         let _ = DIR.set(d.join("voice"));
     }
-    std::thread::spawn(|| loop {
-        std::thread::sleep(Duration::from_secs(30));
-        let idle = LAST_USED.lock().unwrap().is_some_and(|t| t.elapsed() > IDLE_UNLOAD);
-        // "Hey Bond" uses the ears for every stretch of speech: they stay loaded meanwhile.
-        if idle && !LISTENING.load(Ordering::SeqCst) && !crate::wake::active() {
-            unload();
+    std::thread::spawn(|| {
+        if !installed() {
+            return;
         }
+        let started = Instant::now();
+        let spoke = synthesize("Hi.", 0, 1.0).is_ok();
+        WARM.store(spoke, Ordering::SeqCst);
+        let heard = asr().is_ok();
+        crate::diag::log(&format!("voice: loaded at start in {} ms (voice {spoke}, ears {heard})", started.elapsed().as_millis()));
     });
-}
-
-fn touch() {
-    *LAST_USED.lock().unwrap() = Some(Instant::now());
-}
-
-/// Free the voice and ears models' memory now. True if anything was loaded.
-pub fn unload() -> bool {
-    WARM.store(false, Ordering::SeqCst);
-    let tts = TTS.lock().unwrap().take().is_some();
-    let asr = ASR.lock().unwrap().take().is_some();
-    *LAST_USED.lock().unwrap() = None;
-    tts || asr
 }
 
 #[cfg(test)]
@@ -170,7 +156,6 @@ static WARM: AtomicBool = AtomicBool::new(false);
 #[tauri::command]
 pub async fn voice_warm() -> Result<(), String> {
     if WARM.load(Ordering::SeqCst) || !installed() {
-        touch();
         return Ok(());
     }
     tauri::async_runtime::spawn_blocking(|| {
@@ -188,7 +173,6 @@ pub async fn voice_warm() -> Result<(), String> {
 }
 
 fn tts() -> Result<Arc<sherpa_onnx::OfflineTts>, String> {
-    touch();
     let mut guard = TTS.lock().unwrap();
     if let Some(t) = guard.as_ref() {
         return Ok(t.clone());
@@ -222,7 +206,7 @@ pub async fn voice_say(text: String, voice: i32, speed: f32) -> Result<String, S
     tauri::async_runtime::spawn_blocking(move || {
         let audio = synthesize(&text, voice, speed)?;
         let pcm: Vec<u8> = audio.0.iter().flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes()).collect();
-        Ok(base64::engine::general_purpose::STANDARD.encode(crate::ai::wav(&pcm, audio.1)))
+        Ok(base64::engine::general_purpose::STANDARD.encode(wav(&pcm, audio.1)))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -241,7 +225,6 @@ pub fn synthesize(text: &str, voice: i32, speed: f32) -> Result<(Vec<f32>, u32),
 static ASR: Mutex<Option<Arc<sherpa_onnx::OfflineRecognizer>>> = Mutex::new(None);
 
 fn asr() -> Result<Arc<sherpa_onnx::OfflineRecognizer>, String> {
-    touch();
     let mut guard = ASR.lock().unwrap();
     if let Some(r) = guard.as_ref() {
         return Ok(r.clone());
@@ -368,6 +351,8 @@ pub fn start(app: AppHandle, hands_free: bool) {
     }
     STOP.store(false, Ordering::SeqCst);
     CANCEL.store(false, Ordering::SeqCst);
+    // At once, so the card shows the press itself; "listening" follows when sound arrives (~0.5 s).
+    let _ = app.emit("voice-state", "starting");
     std::thread::spawn(move || {
         // "Listening…" only once sound is actually arriving (the microphone takes ~0.5 s to
         // start), so the cue is honest and the first words aren't lost.
@@ -423,12 +408,6 @@ pub fn voice_listen(app: AppHandle) {
 #[tauri::command]
 pub fn voice_listen_stop() {
     stop();
-}
-
-/// One utterance from the microphone, ending when you go quiet (enrolment).
-pub(crate) fn record_once(on_ready: impl FnOnce()) -> Result<(Vec<f32>, u32), String> {
-    STOP.store(false, Ordering::SeqCst);
-    record(true, on_ready)
 }
 
 /// Record from the default microphone (mono) until stopped. `on_ready` runs when the first
@@ -491,24 +470,6 @@ pub(crate) struct Endpoint {
 }
 
 impl Endpoint {
-    /// Start from a known room noise level, for listening that may begin mid-sentence.
-    pub(crate) fn with_floor(floor: f32) -> Self {
-        Endpoint { floor: Some(floor), ..Default::default() }
-    }
-
-    /// Talking right now (the last frame was speech).
-    pub(crate) fn speaking(&self) -> bool {
-        self.spoke_at.is_some() && self.quiet_since.is_none()
-    }
-
-    /// How long it's been quiet since speech, at time `t` (zero while talking or before).
-    pub(crate) fn quiet_for(&self, t: Duration) -> Duration {
-        match (self.spoke_at, self.quiet_since) {
-            (Some(_), Some(q)) => t.saturating_sub(q),
-            _ => Duration::ZERO,
-        }
-    }
-
     /// Feed new samples heard at time `t`; true when it's time to stop.
     pub(crate) fn feed(&mut self, frame: &[f32], t: Duration) -> bool {
         if frame.is_empty() {
@@ -848,4 +809,24 @@ mod tts_probe {
             println!("{} ({:.1}s)", match &r { Ok((s, _)) => format!("ok, {} samples", s.len()), Err(e) => format!("error: {e}") }, t.elapsed().as_secs_f64());
         }
     }
+}
+
+/// Minimal WAV container for mono 16-bit little-endian PCM.
+fn wav(pcm: &[u8], rate: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(44 + pcm.len());
+    let data_len = pcm.len() as u32;
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    out.extend_from_slice(pcm);
+    out
 }

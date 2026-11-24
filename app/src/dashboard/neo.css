@@ -2346,3 +2346,21 @@ td .icon-btn.danger:focus-visible {
 .about-saved {
   color: var(--accent);
 }
+
+/* Today's list */
+.goal-lines.todo li label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  cursor: pointer;
+}
+.goal-lines.todo li input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--ink, #2b2b2b);
+}
+.goal-lines.todo li.done span {
+  text-decoration: line-through;
+  opacity: 0.55;
+}

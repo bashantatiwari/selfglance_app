@@ -45,30 +45,14 @@ test("a hard block holds the break and says so", () => {
   assert.ok(lines.some((l) => l.includes("held back (hard)")), lines.join("|"));
 });
 
-import { doneLine, expected, nudgeLine, offerLine, TIPS } from "../src/break/lines.ts";
+import { doneLine, nudgeLine, offerLine, TIPS } from "../src/break/lines.ts";
 
-test("a break line fits the moment and never repeats its tip twice running", () => {
-  assert.match(offerLine({ glasses: 0, goal: 8, hour: 9 }, () => 0), /^First glass of the day\./);
-  assert.match(offerLine({ glasses: 0, goal: 8, hour: 15 }, () => 0), /^No water yet today\./);
-  assert.match(offerLine({ glasses: 2, goal: 8, hour: 17 }, () => 0), /2 of 8 so far, a bit behind/);
-  assert.match(offerLine({ glasses: 4, goal: 8, hour: 14 }, () => 0), /4 of 8\. You're on pace/);
-  assert.match(offerLine({ glasses: 8, goal: 8, hour: 14 }, () => 0), /hit your 8 already/);
-  assert.match(offerLine({ glasses: 7, goal: 8, hour: 22 }, () => 0), /Last one for tonight/);
-  let last = "";
-  for (let i = 0; i < 30; i++) {
-    const line = offerLine({ glasses: 3, goal: 8, hour: 13 }, () => 0);
-    const tip = TIPS.find((t) => line.endsWith(t))!;
-    assert.notEqual(tip, last, "same tip twice in a row");
-    last = tip;
-  }
-  assert.notEqual(nudgeLine(() => 0), nudgeLine(() => 0));
-});
-
-test("after a glass: the count, a cheer, and the goal gets its own line", () => {
-  assert.match(doneLine({ glasses: 3, goal: 8 }, () => 0), /^3 of 8\. /);
-  assert.match(doneLine({ glasses: 8, goal: 8 }), /today's water done/);
-  assert.match(doneLine({ glasses: 9, goal: 8 }), /Over the goal/);
-  assert.equal(expected(8, 7), 0);
-  assert.equal(expected(8, 14), 4);
-  assert.equal(expected(8, 23), 8);
+test("a break line asks you to stand up and drink, and never repeats its tip twice running", () => {
+  const a = offerLine(() => 0);
+  const b = offerLine(() => 0);
+  assert.match(a, /water/);
+  assert.notEqual(a, b);
+  assert.ok(TIPS.some((t) => a.endsWith(t)));
+  assert.ok(nudgeLine().length > 0 && doneLine().length > 0);
+  assert.doesNotMatch(a, /glass/i, "no counting");
 });

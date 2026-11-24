@@ -1,45 +1,21 @@
-// SelfGlance core (Rust side).
-//
-// Responsibilities kept here because they need the operating system:
-//   1. Size the transparent overlay window to the screen's work area.
-//   2. Click-through: the overlay ignores the mouse everywhere except on the
-//      "hit regions" (character, bottle) that the frontend reports.
-//   3. Idle detection: seconds since the last keyboard/mouse input, so breaks are
-//      timed on *active* use and "you stepped away" can be recognised.
-//   4. Activity: which app/window is in front (and whether it's fullscreen), so the
-//      companion can watch videos with you, stay quiet while you code, and get out
-//      of the way in meetings and games. Read locally, never stored or sent anywhere.
-//   5. Hotkeys (Ctrl+Alt+G summon, Win+Alt ask Bond, hold Ctrl+Alt to talk to
-//      him) and the tray menu. His own voice and ears (voice.rs) run on this laptop.
-//   6. AI (ai.rs): Bond's own brain on this laptop (brain.rs). No cloud, no account, no API
-//      key: nothing you say or show leaves it. Daily summary and "ask Bond". What he learns from you
-//      (experience.rs): past requests and your feedback, reused as examples. What he
-//      notices on his own (notice.rs): your habits, a copied error, when you seem stuck.
-//      Doing things on the computer for you (agent.rs): a known set of actions; running
-//      commands, ending programs and deleting files wait for your approval first.
-//   7. The laptop itself (system.rs): status, busy programs, clipboard, low-battery warning.
-//      Bond is left out of screenshots and recordings unless you ask (capture.rs).
-//   8. Start with the computer (autostart plugin; on by default in the installed app)
-//      and only ever one running copy (single-instance plugin).
-// Everything visual lives in the React + Three.js frontend.
+// SelfGlance core (Rust side). What needs the operating system lives here:
+//   - the transparent overlay that holds Bond, click-through except on him and his cards;
+//   - idle time and the window in front (app and title), for breaks and the drift check;
+//   - hotkeys (hold Ctrl+Alt to talk, Win+Alt to type, Ctrl+Alt+G to call him) and the tray;
+//   - his brain (brain.rs, ai.rs), voice (voice.rs), small jobs (agent.rs), the laptop (system.rs).
+// Everything runs on this laptop. Everything visual is in the React + Three.js frontend.
 
 mod agent;
 mod diag;
-mod draft;
 mod egress;
 mod ai;
 mod brain;
 mod capture;
-mod experience;
 mod goals;
 mod hotkeys;
 mod memory;
-mod notice;
-mod policy;
-mod screen;
 mod system;
 mod voice;
-mod wake;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -255,7 +231,7 @@ fn open_ask(app: &AppHandle) {
     let _ = app.emit("ask-open", ());
 }
 
-/// Let the overlay take the keyboard for a moment (typing the delete confirmation).
+/// Let the overlay take the keyboard for a moment (writing today's list in Bond's card).
 #[tauri::command]
 fn take_focus(app: AppHandle) {
     agent::remember_foreground();
@@ -310,15 +286,14 @@ fn enable_autostart_first_run(app: &AppHandle) {
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let dash = MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>)?;
-    let demo = MenuItem::with_id(app, "demo", "Show me what you can do", true, None::<&str>)?;
-    let play = MenuItem::with_id(app, "summon", "Play with me  (Ctrl+Alt+G)", true, None::<&str>)?;
     let ask = MenuItem::with_id(app, "ask", "Ask Bond  (Win+Alt)", true, None::<&str>)?;
+    let tuck = MenuItem::with_id(app, "tuck", "Tuck Bond away / bring him back", true, None::<&str>)?;
     let brk = MenuItem::with_id(app, "test-break", "Take a break now", true, None::<&str>)?;
     let snooze = MenuItem::with_id(app, "snooze", "Quiet for 1 hour", true, None::<&str>)?;
     let shots = MenuItem::with_id(app, "capture", "Show Bond in screenshots (5 min)", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit SelfGlance", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&dash, &ask, &demo, &play, &brk, &sep, &shots, &snooze, &quit])?;
+    let menu = Menu::with_items(app, &[&dash, &ask, &tuck, &brk, &sep, &shots, &snooze, &quit])?;
     capture::init(app, shots);
 
     TrayIconBuilder::with_id("main")
@@ -326,11 +301,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .tooltip("SelfGlance")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "summon" => summon(app),
             "dashboard" => show_dashboard(app),
             "ask" => open_ask(app),
-            "demo" => {
-                let _ = app.emit("demo", ());
+            "tuck" => {
+                let _ = app.emit("tuck", ());
             }
             "test-break" => {
                 let _ = app.emit("break-now", ());
@@ -406,51 +380,31 @@ pub fn run() {
             cursor_position,
             open_dashboard,
             ask_bond,
+            take_focus,
             set_autostart,
             get_autostart,
-            ai::ai_text,
+            open_link,
+            break_now,
             ai::ai_route,
             ai::ai_chat,
             ai::ai_prime,
-            ai::ai_screen,
-            open_link,
-            break_now,
             agent::agent_run,
-            agent::agent_approve,
-            agent::agent_deny,
             agent::agent_cancel,
-            policy::agent_set_advanced,
-            system::clipboard_text,
-            take_focus,
+            agent::release_focus,
+            agent::set_project_roots,
             capture::capture_hide_by_default,
             capture::capture_show,
-            agent::release_focus,
             brain::brain_status,
             brain::brain_install,
             brain::brain_warm,
             brain::brain_stop,
-            experience::brain_set_learning,
-            experience::brain_feedback,
-            experience::brain_record,
-            experience::brain_learn_stats,
-            experience::brain_forget,
-            experience::brain_export,
-            notice::notice_enable,
-            notice::notice_habits,
-            notice::notice_allowed,
-            notice::notice_shown,
-            notice::notice_judge,
             goals::goal_judge,
-            draft::ai_draft,
-            draft::draft_remember_target,
-            draft::draft_write,
-            draft::copy_text,
-            notice::notice_scan,
             voice::voice_status,
             voice::voice_install,
             voice::voice_say,
             voice::voice_warm,
             voice::voice_listen,
+            voice::voice_listen_stop,
             diag::diag_log,
             memory::memory_list,
             memory::memory_profile,
@@ -459,18 +413,7 @@ pub fn run() {
             memory::memory_forget,
             memory::memory_usage,
             memory::memory_forget_conversations,
-            memory::memory_keep,
-            wake::wake_install,
-            wake::wake_status,
-            wake::wake_set,
-            wake::wake_follow_up,
-            wake::wake_enroll_record,
-            wake::wake_enroll_save,
-            wake::wake_enroll_cancel,
-            wake::wake_forget_voice,
-            wake::wake_confirm_you,
-            wake::wake_not_you,
-            voice::voice_listen_stop
+            memory::memory_keep
         ])
         .setup(move |app| {
             let win = overlay(app.handle()).expect("overlay window is defined in tauri.conf.json");
@@ -484,15 +427,11 @@ pub fn run() {
             build_tray(app.handle())?;
             enable_autostart_first_run(app.handle());
             agent::preload_apps();
-            draft::spawn_foreground_watch();
             diag::init(app.handle());
             diag::log_panics();
-            ai::forget_old_keys();
             memory::init(app.handle());
             diag::log("SelfGlance started");
             brain::init(app.handle());
-            experience::init(app.handle());
-            notice::spawn_clipboard_watch(app.handle().clone());
             voice::init(app.handle());
             hotkeys::spawn(app.handle().clone());
             system::spawn_battery_watch(app.handle().clone());
@@ -509,7 +448,7 @@ pub fn run() {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(8));
-                    let _ = handle.emit("voice-error", format!("Another app is using {}, so that shortcut won't reach me. Change it in that app, or use the tray menu (or “Hey Bond”).", taken.join(" and ")));
+                    let _ = handle.emit("voice-error", format!("Another app is using {}, so that shortcut won't reach me. Change it in that app, or use the tray menu.", taken.join(" and ")));
                 });
             }
             Ok(())

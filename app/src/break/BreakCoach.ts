@@ -24,8 +24,8 @@ export interface BreakEvents {
   complete(how: BreakEnd): void;
 }
 
-export const BREAK_EVERY_MIN = 45;
-export const WATER_GOAL = 8;
+/** About 50 minutes of sitting, then a few minutes up: a common, sensible rhythm. */
+export const BREAK_EVERY_MIN = 50;
 const ACTIVE_IF_IDLE_UNDER = 60; // s: counts as "using the laptop"
 const NATURAL_BREAK = 300; // s: away this long on your own = a break taken
 const AWAY_DURING_BREAK = 40; // s: idle this long during a break = you went for it
@@ -39,25 +39,6 @@ const SOFT_DEFER_MAX_MIN = 20; // a video can delay the break by at most this mu
 /** "hard" = never interrupt (meeting, game); "soft" = wait a bit (a video); null = go. */
 export type Blocker = () => "hard" | "soft" | null;
 
-/** The local day: toISOString() is UTC, which rolled the count over at 5:45 in the morning in Nepal, not at midnight. */
-const glassesKey = (d = new Date()) => `selfglance.water.${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-
-export function glassesToday(): number {
-  try {
-    return Number(localStorage.getItem(glassesKey()) ?? 0);
-  } catch {
-    return 0;
-  }
-}
-
-/** One more glass (or one less, to correct a wrong tap); never below zero. */
-export function addGlass(by = 1) {
-  try {
-    localStorage.setItem(glassesKey(), String(Math.max(0, glassesToday() + by)));
-  } catch {
-    /* storage unavailable: the count just won't persist */
-  }
-}
 
 export class BreakCoach {
   phase: BreakPhase = "idle";
@@ -181,7 +162,6 @@ export class BreakCoach {
   private finish(how: BreakEnd) {
     // Only the bottle counts as a glass. Walking away is a break taken, not proof of water; the Today
     // page lets you add the glass you had while you were up.
-    if (how === "drank") addGlass();
     this.activeMs = 0;
     this.phase = "idle";
     this.events.complete(how);

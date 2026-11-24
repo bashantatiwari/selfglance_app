@@ -10,7 +10,6 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "overlay",
@@ -41,7 +40,8 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:1420 ipc: http://ipc.localhost; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
     }
   },
   "bundle": {
@@ -50,8 +50,8 @@
     "publisher": "Bashanta Tiwari",
     "copyright": "Copyright 2026 Bashanta Tiwari",
     "category": "Productivity",
-    "shortDescription": "Bond, a desktop guide that shows you the next click.",
-    "longDescription": "SelfGlance is a Windows desktop guide. Bond reads the window in front of you, points at the next thing to click, and helps with what the job leaves behind. Everything runs on your laptop: no account, no cloud.",
+    "shortDescription": "Bond, a desktop companion that keeps your day on track.",
+    "longDescription": "SelfGlance is a Windows desktop companion. Write today's list in the morning; Bond notices when you drift from it, reminds you to take breaks and drink water, and does small jobs on the laptop. Everything runs on your laptop: no account, no cloud.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

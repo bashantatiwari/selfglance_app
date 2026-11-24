@@ -1,7 +1,7 @@
 [package]
 name = "selfglance"
 version = "0.1.0"
-description = "SelfGlance: Bond, a desktop guide that shows you the next click. Runs on your laptop."
+description = "SelfGlance: Bond, a desktop companion that keeps your day on track. Runs on your laptop."
 authors = ["Bashanta Tiwari"]
 edition = "2021"
 
@@ -18,22 +18,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 user-idle = "0.6.0"
 tauri-plugin-global-shortcut = "2.4.0"
 active-win-pos-rs = "0.11.0"
 base64 = "0.23.1"
-xcap = "0.9.8"
 tauri-plugin-autostart = "2.7.0"
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tauri-plugin-single-instance = "2"
 enigo = "0.6.1"
 sysinfo = "0.39.6"
-arboard = "3.6.1"
-trash = "5.2.9"
 chrono = "0.4.45"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 tokio = { version = "1.53.2", features = ["sync", "time"] }
@@ -60,5 +56,3 @@ opt-level = 3
 
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Power", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_System_DataExchange", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_Security_Credentials"] }
-uiautomation = "0.25.1"
-windows = { version = "0.62", features = ["Media_Ocr", "Graphics_Imaging", "Storage_Streams", "Foundation", "Foundation_Collections", "Globalization"] }

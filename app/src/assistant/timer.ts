@@ -29,13 +29,15 @@ const amount = (n: string) => {
 /** A timer in a sentence: how long, and what for. Null when it isn't one. */
 export function parseTimer(said: string): { ms: number; label: string } | null {
   const t = said.trim().replace(/[.!?]+$/, "").replace(/\s+/g, " ");
-  const lead = String.raw`^(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:(?:set|start|begin|run|put|make|give me|i need|i want)\s+)?(?:(?:a|an|the|me a|up a)\s+)?`;
+  const lead = String.raw`^(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:(?:sets?|starts?|started|begin|run|put|make|create|give me|i need|i want)\s+)?(?:(?:a|an|the|me a|up a)\s+)?`;
   const what = String.raw`(?:\s+(?:for|to|called|named)\s+(?!\d)(.+))?`;
   const forms = [
     // "start a timer of 10 seconds", "timer for 5 min", "set a timer for 10 minutes for tea"
     new RegExp(String.raw`${lead}(?:count ?down\s+)?timer\s+(?:for|of|to)?\s*${SPAN}${what}$`, "i"),
     // "set a 10 minute timer", "5 min timer for the eggs"
     new RegExp(String.raw`${lead}${SPAN}\s+(?:count ?down\s+)?timer${what}$`, "i"),
+    // "start a one minute countdown", "a 5 minute count down"
+    new RegExp(String.raw`${lead}${SPAN}\s+count ?down${what}$`, "i"),
     // "count down 30 seconds", "countdown from 10 seconds"
     new RegExp(String.raw`${lead}count ?down\s+(?:for|from|of)?\s*${SPAN}${what}$`, "i"),
   ];
@@ -47,6 +49,19 @@ export function parseTimer(said: string): { ms: number; label: string } | null {
     ms = Math.round(ms);
     if (!Number.isFinite(ms) || ms < 1000 || ms > MAX_MS) return null;
     return { ms, label: (m[5] ?? "").trim().replace(/^(?:the|my)\s+/i, "").slice(0, 40) };
+  }
+  // Anything else that says "timer" or "countdown" and a length is a timer, however speech heard the rest
+  // ("starts to one minute count down", "can you do a countdown, like 2 minutes", "timer 90 seconds please").
+  if (/\b(?:timer|count ?down)\b/i.test(t) && !/^(?:what|how|why|is|are|do|does|did|can i|should)\b.*\?$/i.test(said.trim())) {
+    const any = t.match(new RegExp(String.raw`\b${SPAN}\b`, "i"));
+    if (any) {
+      let ms = amount(any[1]) * unitMs(any[2]);
+      if (any[3] && any[4]) ms += amount(any[3]) * unitMs(any[4]);
+      ms = Math.round(ms);
+      if (!Number.isFinite(ms) || ms < 1000 || ms > MAX_MS) return null;
+      const label = t.match(/\b(?:for|to)\s+(?!\d|an?\b|one\b|two\b|three\b|five\b|ten\b)((?:[a-z]+\s?){1,4})$/i)?.[1]?.trim().replace(/^(?:the|my)\s+/i, "") ?? "";
+      return { ms, label: label.slice(0, 40) };
+    }
   }
   return null;
 }

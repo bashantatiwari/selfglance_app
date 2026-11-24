@@ -4,7 +4,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { aimWords, dayBounds, EMPTY_PROFILE, isCreator, mentions, profileLine, projectList, type Profile } from "../src/assistant/profile.ts";
 import { makeJudge, verdict } from "../src/assistant/goals.ts";
-import { suggest, type PlanItem } from "../src/assistant/plan.ts";
 
 const alex: Profile = { ...EMPTY_PROFILE, name: "Alex", now: "computer science student", aim: "AI Engineer", projects: "content creation (YouTube)", tone: "direct" };
 
@@ -50,13 +49,3 @@ test("for a creator headed for AI: their tools are work, videos about the aim ar
 
 const item = (title: string, extra: Partial<PlanItem> = {}): PlanItem => ({ id: title, title, mins: 45, by: "you", ...extra });
 const src = { goals: [], ideas: [], aim: alex.aim, aimWords: aimWords(alex), projects: projectList(alex) };
-
-test("Plan offers time toward the aim and a project, unless today already has it", () => {
-  const s = suggest({ items: [], dismissed: [] }, src);
-  assert.deepEqual(s.map((x) => x.title), ["AI Engineer: 45 min of learning", "Work on content creation (YouTube)"]);
-  assert.equal(s[0].track, "aim");
-  assert.equal(suggest({ items: [item("Study transformers")], dismissed: [] }, src)[0].title, "Work on content creation (YouTube)", "studying already works toward the aim");
-  assert.equal(suggest({ items: [item("Fine-tune a small model on Colab")], dismissed: [] }, src).length, 1, "an AI task counts too");
-  assert.equal(suggest({ items: [], dismissed: ["AI Engineer: 45 min of learning", "Work on content creation (YouTube)"] }, src).length, 0, "not today means not today");
-  assert.equal(suggest({ items: [], dismissed: [] }, { goals: [], ideas: [] }).length, 0, "no profile, no tracks");
-});

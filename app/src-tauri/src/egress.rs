@@ -1,5 +1,5 @@
 // "Nothing leaves your laptop", kept honest by a test. Bond's code may use the network in three
-// places only: downloading his own brain and voice files (brain.rs, voice.rs, wake.rs), and
+// places only: downloading his own brain and voice files (brain.rs, voice.rs), and
 // talking to the brain on 127.0.0.1. Nothing may know the address of an AI service. If someone
 // adds a cloud call later, this fails and says where.
 
@@ -24,7 +24,7 @@ mod tests {
     fn only_model_downloads_and_the_local_brain_use_the_network() {
         let mut users: Vec<String> = sources().into_iter().filter(|(_, text)| text.contains("reqwest::Client")).map(|(name, _)| name).collect();
         users.sort();
-        assert_eq!(users, ["brain.rs", "voice.rs", "wake.rs"], "a new file talks to the network: is it a download, or does it send something away?");
+        assert_eq!(users, ["brain.rs", "voice.rs"], "a new file talks to the network: is it a download, or does it send something away?");
     }
 
     #[test]

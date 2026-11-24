@@ -1,97 +1,40 @@
-// Frontend side of the AI features. Every request is made by Rust (src-tauri/src/ai.rs) and
-// answered by Bond's own brain on this laptop (brain.rs): nothing is sent to any cloud service.
-// What he learns from you is kept by experience.rs.
+// Frontend side of Bond's brain, voice and small jobs. Every request is made by Rust and answered on
+// this laptop (brain.rs, voice.rs): nothing is sent to any cloud service.
 
 import { invoke } from "@tauri-apps/api/core";
 import { inTauri } from "./platform";
 import { loadSettings } from "./settings";
-import type { Action, ScreenMode } from "./assistant/intent";
+import type { Action } from "./assistant/intent";
 import { sentences, speakable } from "./assistant/speech";
 
-/** Something powerful Bond wants to do, shown in full before anything happens. */
-export interface Approval {
-  id: string;
-  kind: "command" | "delete" | "kill" | "unsaved";
-  /** Which yes this is: deletions (and commands that delete) need a second one. */
-  step: number;
-  steps: number;
-  title: string;
-  items: string[];
-  why: string;
-  button: string;
-  /** A second way to say yes ("Save" beside "Don't save"), if there is one. */
-  alt: string | null;
-  /** Thumbnails of the pictures about to be deleted (base64 JPEG). */
-  previews: { name: string; jpeg: string }[];
-}
-
-/** What a plan of actions did: short lines, longer text to read, maybe a pending approval. */
+/** What a small job did: short lines, and longer text to read (file search results, laptop status). */
 export interface Outcome {
   done: string[];
   info: string[];
-  pending: Approval | null;
 }
 
+/** The brain's reading of a request the rules couldn't place. A task has already been done. */
 export interface Route {
-  intent: "idea" | "task" | "screen" | "help" | "guide" | "write" | "chat" | string;
-  text: string;
-  reply: string;
-  needs_screen: boolean;
-  /** What the actions did (simple tasks run right away). */
+  intent: "idea" | "task" | "chat";
   outcome: Outcome | null;
-  /** This request in Bond's experience log, for 👍 / 👎 ("" when learning is off). */
-  exp_id: string;
 }
 
-export interface ScreenAnswer {
-  answer: string;
-  outcome: Outcome | null;
-  exp_id: string;
-}
-
-export const aiText = (system: string, prompt: string) => invoke<string>("ai_text", { system, prompt });
-
-/** Let the AI classify a command Bond couldn't place himself (text only, no screenshot). */
-/** `spoken`: it came from the microphone, so words may be misheard. */
-/** Get his brain ready for a request that's coming (loaded, instructions already read). */
-/** Bond's own voice, ready before the answer is (loading it after the text shows left a 5-8 s silence). */
-export const voiceWarm = () => (inTauri && loadSettings().voice === "bond" && loadSettings().speakAnswers ? invoke<void>("voice_warm").catch(() => {}) : Promise.resolve());
-export const aiPrime = () => {
-  void voiceWarm();
-  return inTauri ? invoke<void>("ai_prime").catch(() => {}) : Promise.resolve();
-};
+/** Load the brain and have it read its instructions while you type or speak. */
+export const aiPrime = () => (inTauri ? invoke<void>("ai_prime").catch(() => {}) : Promise.resolve());
+export const voiceWarm = () => (inTauri ? invoke<void>("voice_warm").catch(() => {}) : Promise.resolve());
 export const routeCommand = (text: string, spoken = false) => invoke<Route>("ai_route", { text, spoken });
-
-/** Look at the screen now: explain it, help when stuck, or do a task on it. */
-export const screenAsk = (question: string, mode: ScreenMode, spoken = false) => invoke<ScreenAnswer>("ai_screen", { question, mode, spoken });
-
-/** Label activities against today's goals ("on" / "off" / "neutral", in order); empty when there is no brain to ask. */
 export const goalJudge = (goals: string[], items: { app: string; label: string }[], blocked: string[]) =>
-  inTauri ? invoke<string[]>("goal_judge", { goals, items, blocked }).catch((): string[] => []) : Promise.resolve([] as string[]);
+  inTauri ? invoke<string[]>("goal_judge", { goals, items, blocked }).catch(() => [] as string[]) : Promise.resolve([] as string[]);
+export const runActions = (actions: Action[]) => invoke<Outcome>("agent_run", { actions });
+export const cancelAgent = () => (inTauri ? invoke<void>("agent_cancel").catch(() => {}) : Promise.resolve());
+/** Where your projects live, for "open claude code in …" and file search. Returns the folders kept. */
+export const setProjectRoots = (roots: string[]) => (inTauri ? invoke<string[]>("set_project_roots", { roots }).catch(() => [] as string[]) : Promise.resolve([] as string[]));
 
-/** A message written for you to send. `subject` is for an email; `used_screen` = he read the conversation on screen. */
-export interface Draft {
-  subject: string;
-  message: string;
-  used_screen: boolean;
-  /** A question to ask before writing (the draft needs a fact he doesn't have). Then `message` is empty. */
-  need: string;
-}
-/** Something you told him about the latest job (an answer to his question). */
-export const jobNote = (note: string) => (inTauri ? invoke<void>("job_note", { note }).catch(() => {}) : Promise.resolve());
-export const aiDraft = (request: string) => invoke<Draft>("ai_draft", { request });
-/** Remember the window you're in, so a draft can go back there. */
-export const draftRememberTarget = () => (inTauri ? invoke<void>("draft_remember_target").catch(() => {}) : Promise.resolve());
-/** Paste the draft in that window (never presses Enter). `pasted` false = it's on the clipboard instead, and `note` says why. */
-export const draftWrite = (text: string) => invoke<{ pasted: boolean; note: string }>("draft_write", { text });
-export const copyText = (text: string) => invoke<void>("copy_text", { text });
+// --- Memory: About you and the recent conversation (memory.rs) --------------------------------
 
-/** What Bond remembers about you (memory.json), and forgetting it. */
-/** Settings → About you: the line the brain gets about you with every request ("" forgets it). */
 export const memoryProfile = (text: string) => (inTauri ? invoke<void>("memory_profile", { text }).catch(() => {}) : Promise.resolve());
 export const memoryList = () => (inTauri ? invoke<string[]>("memory_list").catch(() => []) : Promise.resolve([]));
 export const memoryForget = (fact: string | null) => invoke<void>("memory_forget", { fact });
-/** How much Bond keeps (Settings → Memory), forgetting what was talked about, and the keep-history switch. */
 export interface MemoryUsage {
   facts: number;
   conversations: number;
@@ -100,26 +43,6 @@ export interface MemoryUsage {
 export const memoryUsage = () => (inTauri ? invoke<MemoryUsage>("memory_usage").catch(() => null) : Promise.resolve(null));
 export const memoryForgetConversations = () => invoke<void>("memory_forget_conversations");
 export const memoryKeep = (on: boolean) => (inTauri ? invoke<void>("memory_keep", { on }).catch(() => {}) : Promise.resolve());
-
-/** Run actions Bond understood on his own. */
-export const runActions = (actions: Action[]) => invoke<Outcome>("agent_run", { actions });
-
-/** Yes to a pending approval: the next step (a second confirmation) or the result. */
-export const approveAction = (id: string, alt = false) => invoke<Outcome>("agent_approve", { id, alt });
-/** Settings → Bond → Advanced actions: lets the AI run commands, type, click and more (policy.rs). */
-export const setAdvancedActions = (on: boolean) => (inTauri ? invoke<void>("agent_set_advanced", { on }).catch(() => {}) : Promise.resolve());
-export const cancelAgent = () => (inTauri ? invoke<void>("agent_cancel").catch(() => {}) : Promise.resolve());
-export const denyAction = (id: string) => (inTauri ? invoke<void>("agent_deny", { id }).catch(() => {}) : Promise.resolve());
-
-/** Let the overlay take the keyboard (typing a confirmation). */
-export const takeFocus = () => (inTauri ? invoke<void>("take_focus").catch(() => {}) : Promise.resolve());
-
-export const clipboardText = () => invoke<string>("clipboard_text");
-
-/** Settings: keep Bond out of screenshots and recordings (or not). */
-export const captureHideByDefault = (hide: boolean) => (inTauri ? invoke<boolean>("capture_hide_by_default", { hide }).catch(() => hide) : Promise.resolve(hide));
-/** "Include yourself in the screenshot" (show) or hide again. Resolves to whether he is hidden from captures now. */
-export const captureShow = (show: boolean) => (inTauri ? invoke<boolean>("capture_show", { show }).catch(() => true) : Promise.resolve(!show));
 
 
 // --- Bond's own brain ------------------------------------------------------------------------
@@ -139,65 +62,15 @@ export interface BrainProgress {
   total: number;
 }
 
-export interface LearnStats {
-  total: number;
-  good: number;
-  bad: number;
-  trainable: number;
-}
-
-export type Feedback = "good" | "bad" | "declined" | "ignored";
-
 export const brainStatus = () => invoke<BrainStatus>("brain_status");
 export const brainInstall = () => invoke<void>("brain_install");
 /** Start loading the model now, so the answer comes quickly. */
 export const brainWarm = () => (inTauri ? invoke<void>("brain_warm").catch(() => {}) : Promise.resolve());
 export const brainStop = () => invoke<void>("brain_stop");
 
-export const setLearning = (on: boolean) => (inTauri ? invoke<void>("brain_set_learning", { on }).catch(() => {}) : Promise.resolve());
-export const giveFeedback = (id: string, value: Feedback) =>
-  inTauri && id ? invoke<void>("brain_feedback", { id, value }).catch(() => {}) : Promise.resolve();
-/** Something Bond understood on his own: a sure example to learn from. Returns its id. */
-export const recordOwn = (input: string, output: object, ok = true, error?: string) =>
-  inTauri ? invoke<string>("brain_record", { input, output, ok, error: error ?? null }).catch(() => "") : Promise.resolve("");
-export const learnStats = () => invoke<LearnStats>("brain_learn_stats");
-export const forgetLearned = () => invoke<void>("brain_forget");
-/** Write what he learned as a fine-tuning dataset; returns the file path. */
-export const exportLearned = () => invoke<string>("brain_export");
-
-// --- Bond notices (suggestions he makes on his own) --------------------------------------
-
-export interface Habit {
-  key: string;
-  app: string | null;
-  hour: number | null;
-  actions: Action[];
-  label: string;
-  days: number;
-  done_today: boolean;
-}
-
-export interface Judgement {
-  /** The local brain looked at it (false: no brain here, private window, low battery). */
-  judged: boolean;
-  suggest: boolean;
-  text: string;
-}
-
-export const noticeEnable = (on: boolean) => (inTauri ? invoke<void>("notice_enable", { on }).catch(() => {}) : Promise.resolve());
-export const noticeHabits = () => (inTauri ? invoke<Habit[]>("notice_habits").catch(() => [] as Habit[]) : Promise.resolve([] as Habit[]));
-export const noticeAllowed = (key: string, minGapMin: number) =>
-  inTauri ? invoke<{ allowed: boolean; reason: string }>("notice_allowed", { key, minGapMin }).then((r) => r.allowed).catch(() => false) : Promise.resolve(false);
-/** He made a suggestion; returns its id for how it went (giveFeedback). */
-export const noticeShown = (key: string, text: string) => (inTauri ? invoke<string>("notice_shown", { key, text }).catch(() => "") : Promise.resolve(""));
-/** Ask the on-device brain whether there's something useful to say. */
-export const noticeJudge = (details: string, look: boolean, blocked: string[]) =>
-  inTauri
-    ? invoke<Judgement>("notice_judge", { details, look, blocked }).catch((): Judgement => ({ judged: false, suggest: false, text: "" }))
-    : Promise.resolve<Judgement>({ judged: false, suggest: false, text: "" });
-
-/** The error showing in the window you're working in, if any (read on-device). */
-export const noticeScan = (blocked: string[]) => (inTauri ? invoke<string | null>("notice_scan", { blocked }).catch(() => null) : Promise.resolve(null));
+export const captureHideByDefault = (hide: boolean) => (inTauri ? invoke<boolean>("capture_hide_by_default", { hide }).catch(() => hide) : Promise.resolve(hide));
+/** "Include yourself in the screenshot" (show) or hide again. Resolves to whether he is hidden from captures now. */
+export const captureShow = (show: boolean) => (inTauri ? invoke<boolean>("capture_show", { show }).catch(() => true) : Promise.resolve(!show));
 
 /** Give the keyboard back to the app you were using. */
 export const releaseFocus = () => (inTauri ? invoke<void>("release_focus").catch(() => {}) : Promise.resolve());
@@ -238,42 +111,8 @@ export const voiceListen = () => (inTauri ? invoke<void>("voice_listen").catch((
 export const voiceListenStop = () => (inTauri ? invoke<void>("voice_listen_stop").catch(() => {}) : Promise.resolve());
 const voiceSay = (text: string, voice: number, speed: number) => invoke<string>("voice_say", { text, voice, speed });
 
-// --- "Hey Bond" and voice match (wake.rs) ------------------------------------------------
-
-export interface WakeStatus {
-  installed: boolean;
-  enrolled: boolean;
-  enabled: boolean;
-  listening: boolean;
-  /** Your voiceprint's bar (0-1), and the latest checks against it: [score, accepted]. */
-  threshold: number | null;
-  recent: [number, boolean][];
-  /** What to read when teaching him your voice. */
-  lines: string[];
-}
-
-export interface EnrollStep {
-  heard: boolean;
-  count: number;
-  needed: number;
-}
-
 /** A line in Bond's diagnostics log (logs/bond.log in the app data folder). */
 export const diag = (line: string) => (inTauri ? void invoke("diag_log", { line }).catch(() => {}) : undefined);
-
-export const wakeStatus = () => (inTauri ? invoke<WakeStatus>("wake_status").catch(() => null) : Promise.resolve(null));
-export const wakeInstall = () => invoke<void>("wake_install");
-/** Turn "Hey Bond" on or off; voiceMatch: answer only your voice. */
-export const wakeSet = (enabled: boolean, voiceMatch: boolean) => (inTauri ? invoke<void>("wake_set", { enabled, voiceMatch }) : Promise.resolve());
-/** After answering out loud: take a follow-up without the wake word for a few seconds. */
-export const wakeFollowUp = (seconds: number) => (inTauri ? invoke<void>("wake_follow_up", { seconds }).catch(() => {}) : Promise.resolve());
-export const wakeEnrollRecord = () => invoke<EnrollStep>("wake_enroll_record");
-export const wakeEnrollSave = () => invoke<void>("wake_enroll_save");
-export const wakeEnrollCancel = () => (inTauri ? invoke<void>("wake_enroll_cancel").catch(() => {}) : Promise.resolve());
-export const wakeForgetVoice = () => invoke<void>("wake_forget_voice");
-/** "Was that you?" → yes: he learns that sample and does the request. */
-export const wakeConfirmYou = () => invoke<void>("wake_confirm_you");
-export const wakeNotYou = () => (inTauri ? invoke<void>("wake_not_you").catch(() => {}) : Promise.resolve());
 
 /** Play base64 WAV; resolves when it ends (or is stopped). */
 function play(b64: string, token: number): Promise<void> {

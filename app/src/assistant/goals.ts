@@ -15,7 +15,7 @@ export type Fit = "on" | "off" | "neutral";
 /** A verdict can also be "unsure": the rules can't tell, so the brain may be asked. */
 export type Verdict = Fit | "unsure";
 
-export const MAX_GOALS = 3;
+export const MAX_GOALS = 6;
 export const GOAL_LEN = 120;
 /** Minutes of off-goal time in a row before Bond says something. */
 export const DRIFT_MIN = 10;
@@ -55,15 +55,64 @@ export function cleanGoals(lines: string[]): string[] {
   return out.slice(0, MAX_GOALS);
 }
 
-export const loadGoals = (d = new Date()): string[] => {
-  const v = read<unknown>(`selfglance.goal.${dayId(d)}`, []);
-  return Array.isArray(v) ? cleanGoals(v.filter((x): x is string => typeof x === "string")) : [];
-};
+// --- Today's list ------------------------------------------------------------------------------
+// What you mean to do today, written in the morning ("make the video", "learn LangGraph", "internship
+// work"). Drift is judged against the items not ticked off yet.
+
+export interface Todo {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+export const MAX_TODOS = 8;
+export const TODO_EVENT = "selfglance:todo";
+const todoKey = (d: Date) => `selfglance.todo.${dayId(d)}`;
+
+export function loadTodos(d = new Date()): Todo[] {
+  const v = read<unknown>(todoKey(d), null);
+  if (Array.isArray(v)) return v.filter((t): t is Todo => !!t && typeof t.text === "string" && typeof t.id === "string").slice(0, MAX_TODOS);
+  // A day written by an older version: its goals become the list.
+  const old = read<unknown>(`selfglance.goal.${dayId(d)}`, []);
+  return Array.isArray(old) ? cleanGoals(old.filter((x): x is string => typeof x === "string")).map((text, i) => ({ id: `g${i}`, text, done: false })) : [];
+}
+
+export function saveTodos(list: Todo[], d = new Date()) {
+  write(todoKey(d), list.slice(0, MAX_TODOS));
+  try {
+    window.dispatchEvent(new Event(TODO_EVENT));
+  } catch {
+    /* not in a browser (tests) */
+  }
+}
+
+/** Add items to a day's list (one per entry; duplicates and blanks are skipped). The list as it is now. */
+export function addTodos(texts: string[], d = new Date()): Todo[] {
+  const list = loadTodos(d);
+  for (const raw of texts) {
+    const text = raw.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").replace(/\s+/g, " ").trim().slice(0, GOAL_LEN);
+    if (!text || list.some((t) => t.text.toLowerCase() === text.toLowerCase()) || list.length >= MAX_TODOS) continue;
+    list.push({ id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, text, done: false });
+  }
+  saveTodos(list, d);
+  return list;
+}
+
+/** "make the video, learn LangGraph and internship work" → three items. */
+export const splitTodos = (text: string) =>
+  text
+    .split(/\n|;|,(?![^(]*\))|\band then\b|\band also\b|\s+and\s+(?=(?:i have to|i need to|learn|make|create|work|study|finish|build|write|read|record|edit)\b)/i)
+    .map((t) => t.replace(/^(?:i have to|i need to|i want to|i will|today i)\s+/i, ""))
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+/** What drift is judged against: today's items not done yet. */
+export const loadGoals = (d = new Date()): string[] => cleanGoals(loadTodos(d).filter((t) => !t.done).map((t) => t.text));
+
+/** "goal: …" adds to the list. */
 export const saveGoals = (goals: string[], d = new Date()) => {
-  const clean = cleanGoals(goals);
-  write(`selfglance.goal.${dayId(d)}`, clean);
-  // Setting today's goal today is starting: no "Ready to start?" for it (that is for goals saved the day before).
-  if (clean.length && dayId(d) === dayId()) patchState({ startedDay: dayId() });
+  addTodos(goals, d);
+  if (dayId(d) === dayId()) patchState({ startedDay: dayId() });
 };
 
 /** Your corrections: "this is on-goal", "this is off-goal". Kept until you remove them. */
@@ -375,13 +424,13 @@ export function stalled(segs: Segment[], j: Judge, st: GoalState, now = new Date
   return t.on === 0 && t.on + t.off + t.other >= STALL_MIN * MIN;
 }
 
-export const startText = (goal: string) => `Your focus today: ${goal}. Ready to start?`;
-export const stallText = (goal: string, ms: number) => `You've been on the laptop ${Math.round(ms / MIN)} minutes and none of it was ${goal}. Want to start now?`;
+export const startText = (goal: string) => `First on today's list: ${goal}. Ready?`;
+export const stallText = (goal: string, ms: number) => `You've been on the laptop ${Math.round(ms / MIN)} minutes and nothing on today's list yet. Start with ${goal}?`;
 
 /** The sentence on the nudge card. */
 export function driftText(goal: string, d: Drift): string {
   const min = Math.round(d.ms / MIN);
-  return `Your focus today: ${goal}. The last ${min} minutes went to ${d.top ? `“${d.top}”` : "something else"}.`;
+  return `${min} minutes on ${d.top ? `“${d.top}”` : "something"} — not on today's list. Back to ${goal}?`;
 }
 
 // --- The morning question and the Sunday review -----------------------------------------------

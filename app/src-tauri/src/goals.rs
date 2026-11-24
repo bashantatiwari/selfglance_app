@@ -95,7 +95,7 @@ async fn judge(goals: &[String], items: &[Item]) -> Result<Vec<String>, String> 
 /// list when there is no brain, the battery is low, or there is nothing to ask.
 #[tauri::command]
 pub async fn goal_judge(goals: Vec<String>, items: Vec<Item>, blocked: Vec<String>) -> Result<Vec<String>, String> {
-    if goals.is_empty() || items.is_empty() || !crate::brain::ready() || crate::notice::low_battery() {
+    if goals.is_empty() || items.is_empty() || !crate::brain::ready() || low_battery() {
         return Ok(vec![]);
     }
     let items: Vec<Item> = items
@@ -105,7 +105,7 @@ pub async fn goal_judge(goals: Vec<String>, items: Vec<Item>, blocked: Vec<Strin
         .collect();
     let goals: Vec<String> = goals.into_iter().take(3).map(|g| g.chars().take(120).collect()).collect();
     // Private windows are never sent; they count as neutral.
-    let open: Vec<usize> = (0..items.len()).filter(|&i| !crate::notice::is_private(&format!("{} {}", items[i].app, items[i].label), &blocked)).collect();
+    let open: Vec<usize> = (0..items.len()).filter(|&i| !is_private(&format!("{} {}", items[i].app, items[i].label), &blocked)).collect();
     let sent: Vec<Item> = open.iter().map(|&i| Item { app: items[i].app.clone(), label: items[i].label.clone() }).collect();
     let answers = judge(&goals, &sent).await?;
     let mut out = vec!["neutral".to_string(); items.len()];
@@ -113,6 +113,22 @@ pub async fn goal_judge(goals: Vec<String>, items: Vec<Item>, blocked: Vec<Strin
         out[i] = a;
     }
     Ok(out)
+}
+
+/// Windows that are never sent to the brain: they count as neutral.
+const PRIVATE: &[&str] = &[
+    "password", "1password", "bitwarden", "keepass", "lastpass", "dashlane", "bank", "paypal", "wallet", "inprivate", "incognito", "private browsing",
+    "credential", "sign in", "log in", "login",
+];
+
+fn is_private(text: &str, blocked: &[String]) -> bool {
+    let t = text.to_lowercase();
+    PRIVATE.iter().any(|p| t.contains(p)) || blocked.iter().any(|b| !b.trim().is_empty() && t.contains(&b.trim().to_lowercase()))
+}
+
+/// Judging costs battery: on a low battery off the charger it waits.
+fn low_battery() -> bool {
+    crate::system::battery().is_some_and(|b| !b.charging && b.percent < 30)
 }
 
 #[cfg(test)]

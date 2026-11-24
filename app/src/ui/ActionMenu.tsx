@@ -5,7 +5,7 @@
 import type { CSSProperties, ReactElement, Ref } from "react";
 import "./menu.css";
 
-export type ActionId = "ask" | "dashboard" | "later";
+export type ActionId = "ask" | "dashboard" | "later" | "tuck";
 
 const ICONS: Record<ActionId, ReactElement> = {
   ask: (
@@ -20,6 +20,11 @@ const ICONS: Record<ActionId, ReactElement> = {
       <rect x="13.5" y="3.5" width="7" height="5" rx="1.5" />
       <rect x="13.5" y="11.5" width="7" height="9" rx="1.5" />
       <rect x="3.5" y="15.5" width="7" height="5" rx="1.5" />
+    </>
+  ),
+  tuck: (
+    <>
+      <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
     </>
   ),
   later: (
@@ -50,6 +55,7 @@ export function ActionMenu(props: {
     ...(props.inBreak ? [{ id: "later" as const, label: `${props.laterMin} min later` }] : []),
     { id: "ask", label: "Ask Bond" },
     { id: "dashboard", label: "Dashboard" },
+    { id: "tuck", label: "Tuck away" },
   ];
   const { w, h } = arcBox();
   const cx = w / 2;
